@@ -1,11 +1,13 @@
 """Entry point: `sts` starts the live pipeline, `sts --list-devices` lists sound cards."""
 
 import argparse
+import threading
 import time
 
 from sts.audio.capture import list_devices
 from sts.config import PipelineConfig
 from sts.pipeline import Pipeline
+from sts.web.server import CaptionBroadcaster, run_server
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,6 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Reference clip (10-20s) of the speaker to clone their voice for TTS output",
     )
+    parser.add_argument(
+        "--web", action="store_true", help="Serve live original/translated captions over HTTP"
+    )
+    parser.add_argument("--web-host", default="0.0.0.0", help="Caption web server bind address")
+    parser.add_argument("--web-port", type=int, default=8765, help="Caption web server port")
     return parser
 
 
@@ -44,7 +51,15 @@ def main() -> None:
     cfg.translation.device = args.device
     cfg.tts.device = args.device
 
-    pipeline = Pipeline(cfg)
+    broadcaster = None
+    if args.web:
+        broadcaster = CaptionBroadcaster()
+        threading.Thread(
+            target=run_server, args=(broadcaster, args.web_host, args.web_port), daemon=True
+        ).start()
+        print(f"Captions: http://{args.web_host}:{args.web_port}/")
+
+    pipeline = Pipeline(cfg, broadcaster=broadcaster)
     if args.clone:
         pipeline.clone_voice(args.clone)
 

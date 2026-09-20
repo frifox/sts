@@ -11,6 +11,8 @@ dependencies = [
     "transformers>=4.40",
     "sentencepiece>=0.2",
     "TTS>=0.22",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +25,9 @@ sts = "sts.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"sts.web" = ["static/*"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

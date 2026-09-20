@@ -13,12 +13,13 @@ from sts.audio.vad import SpeechSegmenter
 from sts.config import PipelineConfig
 from sts.translate.translator import Translator
 from sts.tts.xtts import SAMPLE_RATE, XTTSSynthesizer
+from sts.web.server import CaptionBroadcaster
 
 _SENTINEL = object()
 
 
 class Pipeline:
-    def __init__(self, cfg: PipelineConfig):
+    def __init__(self, cfg: PipelineConfig, broadcaster: CaptionBroadcaster | None = None):
         self.cfg = cfg
         self.capture = AudioCapture(cfg.audio)
         self.playback = AudioPlayback(cfg.audio)
@@ -26,6 +27,7 @@ class Pipeline:
         self.asr = WhisperASR(cfg.asr)
         self.translator = Translator(cfg.translation)
         self.tts = XTTSSynthesizer(cfg.tts)
+        self.broadcaster = broadcaster
 
         self._segments: queue.Queue = queue.Queue()
         self._transcripts: queue.Queue = queue.Queue()
@@ -49,6 +51,8 @@ class Pipeline:
             text = self.asr.transcribe(segment)
             if text:
                 print(f"[ru] {text}")
+                if self.broadcaster:
+                    self.broadcaster.broadcast_original(text)
                 self._transcripts.put(text)
 
     def _translate_loop(self) -> None:
@@ -57,6 +61,8 @@ class Pipeline:
             translated = self.translator.translate(text)
             if translated:
                 print(f"[en] {translated}")
+                if self.broadcaster:
+                    self.broadcaster.broadcast_translated(translated)
                 self._translations.put(translated)
 
     def _tts_loop(self) -> None:

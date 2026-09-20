@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sts — live captions</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    width: 100%;
+    background: #000;
+    overflow: hidden;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  .panel {
+    position: relative;
+    flex: 1 1 50%;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+
+  #original-panel { background: #0b0b0f; border-bottom: 2px solid #222; }
+  #translated-panel { background: #000; }
+
+  .label {
+    position: absolute;
+    top: 0.6vh;
+    left: 1.2vw;
+    font-size: 0.8rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: #555;
+    z-index: 1;
+  }
+
+  .lines {
+    height: 100%;
+    box-sizing: border-box;
+    padding: 4.5vh 3vw 1.5vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 0.4em;
+  }
+
+  .line {
+    font-size: clamp(1.4rem, 4vw, 3.2rem);
+    line-height: 1.25;
+    animation: fade-in 0.25s ease-out;
+  }
+
+  #original-lines .line { color: #9cdcfe; }
+  #translated-lines .line { color: #e8c07d; }
+
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  #status {
+    position: fixed;
+    top: 0.6vh;
+    right: 1.2vw;
+    font-size: 0.75rem;
+    color: #444;
+    z-index: 2;
+  }
+</style>
+</head>
+<body>
+  <div id="app">
+    <div class="panel" id="original-panel">
+      <span class="label">Original</span>
+      <div class="lines" id="original-lines"></div>
+    </div>
+    <div class="panel" id="translated-panel">
+      <span class="label">Translated</span>
+      <div class="lines" id="translated-lines"></div>
+    </div>
+  </div>
+  <div id="status"></div>
+
+<script>
+  function addLine(containerId, text) {
+    const container = document.getElementById(containerId);
+    const line = document.createElement('div');
+    line.className = 'line';
+    line.textContent = text;
+    container.appendChild(line);
+
+    // Drop the oldest lines once content no longer fits, so the DOM (and
+    // the visible page) never grows without bound during a long stream.
+    while (container.children.length > 1 && container.scrollHeight > container.clientHeight) {
+      container.removeChild(container.firstChild);
+    }
+  }
+
+  function connect() {
+    const status = document.getElementById('status');
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+    ws.onopen = () => { status.textContent = ''; };
+    ws.onerror = () => ws.close();
+    ws.onclose = () => {
+      status.textContent = 'reconnecting…';
+      setTimeout(connect, 1000);
+    };
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'original') addLine('original-lines', msg.text);
+      else if (msg.type === 'translated') addLine('translated-lines', msg.text);
+    };
+  }
+
+  connect();
+</script>
+</body>
+</html>

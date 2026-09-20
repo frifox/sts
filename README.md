@@ -12,6 +12,12 @@ models are downloaded. Target hardware is a PC/laptop with an NVIDIA GPU.
 
 ```
 sound card -> VAD segmenter -> Whisper ASR (ru) -> NLLB translation (ru->en) -> XTTS (en) -> sound card out
+                                       |                        |
+                                       v                        v
+                                  original text          translated text
+                                        \______________________/
+                                                   |
+                                             websocket -> browser (live captions)
 ```
 
 - **Capture** (`sts.audio.capture`) — reads raw audio off an input device via `sounddevice`.
@@ -30,6 +36,14 @@ sound card -> VAD segmenter -> Whisper ASR (ru) -> NLLB translation (ru->en) -> 
 
 All stages run on separate threads connected by queues (`sts.pipeline`), so a
 slow translation or TTS call doesn't stall audio capture.
+
+- **Live captions** (`sts.web`) — an optional FastAPI/uvicorn server (`--web`)
+  that serves a full-screen caption page and pushes recognized/translated
+  text to it over a websocket as it's produced. The page is a top half
+  (original) / bottom half (translated) split; each new line fades in at the
+  bottom and older lines are dropped once they no longer fit on screen, so
+  the page keeps auto-scrolling without accumulating unbounded DOM/memory
+  over a long service.
 
 ## Setup
 
@@ -52,6 +66,9 @@ sts --input-device 2 --output-device 3
 sts --clone reference.wav          # stretch goal: clone the speaker's voice
                                     # from a 10-20s reference clip instead of
                                     # using the default TTS voice
+sts --web --web-port 8765          # also serve live captions at :8765
+                                    # (open it full-screen / kiosk mode on a
+                                    # second monitor or projector)
 ```
 
 ## Tests
