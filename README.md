@@ -6,7 +6,9 @@ translates to English, and speaks the translation back in a natural voice.
 
 Everything runs locally against on-device models — no audio leaves the
 machine, no per-minute API costs, and it works without internet once the
-models are downloaded. Target hardware is a PC/laptop with an NVIDIA GPU.
+models are downloaded. Primary target hardware is a PC/laptop with an NVIDIA
+GPU (`--device cuda`); Apple Silicon (`--device mps`) is also supported —
+see **Apple Silicon / Metal** below.
 
 ## Pipeline
 
@@ -145,10 +147,42 @@ same reason the rest of the Qwen3-TTS integration does: it's unverified
 against real hardware in this repo (no GPU here), so it's built to match
 known-working reference code rather than guessed at.
 
+## Apple Silicon / Metal
+
+`--device mps` runs translation and TTS on the Apple GPU. One component
+can't join it: **faster-whisper's CTranslate2 backend has no Metal support**
+(only CPU and CUDA), so ASR always runs on CPU on a Mac regardless of this
+flag — `sts.devices.resolve_devices` handles that split automatically
+(ASR -> cpu, translation/TTS -> mps), and sets
+`PYTORCH_ENABLE_MPS_FALLBACK=1` so any PyTorch op MPS doesn't yet implement
+falls back to CPU instead of crashing, at some speed cost for that op. Use
+`--asr-device cuda` instead only if you actually have an eGPU or are
+otherwise not really on Apple Silicon.
+
+Qwen3-TTS uses float16 + SDPA attention on `mps` rather than CUDA's
+bfloat16 + flash-attention (flash-attn has no Metal build; MPS's bfloat16
+support has historically been the less mature of the two float types) — see
+`_dtype_for_device`/`_attn_impl_for_device` in `sts/tts/qwen3.py`. XTTS has
+no such split; `.to("mps")` is all it needs.
+
+This hasn't been run on real Apple hardware in this repo (no Mac available
+in dev) - assuming a high-end chip (M5 Max-class: plenty of GPU cores and
+unified memory), there's no reason to downgrade model sizes (Whisper
+`large-v3`, Qwen3-TTS 1.7B) the way you might on a smaller Mac; unified
+memory also means there's no separate VRAM ceiling to budget against like
+on a discrete GPU. What's unverified is per-op MPS support and real-world
+throughput, not whether the models fit.
+
+```bash
+sts --web --device mps                          # XTTS backend
+sts --web --device mps --tts-backend qwen3       # Qwen3-TTS backend
+```
+
 ## Setup
 
-Requires Python 3.10+ and an NVIDIA GPU with CUDA for real-time performance
-(CPU works but will lag).
+Requires Python 3.10+ and a GPU for real-time performance — NVIDIA/CUDA
+(`--device cuda`) or Apple Silicon (`--device mps`, see above); CPU works too
+but will lag.
 
 ```bash
 pip install -e .
@@ -191,8 +225,9 @@ pytest
 ```
 
 The glossary term-matching, Bible reference detection/lookup, the
-start/stop/reset/train control state machine (`sts.control`), and the voice
-library (`sts.tts.voice_library`, including LoRA entries) are unit tested
-here — the audio/ASR/translation/TTS stages, and everything under
+start/stop/reset/train control state machine (`sts.control`), the voice
+library (`sts.tts.voice_library`, including LoRA entries), and the
+cuda/cpu/mps device-mapping logic (`sts.devices`) are unit tested here — the
+audio/ASR/translation/TTS stages, and everything under
 `training/qwen3_lora/`, need real hardware (mic, GPU) and aren't exercised
 by the test suite.

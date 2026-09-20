@@ -6,6 +6,7 @@ import time
 
 from sts.audio.capture import list_devices
 from sts.config import PipelineConfig
+from sts.devices import resolve_devices
 from sts.pipeline import Pipeline
 from sts.web.server import CaptionBroadcaster, run_server
 
@@ -16,7 +17,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-device", type=int, default=None, help="Input device index")
     parser.add_argument("--output-device", type=int, default=None, help="Output device index")
     parser.add_argument(
-        "--device", default="cuda", choices=["cuda", "cpu"], help="Compute device for all models"
+        "--device",
+        default="cuda",
+        choices=["cuda", "cpu", "mps"],
+        help="Compute device for translation/TTS, and ASR unless --asr-device overrides it "
+        "('mps' targets Apple Silicon GPUs)",
+    )
+    parser.add_argument(
+        "--asr-device",
+        default=None,
+        help="Override just the ASR device (e.g. force 'cpu' when --device is cuda/mps for some other reason). "
+        "faster-whisper only supports cpu/cuda, never mps.",
     )
     parser.add_argument(
         "--whisper-model", default="large-v3", help="faster-whisper model size/name"
@@ -53,14 +64,16 @@ def main() -> None:
         print(list_devices())
         return
 
+    asr_device, translation_device, tts_device = resolve_devices(args.device, args.asr_device)
+
     cfg = PipelineConfig()
     cfg.audio.input_device = args.input_device
     cfg.audio.output_device = args.output_device
-    cfg.asr.device = args.device
-    cfg.asr.compute_type = "float16" if args.device == "cuda" else "int8"
+    cfg.asr.device = asr_device
+    cfg.asr.compute_type = "float16" if asr_device == "cuda" else "int8"
     cfg.asr.model_size = args.whisper_model
-    cfg.translation.device = args.device
-    cfg.tts.device = args.device
+    cfg.translation.device = translation_device
+    cfg.tts.device = tts_device
     cfg.tts.backend = args.tts_backend
     cfg.tts.voice_library_dir = args.voice_library_dir
 

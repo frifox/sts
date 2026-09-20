@@ -33,6 +33,14 @@ returns silence with a warning until a voice has been picked or trained.
 This backend is unverified against real hardware in this repo (no GPU
 available in dev) - the call shapes come directly from the two upstream
 projects' example code, not from having actually run it.
+
+Device support: `cfg.device` is passed straight through as `device_map`, so
+"cuda", "cpu", and "mps" (Apple Silicon) all work as far as loading the
+model goes. bfloat16 and flash-attention are CUDA-specific choices, not
+requirements of the model itself - `_dtype_for_device`/`_attn_impl_for_device`
+below pick float16 + SDPA attention instead on mps (flash-attn has no Metal
+build; MPS's bfloat16 support has historically been the less mature of the
+two float types, float16 is the safer default there).
 """
 
 import numpy as np
@@ -43,13 +51,26 @@ from sts.config import TTSConfig
 from sts.tts.voice_library import VoiceEntry
 
 
+def _dtype_for_device(device: str) -> torch.dtype:
+    if device == "cuda":
+        return torch.bfloat16
+    if device == "mps":
+        return torch.float16
+    return torch.float32
+
+
+def _attn_impl_for_device(device: str) -> str:
+    return "flash_attention_2" if device == "cuda" else "sdpa"
+
+
 class Qwen3TTSSynthesizer:
     def __init__(self, cfg: TTSConfig):
         self.cfg = cfg
         self.model = Qwen3TTSModel.from_pretrained(
             cfg.qwen3_model_name,
             device_map=cfg.device,
-            dtype=torch.bfloat16,
+            dtype=_dtype_for_device(cfg.device),
+            attn_implementation=_attn_impl_for_device(cfg.device),
         )
         self._prompt = None
         self.cloned_speaker_wav: str | None = None  # set whenever a zero-shot clone is active
@@ -110,7 +131,8 @@ def _load_lora_model(cfg: TTSConfig, entry: VoiceEntry) -> tuple[Qwen3TTSModel, 
     base = Qwen3TTSModel.from_pretrained(
         cfg.qwen3_model_name,
         device_map=cfg.device,
-        dtype=torch.bfloat16,
+        dtype=_dtype_for_device(cfg.device),
+        attn_implementation=_attn_impl_for_device(cfg.device),
     )
     peft_model = PeftModel.from_pretrained(base.model, str(entry.adapter_dir))
     _set_lora_scale(peft_model, entry.lora_scale)

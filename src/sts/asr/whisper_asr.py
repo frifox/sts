@@ -9,9 +9,16 @@ from sts.config import ASRConfig
 class WhisperASR:
     def __init__(self, cfg: ASRConfig):
         self.cfg = cfg
-        self.model = WhisperModel(
-            cfg.model_size, device=cfg.device, compute_type=cfg.compute_type
-        )
+        device = cfg.device
+        if device == "mps":
+            # CTranslate2 (faster-whisper's backend) has no Metal/MPS support,
+            # only CPU and CUDA - fail loud with a clear reason rather than
+            # letting ctranslate2 raise its own cryptic error deep inside.
+            # sts.cli already routes ASR to cpu automatically for --device
+            # mps; this only fires if ASRConfig.device was set to mps directly.
+            print("[asr] faster-whisper has no Metal/MPS backend - falling back to cpu")
+            device = "cpu"
+        self.model = WhisperModel(cfg.model_size, device=device, compute_type=cfg.compute_type)
 
     def transcribe(self, audio: np.ndarray) -> str:
         segments, _info = self.model.transcribe(

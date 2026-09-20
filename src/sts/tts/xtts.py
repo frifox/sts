@@ -3,6 +3,11 @@
 XTTS supports both a set of built-in speakers and zero-shot voice cloning
 from a short reference clip, which covers the stretch goal (clone the live
 speaker's voice from ~10-20s of their own audio) with no separate model.
+
+`cfg.device` is passed straight to `.to(...)`, so "cuda", "cpu", and "mps"
+(Apple Silicon) all work as far as PyTorch is concerned - unlike Qwen3-TTS,
+there's no flash-attention/bfloat16 choice baked into this backend to worry
+about per device.
 """
 
 import numpy as np
