@@ -388,29 +388,51 @@ mps` does and doesn't cover) or Intel Macs with no dev environment yet:
 
 ### Fresh Linux install
 
-Commands below are for Debian/Ubuntu (`apt`); substitute your distro's
-package manager (`dnf`, `pacman`, ...) for the system packages - the Python
-side is identical everywhere.
+Commands below are for Debian (current stable; `apt`) specifically - not
+Ubuntu, which diverges on the driver step in particular. Substitute your
+distro's package manager (`dnf`, `pacman`, ...) if you're on something else;
+the Python side is identical everywhere.
 
 1. **Python 3.10+, git, and PortAudio.** Linux is the one OS here where
    `sounddevice`'s PortAudio dependency is **not** bundled in the wheel and
-   needs installing separately, or audio capture will fail to import:
+   needs installing separately, or audio capture will fail to import.
+   Debian stable ships a new enough Python by default:
    ```
    sudo apt update
    sudo apt install python3 python3-venv python3-pip git libportaudio2
    ```
 
-2. **NVIDIA driver** (skip if using `--device cpu`). Easiest path on Ubuntu:
+2. **NVIDIA driver** (skip if using `--device cpu`). Debian keeps
+   proprietary drivers out of its default repos, so `contrib` and
+   `non-free-firmware` need enabling first. Check your release's codename
+   with `cat /etc/os-release` (`VERSION_CODENAME=`), then edit
+   `/etc/apt/sources.list` (or the file(s) under
+   `/etc/apt/sources.list.d/`) so each `deb` line for that release includes
+   them, e.g. for a line that currently reads
+   `deb http://deb.debian.org/debian <codename> main`:
    ```
-   sudo ubuntu-drivers autoinstall
+   deb http://deb.debian.org/debian <codename> main contrib non-free non-free-firmware
    ```
-   then reboot and verify:
+   Then:
+   ```
+   sudo apt update
+   sudo apt install nvidia-driver linux-headers-$(uname -r)
+   sudo reboot
+   ```
+   `nvidia-driver` pulls in the kernel module via DKMS, built against
+   the headers package for your currently running kernel - if you update
+   the kernel later, `linux-headers-$(uname -r)` needs reinstalling for the
+   new one so the module rebuilds. After reboot, verify:
    ```
    nvidia-smi
    ```
-   (On other distros, install your distro's recommended proprietary NVIDIA
-   driver package instead.) As on Windows, you don't need the full CUDA
-   Toolkit - just the driver; PyTorch's wheel brings its own CUDA runtime.
+   If that fails to find a device, check `lsmod | grep nouveau` - the
+   open-source driver conflicting with the proprietary one is the usual
+   cause; the `nvidia-driver` package normally blacklists it automatically,
+   but a leftover load from before that took effect needs a further reboot
+   (or `sudo modprobe -r nouveau` if nothing has it in use yet). As on
+   Windows, you don't need the full CUDA Toolkit - just the driver;
+   PyTorch's wheel brings its own CUDA runtime.
 
 3. **Clone the repo and set up a virtual environment:**
    ```
