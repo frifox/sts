@@ -20,7 +20,9 @@ class WhisperASR:
             device = "cpu"
         self.model = WhisperModel(cfg.model_size, device=device, compute_type=cfg.compute_type)
 
-    def transcribe(self, audio: np.ndarray) -> str:
+    def transcribe(self, audio: np.ndarray | str) -> str:
+        # faster-whisper accepts either a raw array (live-captured segments)
+        # or a file path (e.g. a pre-supplied --clone reference clip) directly.
         segments, _info = self.model.transcribe(
             audio,
             language=self.cfg.source_language,

@@ -204,7 +204,14 @@ sts --list-devices                 # find your sound card's input/output index
 sts --input-device 2 --output-device 3
 sts --clone reference.wav          # stretch goal: clone the speaker's voice
                                     # from a 10-20s reference clip instead of
-                                    # using the default TTS voice
+                                    # using the default TTS voice (one-off,
+                                    # not saved anywhere)
+sts --clone reference.wav --clone-name "Pastor Ivan"
+                                    # same, but also saves it into the voice
+                                    # library so it's picked from the
+                                    # dropdown in later sessions without
+                                    # reprocessing the file - zero-shot is
+                                    # often good enough on its own
 sts --web --web-port 8765          # also serve live captions at :8765
                                     # (open it full-screen / kiosk mode on a
                                     # second monitor or projector)

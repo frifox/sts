@@ -57,8 +57,24 @@ class Pipeline:
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
 
-    def clone_voice(self, reference_wav_path: str) -> None:
-        self.tts.clone_voice(reference_wav_path)
+    def clone_voice(self, reference_wav_path: str, name: str | None = None) -> None:
+        """Zero-shot clones a pre-supplied reference clip (the `--clone` CLI
+        flag). Without `name`, this is a one-off clone for this run only -
+        same as always. With `name`, it's also saved into the voice library
+        (transcribed first, for backends that use a reference transcript),
+        so it's reusable from the dropdown in later sessions without
+        reprocessing the file - the CLI equivalent of the "Train voice"
+        button, for when you already have a clean recording instead of
+        capturing one live. Zero-shot cloning is often good enough on its
+        own; this just means not having to redo it every run.
+        """
+        if not name:
+            self.tts.clone_voice(reference_wav_path)
+            return
+
+        ref_text = self._transcribe_or_none(reference_wav_path)
+        self._save_and_activate(name, reference_wav_path, ref_text)
+        self._broadcast_status()
 
     # -- operator controls, invoked from the caption page's buttons --------
 
@@ -115,13 +131,18 @@ class Pipeline:
             return
 
         path = self._write_training_wav(audio)
-        try:
-            ref_text = self.asr.transcribe(audio) or None
-        except Exception as exc:  # a failed transcript just means a lower-quality clone, not a lost one
-            print(f"[train] couldn't transcribe reference clip, falling back to embedding-only clone: {exc}")
-            ref_text = None
+        ref_text = self._transcribe_or_none(audio)
+        self._save_and_activate(name or "speaker", path, ref_text)
 
-        entry = self.voice_library.save(name or "speaker", path, ref_text)
+    def _transcribe_or_none(self, audio) -> str | None:
+        try:
+            return self.asr.transcribe(audio) or None
+        except Exception as exc:  # a failed transcript just means a lower-quality clone, not a lost one
+            print(f"[voice] couldn't transcribe reference clip, falling back to embedding-only clone: {exc}")
+            return None
+
+    def _save_and_activate(self, name: str, wav_source: str, ref_text: str | None) -> None:
+        entry = self.voice_library.save(name, wav_source, ref_text)
         self.tts.clone_from_entry(entry)
         self._active_speaker_id = entry.speaker_id
         self._broadcast_library()

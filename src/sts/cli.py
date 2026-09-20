@@ -39,6 +39,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reference clip (10-20s) of the speaker to clone their voice for TTS output",
     )
     parser.add_argument(
+        "--clone-name",
+        default=None,
+        help="Save the --clone reference clip into the voice library under this name, so it's "
+        "reusable from the caption page's speaker dropdown in later sessions instead of just "
+        "this run. Zero-shot cloning is often good enough on its own - this just means not "
+        "reprocessing the file every time.",
+    )
+    parser.add_argument(
         "--web", action="store_true", help="Serve live original/translated captions over HTTP"
     )
     parser.add_argument("--web-host", default="0.0.0.0", help="Caption web server bind address")
@@ -87,7 +95,7 @@ def main() -> None:
 
     pipeline = Pipeline(cfg, broadcaster=broadcaster)
     if args.clone:
-        pipeline.clone_voice(args.clone)
+        pipeline.clone_voice(args.clone, name=args.clone_name)
     if broadcaster:
         broadcaster.on_control = pipeline.handle_control
 
