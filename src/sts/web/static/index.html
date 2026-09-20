@@ -156,6 +156,7 @@
   #train-name { width: 9em; }
 
   #btn-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
+  #btn-voice.is-active { background: #1f3d4d; border-color: #3a90c9; color: #d7f3ff; }
   #btn-train.is-active { background: #4d3a1f; border-color: #c9a24b; color: #ffe9bf; }
   #btn-reset { color: #e08a8a; }
 </style>
@@ -180,7 +181,8 @@
   </div>
 
   <div id="controls">
-    <button id="btn-toggle">Start</button>
+    <button id="btn-toggle">Stop</button>
+    <button id="btn-voice">🔇 Voice off</button>
     <input id="train-name" type="text" placeholder="Speaker name" />
     <button id="btn-train">Train voice</button>
     <select id="speaker-select">
@@ -227,17 +229,24 @@
   }
 
   const toggleBtn = document.getElementById('btn-toggle');
+  const voiceBtn = document.getElementById('btn-voice');
   const trainBtn = document.getElementById('btn-train');
   const resetBtn = document.getElementById('btn-reset');
   const trainNameInput = document.getElementById('train-name');
   const speakerSelect = document.getElementById('speaker-select');
-  let lastStatus = { active: false, training: false, training_seconds: 0, training_target_seconds: 0, cloned: false, active_speaker_id: null };
+  let lastStatus = {
+    active: true, voice_enabled: false, training: false,
+    training_seconds: 0, training_target_seconds: 0, cloned: false, active_speaker_id: null,
+  };
 
   function applyStatus(status) {
     lastStatus = status;
 
     toggleBtn.textContent = status.active ? 'Stop' : 'Start';
     toggleBtn.classList.toggle('is-active', status.active);
+
+    voiceBtn.textContent = status.voice_enabled ? '🔊 Voice on' : '🔇 Voice off';
+    voiceBtn.classList.toggle('is-active', status.voice_enabled);
 
     if (status.training) {
       trainBtn.textContent = `Stop training (${status.training_seconds}s / ${status.training_target_seconds}s)`;
@@ -273,6 +282,7 @@
   }
 
   toggleBtn.addEventListener('click', () => send(lastStatus.active ? 'stop' : 'start'));
+  voiceBtn.addEventListener('click', () => send(lastStatus.voice_enabled ? 'voice_off' : 'voice_on'));
   trainBtn.addEventListener('click', () => {
     if (lastStatus.training) {
       send('train_stop');

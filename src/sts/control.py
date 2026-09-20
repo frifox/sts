@@ -17,7 +17,9 @@ class RecognitionControl:
         self.sample_rate = sample_rate
         self.target_seconds = target_seconds
 
-        self.active = threading.Event()  # recognition on/off; starts off
+        self.active = threading.Event()
+        self.active.set()  # recognition/translation/captions on by default
+        self.voice_enabled = threading.Event()  # TTS playback off by default - opt in
         self.training = threading.Event()
 
         self._lock = threading.Lock()
@@ -29,6 +31,12 @@ class RecognitionControl:
 
     def stop(self) -> None:
         self.active.clear()
+
+    def enable_voice(self) -> None:
+        self.voice_enabled.set()
+
+    def disable_voice(self) -> None:
+        self.voice_enabled.clear()
 
     def start_training(self) -> None:
         with self._lock:

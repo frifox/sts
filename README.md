@@ -70,12 +70,20 @@ slow translation or TTS call doesn't stall audio capture.
   and only covers phrasing the parser recognizes.
 - **Operator controls** (`sts.control`, buttons on the caption page) — a live
   feed runs across multiple speakers/performances in a session (music,
-  announcements, one voice at a time when someone *is* speaking), so
-  recognition defaults to **off** and an operator drives it:
-  - **Start / Stop** — turns ASR/translation/TTS on or off. Audio capture and
-    VAD segmentation keep running either way; Stop just means nothing gets
-    transcribed, so switching a long musical number or announcement doesn't
-    waste GPU time or produce junk captions.
+  announcements, one voice at a time when someone *is* speaking).
+  Recognition/translation/captions run **by default** - captions are silent,
+  so leaving them running through a musical number is harmless. TTS
+  *voicing* is different (audio played over speakers during music or an
+  announcement would not be harmless) and defaults to **off**, opt-in per
+  button:
+  - **Start / Stop** — pauses/resumes ASR/translation/captions, for when even
+    the captions aren't wanted (e.g. a long musical number). Audio capture
+    and VAD segmentation keep running either way; Stop just means nothing
+    gets transcribed, so it doesn't waste GPU time or produce junk captions.
+  - **Voice on / off** — independently gates whether translated text is
+    actually synthesized and played out loud; starts off regardless of
+    Start/Stop, so captions can run continuously while voicing is switched
+    on only when someone is actually preaching.
   - **Reset** — for a new speaker/performance: clears both caption panels on
     every connected screen, drops any text already in flight through the
     pipeline, and forgets the current cloned voice (falls back to the
@@ -93,7 +101,8 @@ slow translation or TTS call doesn't stall audio capture.
     retraining.
 
   All of this is relayed over the same websocket the captions arrive on
-  (`{"action": "start"}`, `{"action": "train_start", "name": "..."}`,
+  (`{"action": "start"}`, `{"action": "voice_on"}`,
+  `{"action": "train_start", "name": "..."}`,
   `{"action": "select_speaker", "speaker_id": "..."}`, etc.); the server
   broadcasts current state and the library list back to every connected
   screen so multiple open tabs stay in sync. Library entries live under

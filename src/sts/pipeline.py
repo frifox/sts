@@ -2,12 +2,15 @@
 streaming pipeline, each stage on its own thread connected by queues so a
 slow stage (translation, TTS) doesn't stall audio capture.
 
-Recognition starts paused (`self.control.active` unset) - a live feed
-carries long stretches of music, announcements, and chatter that don't need
-translating, so an operator turns it on only while someone's actually
-preaching. Capture and VAD segmentation always run regardless, both because
+Recognition/translation/captions run by default (`self.control.active` set);
+an operator can still pause them (e.g. during a long musical number) via
+Start/Stop. TTS *voicing* is separate and starts **off**
+(`self.control.voice_enabled` unset) - captions are silent and harmless to
+leave running, but audio spoken over the speakers during music or an
+announcement would not be, so that's opt-in via its own button. Capture and
+VAD segmentation always run regardless of either switch, both because
 they're cheap and because voice-clone training needs segmented audio
-independently of whether recognition is on.
+independently of whether recognition/voicing is on.
 """
 
 import queue
@@ -65,6 +68,10 @@ class Pipeline:
             self.control.start()
         elif action == "stop":
             self.control.stop()
+        elif action == "voice_on":
+            self.control.enable_voice()
+        elif action == "voice_off":
+            self.control.disable_voice()
         elif action == "reset":
             self._reset()
         elif action == "train_start":
@@ -141,6 +148,7 @@ class Pipeline:
         if self.broadcaster:
             self.broadcaster.broadcast_status(
                 active=self.control.active.is_set(),
+                voice_enabled=self.control.voice_enabled.is_set(),
                 training=self.control.training.is_set(),
                 training_seconds=self.control.training_seconds,
                 training_target_seconds=self.control.target_seconds,
@@ -204,6 +212,8 @@ class Pipeline:
     def _tts_loop(self) -> None:
         while not self._stop.is_set():
             text = self._translations.get()
+            if not self.control.voice_enabled.is_set():
+                continue
             audio, sample_rate = self.tts.synthesize(text)
             if audio.size:
                 self.playback.play(audio, sample_rate=sample_rate, blocking=True)

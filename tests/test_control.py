@@ -3,17 +3,30 @@ import numpy as np
 from sts.control import RecognitionControl
 
 
-def test_recognition_starts_off():
+def test_recognition_starts_on():
     control = RecognitionControl(sample_rate=16_000)
-    assert not control.active.is_set()
+    assert control.active.is_set()
+
+
+def test_voice_starts_off():
+    control = RecognitionControl(sample_rate=16_000)
+    assert not control.voice_enabled.is_set()
 
 
 def test_start_stop_toggle_active():
     control = RecognitionControl(sample_rate=16_000)
-    control.start()
-    assert control.active.is_set()
     control.stop()
     assert not control.active.is_set()
+    control.start()
+    assert control.active.is_set()
+
+
+def test_enable_disable_toggle_voice():
+    control = RecognitionControl(sample_rate=16_000)
+    control.enable_voice()
+    assert control.voice_enabled.is_set()
+    control.disable_voice()
+    assert not control.voice_enabled.is_set()
 
 
 def test_training_accumulates_and_reports_duration():

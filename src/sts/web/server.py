@@ -92,6 +92,7 @@ class CaptionBroadcaster:
     def broadcast_status(
         self,
         active: bool,
+        voice_enabled: bool,
         training: bool,
         training_seconds: float,
         training_target_seconds: float,
@@ -101,6 +102,7 @@ class CaptionBroadcaster:
         message = {
             "type": "status",
             "active": active,
+            "voice_enabled": voice_enabled,
             "training": training,
             "training_seconds": round(training_seconds, 1),
             "training_target_seconds": training_target_seconds,
