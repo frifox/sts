@@ -1,23 +1,38 @@
-"""Synthesizes English speech with Qwen3-TTS (`Qwen/Qwen3-TTS-12Hz-*-Base`),
-cloning a speaker's voice from a saved reference clip.
+"""Synthesizes English speech with Qwen3-TTS, either zero-shot cloning a
+reference clip or using a real trained LoRA adapter for a repeat speaker.
 
-API per github.com/QwenLM/Qwen3-TTS (Apache-2.0, `pip install qwen-tts`):
-`model.create_voice_clone_prompt(ref_audio=..., ref_text=..., x_vector_only_mode=...)`
-builds a reusable prompt object once; `model.generate_voice_clone(text=...,
-language=..., voice_clone_prompt=...)` returns `(wavs, sample_rate)`.
-`ref_text` is the reference clip's own transcript (in its own language -
-here, Russian) and materially improves clone quality; `x_vector_only_mode`
-drops that requirement at some quality cost, and is the fallback when no
-transcript is available.
+Zero-shot API per github.com/QwenLM/Qwen3-TTS (Apache-2.0, `pip install
+qwen-tts`): `model.create_voice_clone_prompt(ref_audio=..., ref_text=...,
+x_vector_only_mode=...)` builds a reusable prompt once; `generate_voice_clone`
+consumes it. `ref_text` is the reference clip's own transcript and
+materially improves quality; `x_vector_only_mode` drops that requirement at
+some quality cost, and is the fallback when no transcript is available.
 
-Unlike XTTS, the Base model has no built-in default speaker - it always
-needs a reference clip, so `synthesize()` returns silence with a warning
-until `clone_voice()`/`clone_from_entry()` has been called at least once
-(typically by picking or training a speaker in `sts.tts.voice_library`).
+LoRA loading (`_load_lora_model` and its helpers below) mirrors
+`finetuning/infer_lora_custom_voice.py` from
+github.com/cheeweijie/qwen3-tts-lora-finetuning (Apache-2.0), the community
+patch used by `training/qwen3_lora/` to actually train these adapters - see
+that directory for the training side. A LoRA speaker is selected with
+`generate_custom_voice(speaker=...)`, not `generate_voice_clone`: the
+trained checkpoint bakes the voice into a named speaker slot (with its own
+embedding) inside the model rather than being conditioned on a reference
+clip at synthesis time.
+
+Each cached LoRA speaker is a second, full model load (base weights + the
+adapter merged in) - unlike the zero-shot path, which reuses one base model
+for every reference clip. On a memory-constrained consumer GPU, keeping more
+than a couple of trained speakers active at once will add up; there's no
+cache eviction here, only what `reset_voice()`/picking a different speaker
+overwrites as the *active* one (cached entries stay loaded for fast
+re-selection).
+
+Unlike XTTS, there is no built-in default speaker for either path - the Base
+model always needs a reference clip or a trained adapter, so `synthesize()`
+returns silence with a warning until a voice has been picked or trained.
 
 This backend is unverified against real hardware in this repo (no GPU
-available in dev) - the call shapes come directly from the upstream
-README's example code, not from having actually run it.
+available in dev) - the call shapes come directly from the two upstream
+projects' example code, not from having actually run it.
 """
 
 import numpy as np
@@ -37,7 +52,9 @@ class Qwen3TTSSynthesizer:
             dtype=torch.bfloat16,
         )
         self._prompt = None
-        self.cloned_speaker_wav: str | None = None  # set whenever a clone is active; mirrors XTTSSynthesizer
+        self.cloned_speaker_wav: str | None = None  # set whenever a zero-shot clone is active
+        self._lora_models: dict[str, tuple[Qwen3TTSModel, str]] = {}  # speaker_id -> (model, speaker_name)
+        self._active_lora_speaker_id: str | None = None
 
     def clone_voice(self, reference_wav_path: str, ref_text: str | None = None) -> None:
         self._prompt = self.model.create_voice_clone_prompt(
@@ -46,23 +63,130 @@ class Qwen3TTSSynthesizer:
             x_vector_only_mode=ref_text is None,
         )
         self.cloned_speaker_wav = reference_wav_path
+        self._active_lora_speaker_id = None
 
     def clone_from_entry(self, entry: VoiceEntry) -> None:
-        self.clone_voice(str(entry.wav_path), entry.ref_text)
+        if entry.kind == "lora":
+            self._activate_lora(entry)
+        else:
+            self.clone_voice(str(entry.wav_path), entry.ref_text)
+
+    def _activate_lora(self, entry: VoiceEntry) -> None:
+        if entry.speaker_id not in self._lora_models:
+            self._lora_models[entry.speaker_id] = _load_lora_model(self.cfg, entry)
+        self._active_lora_speaker_id = entry.speaker_id
+        self._prompt = None
+        self.cloned_speaker_wav = None
 
     def reset_voice(self) -> None:
         self._prompt = None
         self.cloned_speaker_wav = None
+        self._active_lora_speaker_id = None
 
     def synthesize(self, text: str) -> tuple[np.ndarray, int]:
         if not text.strip():
             return np.zeros(0, dtype=np.float32), 24_000
 
-        if self._prompt is None:
-            print("[qwen3-tts] no voice cloned yet - pick or train a speaker first; skipping synthesis")
-            return np.zeros(0, dtype=np.float32), 24_000
+        if self._active_lora_speaker_id:
+            lora_model, speaker_name = self._lora_models[self._active_lora_speaker_id]
+            wavs, sample_rate = lora_model.generate_custom_voice(
+                text=text, speaker=speaker_name, language="English"
+            )
+            return np.asarray(wavs[0], dtype=np.float32), sample_rate
 
-        wavs, sample_rate = self.model.generate_voice_clone(
-            text=text, language="English", voice_clone_prompt=self._prompt
-        )
-        return np.asarray(wavs[0], dtype=np.float32), sample_rate
+        if self._prompt is not None:
+            wavs, sample_rate = self.model.generate_voice_clone(
+                text=text, language="English", voice_clone_prompt=self._prompt
+            )
+            return np.asarray(wavs[0], dtype=np.float32), sample_rate
+
+        print("[qwen3-tts] no voice selected yet - pick or train a speaker first; skipping synthesis")
+        return np.zeros(0, dtype=np.float32), 24_000
+
+
+def _load_lora_model(cfg: TTSConfig, entry: VoiceEntry) -> tuple[Qwen3TTSModel, str]:
+    from peft import PeftModel
+
+    base = Qwen3TTSModel.from_pretrained(
+        cfg.qwen3_model_name,
+        device_map=cfg.device,
+        dtype=torch.bfloat16,
+    )
+    peft_model = PeftModel.from_pretrained(base.model, str(entry.adapter_dir))
+    _set_lora_scale(peft_model, entry.lora_scale)
+    base.model = peft_model.merge_and_unload()
+
+    core_model = _resolve_core_model(base.model)
+    _apply_speaker_config(core_model, str(entry.adapter_dir), entry.speaker_name)
+    _apply_speaker_embedding(core_model, str(entry.adapter_dir), entry.speaker_name)
+    core_model.eval()
+
+    return base, entry.speaker_name
+
+
+def _resolve_core_model(model):
+    if hasattr(model, "talker"):
+        return model
+    if hasattr(model, "model") and hasattr(model.model, "talker"):
+        return model.model
+    if hasattr(model, "base_model"):
+        base = model.base_model
+        if hasattr(base, "talker"):
+            return base
+        if hasattr(base, "model") and hasattr(base.model, "talker"):
+            return base.model
+    return model
+
+
+def _apply_speaker_config(core_model, adapter_dir: str, speaker_name: str, speaker_id: int = 3000) -> None:
+    import json
+    import os
+
+    config_path = os.path.join(adapter_dir, "config.json")
+    if os.path.isfile(config_path):
+        with open(config_path, encoding="utf-8") as f:
+            config_dict = json.load(f)
+        talker_config = config_dict.get("talker_config", {})
+        spk_id_map = talker_config.get("spk_id", {})
+        spk_is_dialect = talker_config.get("spk_is_dialect", {})
+        if isinstance(spk_id_map, dict):
+            core_model.config.talker_config.spk_id.update(spk_id_map)
+        if isinstance(spk_is_dialect, dict):
+            core_model.config.talker_config.spk_is_dialect.update(spk_is_dialect)
+
+    if speaker_name not in core_model.config.talker_config.spk_id:
+        core_model.config.talker_config.spk_id[speaker_name] = speaker_id
+        core_model.config.talker_config.spk_is_dialect[speaker_name] = False
+
+    core_model.config.tts_model_type = "custom_voice"
+    core_model.tts_model_type = "custom_voice"
+    core_model.supported_speakers = core_model.config.talker_config.spk_id.keys()
+
+
+def _apply_speaker_embedding(core_model, adapter_dir: str, speaker_name: str) -> None:
+    import os
+
+    from safetensors.torch import load_file
+
+    embedding_path = os.path.join(adapter_dir, "speaker_embedding.safetensors")
+    payload = load_file(embedding_path)
+    spk_id = core_model.config.talker_config.spk_id[speaker_name]
+    weight = core_model.talker.model.codec_embedding.weight
+    weight.data[spk_id] = payload["target_speaker_embedding"].to(device=weight.device, dtype=weight.dtype)
+
+
+def _set_lora_scale(peft_model, scale: float) -> None:
+    if scale == 1.0:
+        return
+    from peft.tuners.lora import LoraLayer
+
+    adapter = getattr(peft_model, "active_adapter", None)
+    for module in peft_model.modules():
+        if isinstance(module, LoraLayer):
+            if adapter is None:
+                module.scale_layer(scale)
+            elif isinstance(adapter, (list, tuple)):
+                for name in adapter:
+                    module.set_scale(name, scale)
+            else:
+                module.set_scale(adapter, scale)

@@ -105,7 +105,36 @@ slow translation or TTS call doesn't stall audio capture.
 
   This is zero-shot clone caching, not true model fine-tuning — a
   from-scratch per-speaker model needs far more data (10-30 min of clean
-  audio) and training time than a live session realistically gives you.
+  audio) and training time than a live session realistically gives you. For
+  that, see **True LoRA training**, below.
+
+## True LoRA training (rented GPU, e.g. an H100/H200 droplet)
+
+`training/qwen3_lora/` trains a real, reusable Qwen3-TTS LoRA adapter from a
+recorded speaker file — meant to run on rented GPU compute, not live. Full
+workflow (create droplet, upload recording, one script per step, download
+adapter, `sts-import-voice` it into the local library) is in
+[`training/qwen3_lora/README.md`](training/qwen3_lora/README.md).
+
+**Training needs the big GPU; using the trained voice doesn't.** LoRA
+weights are small (a few hundred MB at most) applied on top of the same base
+model already used for zero-shot cloning — what needs an H100/H200 is
+training itself (backprop + optimizer state across the whole base model,
+even though only a small LoRA delta is updated). Inference with a trained
+adapter is a forward pass through that same base model, same cost as
+zero-shot cloning already is: an RTX 3090/4090-class consumer GPU runs it
+fine. A trained speaker shows up in the caption page's dropdown exactly like
+a zero-shot one; switching to it is a few seconds to load, not a retrain.
+
+This isn't officially supported by the Qwen team — Qwen3-TTS's own
+`finetuning/` only does full fine-tuning, no LoRA. The LoRA path comes from
+a third-party community patch
+([cheeweijie/qwen3-tts-lora-finetuning](https://github.com/cheeweijie/qwen3-tts-lora-finetuning),
+Apache-2.0) pinned to a specific upstream commit; `sts/tts/qwen3.py`'s LoRA
+loading code mirrors that patch's inference script line-for-line for the
+same reason the rest of the Qwen3-TTS integration does: it's unverified
+against real hardware in this repo (no GPU here), so it's built to match
+known-working reference code rather than guessed at.
 
 ## Setup
 
@@ -139,6 +168,10 @@ sts --web --web-port 8765          # also serve live captions at :8765
 sts --web --tts-backend qwen3 --voice-library-dir /data/sts-voices
                                     # Qwen3-TTS backend + a custom voice
                                     # library location
+
+# import a LoRA adapter trained via training/qwen3_lora/ (see its README):
+sts-import-voice "Pastor Ivan" pastor_ivan ./checkpoint-epoch-9 \
+  --lora-scale 0.3 --voice-library-dir /data/sts-voices
 ```
 
 ## Tests
@@ -150,6 +183,7 @@ pytest
 
 The glossary term-matching, Bible reference detection/lookup, the
 start/stop/reset/train control state machine (`sts.control`), and the voice
-library (`sts.tts.voice_library`) are unit tested here — the audio/ASR/
-translation/TTS stages need real hardware (mic, GPU) and aren't exercised by
-the test suite.
+library (`sts.tts.voice_library`, including LoRA entries) are unit tested
+here — the audio/ASR/translation/TTS stages, and everything under
+`training/qwen3_lora/`, need real hardware (mic, GPU) and aren't exercised
+by the test suite.

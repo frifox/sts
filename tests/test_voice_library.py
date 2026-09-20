@@ -55,7 +55,57 @@ def test_saving_same_name_twice_overwrites_the_same_entry(tmp_path):
     assert library.get(first.speaker_id).ref_text == "second"
 
 
+def test_save_lora_adapter_roundtrip(tmp_path):
+    library = VoiceLibrary(tmp_path)
+    adapter_src = _make_adapter_dir(tmp_path)
+
+    entry = library.save_lora_adapter("Pastor Ivan", adapter_src, speaker_name="pastor_ivan", lora_scale=0.35)
+
+    assert entry.kind == "lora"
+    assert entry.speaker_name == "pastor_ivan"
+    assert entry.lora_scale == 0.35
+    assert (entry.adapter_dir / "adapter_config.json").exists()
+
+    fetched = library.get(entry.speaker_id)
+    assert fetched.kind == "lora"
+    assert fetched.speaker_name == "pastor_ivan"
+    assert fetched.lora_scale == 0.35
+    assert (fetched.adapter_dir / "adapter_config.json").read_text() == "fake adapter config"
+
+
+def test_lora_entry_has_no_zeroshot_fields(tmp_path):
+    library = VoiceLibrary(tmp_path)
+    entry = library.save_lora_adapter("Alice", _make_adapter_dir(tmp_path), speaker_name="alice")
+    assert entry.wav_path is None
+    assert entry.ref_text is None
+
+
+def test_zeroshot_and_lora_entries_coexist_in_list(tmp_path):
+    library = VoiceLibrary(tmp_path)
+    library.save("Alice", _make_wav(tmp_path, "a.wav"))
+    library.save_lora_adapter("Bob", _make_adapter_dir(tmp_path), speaker_name="bob")
+
+    kinds = {e.name: e.kind for e in library.list()}
+    assert kinds == {"Alice": "zeroshot", "Bob": "lora"}
+
+
+def test_lora_default_scale(tmp_path):
+    library = VoiceLibrary(tmp_path)
+    entry = library.save_lora_adapter("Alice", _make_adapter_dir(tmp_path), speaker_name="alice")
+    assert entry.lora_scale == 0.3
+
+
 def _make_wav(tmp_path, name: str):
     path = tmp_path / name
     path.write_bytes(b"RIFF....WAVEfmt ")
     return path
+
+
+def _make_adapter_dir(tmp_path):
+    import uuid
+
+    src = tmp_path / f"adapter-src-{uuid.uuid4().hex}"
+    src.mkdir()
+    (src / "adapter_config.json").write_text("fake adapter config")
+    (src / "adapter_model.safetensors").write_bytes(b"fake-weights")
+    return src
