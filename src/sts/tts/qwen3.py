@@ -36,11 +36,15 @@ projects' example code, not from having actually run it.
 
 Device support: `cfg.device` is passed straight through as `device_map`, so
 "cuda", "cpu", and "mps" (Apple Silicon) all work as far as loading the
-model goes. bfloat16 and flash-attention are CUDA-specific choices, not
-requirements of the model itself - `_dtype_for_device`/`_attn_impl_for_device`
-below pick float16 + SDPA attention instead on mps (flash-attn has no Metal
-build; MPS's bfloat16 support has historically been the less mature of the
-two float types, float16 is the safer default there).
+model goes. bfloat16 and flash-attention aren't requirements of the model
+itself, though, and aren't even a safe default for every CUDA GPU: both need
+Ampere or newer (compute capability >= 8) - an older card like a GTX 1080 Ti
+(Pascal, compute 6.1) supports neither properly, and would fail to load or
+run badly if forced onto that path. `_dtype_for_device`/`_attn_impl_for_device`
+below check the actual GPU's compute capability (via
+`sts.devices.supports_bf16_and_flash_attention`, kept import-light so it's
+unit-testable without a GPU) and fall back to float16 + SDPA attention on
+mps or an older/absent GPU, same reasoning as the Metal case either way.
 """
 
 import numpy as np
@@ -48,19 +52,29 @@ import torch
 from qwen_tts import Qwen3TTSModel
 
 from sts.config import TTSConfig
+from sts.devices import supports_bf16_and_flash_attention
 from sts.tts.voice_library import VoiceEntry
+
+
+def _cuda_supports_bf16_and_flash_attention() -> bool:
+    if not torch.cuda.is_available():
+        return False
+    major, _minor = torch.cuda.get_device_capability()
+    return supports_bf16_and_flash_attention(major)
 
 
 def _dtype_for_device(device: str) -> torch.dtype:
     if device == "cuda":
-        return torch.bfloat16
+        return torch.bfloat16 if _cuda_supports_bf16_and_flash_attention() else torch.float16
     if device == "mps":
         return torch.float16
     return torch.float32
 
 
 def _attn_impl_for_device(device: str) -> str:
-    return "flash_attention_2" if device == "cuda" else "sdpa"
+    if device == "cuda" and _cuda_supports_bf16_and_flash_attention():
+        return "flash_attention_2"
+    return "sdpa"
 
 
 class Qwen3TTSSynthesizer:

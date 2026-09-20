@@ -119,6 +119,26 @@ slow translation or TTS call doesn't stall audio capture.
   audio) and training time than a live session realistically gives you. For
   that, see **True LoRA training**, below.
 
+## GPU requirements
+
+Estimates from published model sizes, not benchmarked against real hardware
+in this repo (no GPU in dev). All three components load simultaneously
+regardless of which caption-page toggles are on, so the last row is what
+actually matters for picking hardware.
+
+| Part | Models | Rough VRAM |
+|---|---|---|
+| Captions (ASR + translation) | faster-whisper `large-v3` + NLLB-200-1.3B | ~5-6GB int8, ~8GB float16 |
+| TTS, zero-shot | XTTS v2 (~460M) or Qwen3-TTS-Base (0.6B/1.7B) | ~3-4GB |
+| TTS, trained (LoRA) | same base model, adapter merged in | same as zero-shot per speaker; each additional *cached* trained speaker is a full extra model load, not a small increment (see `sts/tts/qwen3.py`) |
+| **Whole pipeline together** | all of the above loaded at once | **~7-9GB at int8 Whisper, ~10-14GB at float16** |
+
+A 12GB+ card (RTX 3060 12GB, RTX 4070, ...) is a comfortable floor. 8-11GB
+cards (see **Older NVIDIA GPUs**, below, for a GTX 1080 Ti specifically) are
+workable but tight, especially with Qwen3-TTS's 1.7B variant or several
+cached trained speakers — the 0.6B variant, XTTS, and `int8` Whisper (the
+default off-CUDA already) all buy back headroom.
+
 ## True LoRA training (rented GPU, e.g. an H100/H200 droplet)
 
 `training/qwen3_lora/` trains a real, reusable Qwen3-TTS LoRA adapter from a
@@ -177,6 +197,35 @@ throughput, not whether the models fit.
 sts --web --device mps                          # XTTS backend
 sts --web --device mps --tts-backend qwen3       # Qwen3-TTS backend
 ```
+
+## Older NVIDIA GPUs (pre-Ampere) and Windows
+
+`--device cuda` works on Windows the same as Linux — PyTorch, CTranslate2
+(faster-whisper), Coqui TTS, and `sounddevice` all support it natively.
+
+The one thing that varies by *which* GPU, not the OS: Qwen3-TTS's CUDA path
+picks bfloat16 + flash-attention by default, but both need Ampere or newer
+(compute capability >= 8) - a GTX 10-series card (Pascal, compute 6.1) or a
+20-series card (Turing, compute 7.5) supports neither properly.
+`sts.tts.qwen3` checks the actual GPU's compute capability at load time
+(`sts.devices.supports_bf16_and_flash_attention`) and falls back to
+float16 + SDPA attention automatically on anything older than Ampere - same
+reasoning, and the same fallback, as the Apple Silicon case above. No flag
+needed; this is automatic. (XTTS has no such split either way.)
+
+Flash-attention wheels are also less reliably available for Windows even on
+GPUs new enough to use them (Ampere+) - if `pip install flash-attn` fails on
+Windows on a card that should otherwise support it, the SDPA fallback above
+only triggers based on compute capability, not install failures, so you may
+need to fall back manually; nothing else in the pipeline depends on
+flash-attn being present.
+
+On VRAM: an 11GB card (e.g. a GTX 1080 Ti) is workable for the whole
+pipeline but tight if you also pick Qwen3-TTS's 1.7B variant - the 0.6B
+variant, or the XTTS backend, plus `int8` Whisper (already the default for
+non-CUDA ASR devices), leaves more headroom. See the GPU requirements
+breakdown earlier in this README for the per-component numbers this is
+based on.
 
 ## Setup
 
