@@ -1,13 +1,17 @@
-"""Serves the live-caption page and streams original/translated text to it
-over a websocket.
+"""Serves the live-caption page, streams original/translated/verse text to
+it over a websocket, and relays operator control button presses back.
 
 The pipeline's ASR/translation stages run on plain threads, not inside the
 server's asyncio loop, so `CaptionBroadcaster` accepts text from any thread
 and schedules the actual send onto the loop via `run_coroutine_threadsafe`.
+Control messages flow the other way: the browser sends `{"action": ...}` on
+the same websocket, which is handed to whatever callable the pipeline
+registered as `on_control`.
 """
 
 import asyncio
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import uvicorn
@@ -21,12 +25,16 @@ class CaptionBroadcaster:
     def __init__(self) -> None:
         self.loop: asyncio.AbstractEventLoop | None = None
         self._clients: set[WebSocket] = set()
+        self.on_control: Callable[[str], None] | None = None
+        self._last_status: dict | None = None
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
 
     async def register(self, websocket: WebSocket) -> None:
         self._clients.add(websocket)
+        if self._last_status is not None:
+            await websocket.send_text(json.dumps(self._last_status))
 
     async def unregister(self, websocket: WebSocket) -> None:
         self._clients.discard(websocket)
@@ -73,6 +81,41 @@ class CaptionBroadcaster:
         }
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
+    def broadcast_reset(self) -> None:
+        if self.loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_to_all({"type": "reset"}), self.loop)
+
+    def broadcast_status(
+        self,
+        active: bool,
+        training: bool,
+        training_seconds: float,
+        training_target_seconds: float,
+        cloned: bool,
+    ) -> None:
+        message = {
+            "type": "status",
+            "active": active,
+            "training": training,
+            "training_seconds": round(training_seconds, 1),
+            "training_target_seconds": training_target_seconds,
+            "cloned": cloned,
+        }
+        self._last_status = message
+        if self.loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
+
+    def _handle_incoming(self, raw: str) -> None:
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return
+        action = data.get("action") if isinstance(data, dict) else None
+        if action and self.on_control:
+            self.on_control(action)
+
 
 def create_app(broadcaster: CaptionBroadcaster) -> FastAPI:
     app = FastAPI()
@@ -91,9 +134,8 @@ def create_app(broadcaster: CaptionBroadcaster) -> FastAPI:
         await broadcaster.register(websocket)
         try:
             while True:
-                # Clients don't send anything; this just blocks until they
-                # disconnect so we can clean them up.
-                await websocket.receive_text()
+                raw = await websocket.receive_text()
+                broadcaster._handle_incoming(raw)
         except WebSocketDisconnect:
             pass
         finally:

@@ -1,0 +1,72 @@
+import numpy as np
+
+from sts.control import RecognitionControl
+
+
+def test_recognition_starts_off():
+    control = RecognitionControl(sample_rate=16_000)
+    assert not control.active.is_set()
+
+
+def test_start_stop_toggle_active():
+    control = RecognitionControl(sample_rate=16_000)
+    control.start()
+    assert control.active.is_set()
+    control.stop()
+    assert not control.active.is_set()
+
+
+def test_training_accumulates_and_reports_duration():
+    control = RecognitionControl(sample_rate=16_000, target_seconds=1.0)
+    control.start_training()
+    assert control.training.is_set()
+
+    reached = control.accumulate_training_segment(np.zeros(8_000, dtype=np.float32))  # 0.5s
+    assert reached is False
+    assert control.training_seconds == 0.5
+
+
+def test_training_auto_stops_at_target_duration():
+    control = RecognitionControl(sample_rate=16_000, target_seconds=1.0)
+    control.start_training()
+    control.accumulate_training_segment(np.zeros(8_000, dtype=np.float32))  # 0.5s
+    reached = control.accumulate_training_segment(np.zeros(8_000, dtype=np.float32))  # 1.0s total
+    assert reached is True
+
+
+def test_stop_training_returns_concatenated_audio():
+    control = RecognitionControl(sample_rate=16_000)
+    control.start_training()
+    control.accumulate_training_segment(np.ones(100, dtype=np.float32))
+    control.accumulate_training_segment(np.ones(50, dtype=np.float32) * 2)
+
+    audio = control.stop_training()
+    assert not control.training.is_set()
+    assert audio is not None
+    assert len(audio) == 150
+    assert control.training_seconds == 0.0
+
+
+def test_stop_training_with_discard_returns_none_and_drops_buffer():
+    control = RecognitionControl(sample_rate=16_000)
+    control.start_training()
+    control.accumulate_training_segment(np.ones(100, dtype=np.float32))
+
+    audio = control.stop_training(discard=True)
+    assert audio is None
+
+
+def test_stop_training_without_any_samples_returns_none():
+    control = RecognitionControl(sample_rate=16_000)
+    control.start_training()
+    assert control.stop_training() is None
+
+
+def test_manual_stop_before_target_uses_whatever_was_captured():
+    control = RecognitionControl(sample_rate=16_000, target_seconds=100.0)
+    control.start_training()
+    control.accumulate_training_segment(np.ones(16_000, dtype=np.float32))  # 1s, far short of target
+
+    audio = control.stop_training()
+    assert audio is not None
+    assert len(audio) == 16_000

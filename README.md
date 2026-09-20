@@ -57,6 +57,27 @@ slow translation or TTS call doesn't stall audio capture.
   `sts/bible/lookup.py` for what that does and doesn't cover. This is
   inherently best-effort: it depends on the ASR getting the reference right
   and only covers phrasing the parser recognizes.
+- **Operator controls** (`sts.control`, buttons on the caption page) — a live
+  feed runs across multiple speakers/performances in a session (music,
+  announcements, one voice at a time when someone *is* speaking), so
+  recognition defaults to **off** and an operator drives it:
+  - **Start / Stop** — turns ASR/translation/TTS on or off. Audio capture and
+    VAD segmentation keep running either way; Stop just means nothing gets
+    transcribed, so switching a long musical number or announcement doesn't
+    waste GPU time or produce junk captions.
+  - **Reset** — for a new speaker/performance: clears both caption panels on
+    every connected screen, drops any text already in flight through the
+    pipeline, and forgets the current cloned voice (falls back to the
+    default TTS voice).
+  - **Train voice** — starts capturing the current speaker's live audio for a
+    voice clone; stops automatically at 18s or on a second click, whichever
+    comes first, then feeds whatever was captured into XTTS. Click Reset
+    before the next speaker so their voice doesn't get training samples
+    mixed in with the previous one's.
+
+  All three are relayed over the same websocket the captions arrive on
+  (`{"action": "start"}` etc.); the server broadcasts current state back to
+  every connected screen so multiple open tabs stay in sync.
 
 ## Setup
 
@@ -96,6 +117,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-The glossary term-matching and Bible reference detection/lookup are unit
-tested here — the audio/ASR/translation/TTS stages need real hardware (mic,
-GPU) and aren't exercised by the test suite.
+The glossary term-matching, Bible reference detection/lookup, and the
+start/stop/reset/train control state machine (`sts.control`) are unit tested
+here — the audio/ASR/translation/TTS stages need real hardware (mic, GPU)
+and aren't exercised by the test suite.

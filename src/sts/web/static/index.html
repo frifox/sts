@@ -112,6 +112,40 @@
 
   #verse-ru { color: #9cdcfe; }
   #verse-en { color: #e8c07d; }
+
+  #controls {
+    position: fixed;
+    bottom: 1.2vh;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 4;
+    display: flex;
+    gap: 0.6em;
+    padding: 0.5em;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 10px;
+    opacity: 0.35;
+    transition: opacity 0.2s ease;
+  }
+
+  #controls:hover, #controls:focus-within { opacity: 1; }
+
+  #controls button {
+    font: inherit;
+    font-size: 0.9rem;
+    padding: 0.5em 1em;
+    border-radius: 6px;
+    border: 1px solid #444;
+    background: #1a1a1e;
+    color: #ccc;
+    cursor: pointer;
+  }
+
+  #controls button:hover { border-color: #777; }
+
+  #btn-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
+  #btn-train.is-active { background: #4d3a1f; border-color: #c9a24b; color: #ffe9bf; }
+  #btn-reset { color: #e08a8a; }
 </style>
 </head>
 <body>
@@ -131,6 +165,12 @@
     <div class="verse-reference" id="verse-reference"></div>
     <div class="verse-text" id="verse-ru"></div>
     <div class="verse-text" id="verse-en"></div>
+  </div>
+
+  <div id="controls">
+    <button id="btn-toggle">Start</button>
+    <button id="btn-train">Train voice</button>
+    <button id="btn-reset">Reset</button>
   </div>
 
 <script>
@@ -163,10 +203,47 @@
     verseHideTimer = setTimeout(() => overlay.classList.remove('show'), VERSE_DISPLAY_MS);
   }
 
+  function clearCaptions() {
+    document.getElementById('original-lines').innerHTML = '';
+    document.getElementById('translated-lines').innerHTML = '';
+    document.getElementById('verse-overlay').classList.remove('show');
+    clearTimeout(verseHideTimer);
+  }
+
+  const toggleBtn = document.getElementById('btn-toggle');
+  const trainBtn = document.getElementById('btn-train');
+  const resetBtn = document.getElementById('btn-reset');
+  let lastStatus = { active: false, training: false, training_seconds: 0, training_target_seconds: 0, cloned: false };
+
+  function applyStatus(status) {
+    lastStatus = status;
+
+    toggleBtn.textContent = status.active ? 'Stop' : 'Start';
+    toggleBtn.classList.toggle('is-active', status.active);
+
+    if (status.training) {
+      trainBtn.textContent = `Stop training (${status.training_seconds}s / ${status.training_target_seconds}s)`;
+    } else {
+      trainBtn.textContent = status.cloned ? 'Train voice (cloned ✓)' : 'Train voice';
+    }
+    trainBtn.classList.toggle('is-active', status.training);
+  }
+
+  let ws = null;
+  function send(action) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ action }));
+    }
+  }
+
+  toggleBtn.addEventListener('click', () => send(lastStatus.active ? 'stop' : 'start'));
+  trainBtn.addEventListener('click', () => send(lastStatus.training ? 'train_stop' : 'train_start'));
+  resetBtn.addEventListener('click', () => send('reset'));
+
   function connect() {
     const status = document.getElementById('status');
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${location.host}/ws`);
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
 
     ws.onopen = () => { status.textContent = ''; };
     ws.onerror = () => ws.close();
@@ -179,6 +256,8 @@
       if (msg.type === 'original') addLine('original-lines', msg.text);
       else if (msg.type === 'translated') addLine('translated-lines', msg.text);
       else if (msg.type === 'verse') showVerse(msg);
+      else if (msg.type === 'reset') clearCaptions();
+      else if (msg.type === 'status') applyStatus(msg);
     };
   }
 
