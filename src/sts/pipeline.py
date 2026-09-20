@@ -10,6 +10,8 @@ from sts.asr.whisper_asr import WhisperASR
 from sts.audio.capture import AudioCapture
 from sts.audio.playback import AudioPlayback
 from sts.audio.vad import SpeechSegmenter
+from sts.bible.lookup import BibleLookup
+from sts.bible.reference import find_references
 from sts.config import PipelineConfig
 from sts.translate.translator import Translator
 from sts.tts.xtts import SAMPLE_RATE, XTTSSynthesizer
@@ -27,6 +29,7 @@ class Pipeline:
         self.asr = WhisperASR(cfg.asr)
         self.translator = Translator(cfg.translation)
         self.tts = XTTSSynthesizer(cfg.tts)
+        self.bible_lookup = BibleLookup()
         self.broadcaster = broadcaster
 
         self._segments: queue.Queue = queue.Queue()
@@ -53,7 +56,16 @@ class Pipeline:
                 print(f"[ru] {text}")
                 if self.broadcaster:
                     self.broadcaster.broadcast_original(text)
+                    self._broadcast_bible_references(text)
                 self._transcripts.put(text)
+
+    def _broadcast_bible_references(self, text: str) -> None:
+        for ref in find_references(text):
+            quote = self.bible_lookup.lookup(ref.book, ref.ru_label, ref.chapter, ref.verse, ref.verse_end)
+            print(f"[verse] {quote.ru_label} {ref.chapter}:{ref.verse}")
+            self.broadcaster.broadcast_verse(
+                quote.ru_label, quote.chapter, quote.verse, quote.verse_end, quote.ru_text, quote.en_text
+            )
 
     def _translate_loop(self) -> None:
         while not self._stop.is_set():

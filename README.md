@@ -44,6 +44,19 @@ slow translation or TTS call doesn't stall audio capture.
   bottom and older lines are dropped once they no longer fit on screen, so
   the page keeps auto-scrolling without accumulating unbounded DOM/memory
   over a long service.
+- **Bible reference detection** (`sts.bible`) — the Russian transcript is
+  scanned for a spoken reference ("Матфея 1:15", "Первое послание к
+  Коринфянам, глава 13, стих 4", "Плач Иеремии 3:22-23", chapter/verse as
+  digits or Russian number words). A match looks up the exact verse in a
+  bundled, fully offline Russian Synodal + English KJV (Pure Cambridge
+  Edition) dataset and pushes it to the caption page as a banner that slides
+  in over both panels for ~25s. Book-name matching is stem-based (all 66
+  books) rather than an exhaustive alias list, and Psalms gets its chapter
+  number converted between the Synodal (Septuagint) and KJV (Masoretic)
+  numbering traditions so it doesn't show the wrong psalm — see
+  `sts/bible/lookup.py` for what that does and doesn't cover. This is
+  inherently best-effort: it depends on the ASR getting the reference right
+  and only covers phrasing the parser recognizes.
 
 ## Setup
 
@@ -57,6 +70,11 @@ pip install -e .
 Model weights (Whisper, NLLB, XTTS, Silero VAD) download automatically on
 first run — that first run needs internet access even though normal
 operation doesn't.
+
+`src/sts/bible/data/bible.json.gz` bundles the Russian Synodal (1876) and
+KJV Pure Cambridge Edition (1769) texts, both public domain, sourced from
+[scrollmapper/bible_databases](https://github.com/scrollmapper/bible_databases)
+(MIT-licensed compilation).
 
 ## Usage
 
@@ -78,6 +96,6 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Only the glossary term-matching logic is unit tested here — the audio/ASR/
-translation/TTS stages need real hardware (mic, GPU) and aren't exercised by
-the test suite.
+The glossary term-matching and Bible reference detection/lookup are unit
+tested here — the audio/ASR/translation/TTS stages need real hardware (mic,
+GPU) and aren't exercised by the test suite.

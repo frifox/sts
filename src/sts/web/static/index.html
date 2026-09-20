@@ -75,6 +75,43 @@
     color: #444;
     z-index: 2;
   }
+
+  #verse-overlay {
+    position: fixed;
+    top: 0;
+    left: 50%;
+    z-index: 3;
+    width: min(90vw, 60rem);
+    box-sizing: border-box;
+    padding: 2.2vh 3vw;
+    background: rgba(10, 10, 12, 0.96);
+    border-bottom: 3px solid #c9a24b;
+    border-left: 1px solid #333;
+    border-right: 1px solid #333;
+    border-radius: 0 0 12px 12px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+    transform: translate(-50%, -105%);
+    transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  #verse-overlay.show { transform: translate(-50%, 0); }
+
+  .verse-reference {
+    font-size: 1rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #c9a24b;
+    margin-bottom: 0.6em;
+  }
+
+  .verse-text {
+    font-size: clamp(1.1rem, 2.6vw, 1.8rem);
+    line-height: 1.4;
+    margin-bottom: 0.5em;
+  }
+
+  #verse-ru { color: #9cdcfe; }
+  #verse-en { color: #e8c07d; }
 </style>
 </head>
 <body>
@@ -90,6 +127,12 @@
   </div>
   <div id="status"></div>
 
+  <div id="verse-overlay">
+    <div class="verse-reference" id="verse-reference"></div>
+    <div class="verse-text" id="verse-ru"></div>
+    <div class="verse-text" id="verse-en"></div>
+  </div>
+
 <script>
   function addLine(containerId, text) {
     const container = document.getElementById(containerId);
@@ -103,6 +146,21 @@
     while (container.children.length > 1 && container.scrollHeight > container.clientHeight) {
       container.removeChild(container.firstChild);
     }
+  }
+
+  const VERSE_DISPLAY_MS = 25000;
+  let verseHideTimer = null;
+
+  function showVerse(msg) {
+    document.getElementById('verse-reference').textContent = msg.reference;
+    document.getElementById('verse-ru').textContent = msg.ru_text || '';
+    document.getElementById('verse-en').textContent = msg.en_text || '';
+
+    const overlay = document.getElementById('verse-overlay');
+    overlay.classList.add('show');
+
+    clearTimeout(verseHideTimer);
+    verseHideTimer = setTimeout(() => overlay.classList.remove('show'), VERSE_DISPLAY_MS);
   }
 
   function connect() {
@@ -120,6 +178,7 @@
       const msg = JSON.parse(event.data);
       if (msg.type === 'original') addLine('original-lines', msg.text);
       else if (msg.type === 'translated') addLine('translated-lines', msg.text);
+      else if (msg.type === 'verse') showVerse(msg);
     };
   }
 

@@ -53,6 +53,26 @@ class CaptionBroadcaster:
     def broadcast_translated(self, text: str) -> None:
         self._broadcast("translated", text)
 
+    def broadcast_verse(
+        self,
+        ru_label: str,
+        chapter: int,
+        verse: int,
+        verse_end: int | None,
+        ru_text: str | None,
+        en_text: str | None,
+    ) -> None:
+        if self.loop is None or not (ru_text or en_text):
+            return
+        reference = f"{ru_label} {chapter}:{verse}" + (f"-{verse_end}" if verse_end else "")
+        message = {
+            "type": "verse",
+            "reference": reference,
+            "ru_text": ru_text,
+            "en_text": en_text,
+        }
+        asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
+
 
 def create_app(broadcaster: CaptionBroadcaster) -> FastAPI:
     app = FastAPI()
