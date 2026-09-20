@@ -5,11 +5,19 @@ __pycache__/
 .venv/
 venv/
 .env
+.pytest_cache/
 
 # Audio artifacts
 *.wav
 *.mp3
 *.flac
+
+# Downloaded model weights / caches
+.cache/
+models/
+*.pt
+*.bin
+*.ckpt
 
 # OS
 .DS_Store
