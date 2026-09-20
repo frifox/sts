@@ -230,11 +230,226 @@ based on.
 ## Setup
 
 Requires Python 3.10+ and a GPU for real-time performance — NVIDIA/CUDA
-(`--device cuda`) or Apple Silicon (`--device mps`, see above); CPU works too
-but will lag.
+(`--device cuda`), Apple Silicon (`--device mps`, see above), or CPU (works,
+but will lag). Supported on Windows, macOS, and Linux.
 
 ```bash
+git clone https://github.com/frifox/sts.git
+cd sts
 pip install -e .
+```
+
+If you already have Python, git, and (for `--device cuda`) a working CUDA
+install of PyTorch on this machine, that's the whole setup — skip to
+**Usage** below. The rest of this section is a from-zero walkthrough per OS,
+for a machine that has none of that yet.
+
+### Fresh Windows install
+
+For a Windows PC that's never had a Python dev environment on it (this is
+the path a Windows + NVIDIA GPU setup - e.g. a GTX 1080 Ti - would follow):
+
+1. **NVIDIA driver** (skip if using `--device cpu`). Download the latest
+   Studio or Game Ready driver for your card from
+   [nvidia.com/drivers](https://www.nvidia.com/drivers) and install it, then
+   reboot. You do **not** need to separately install the full CUDA Toolkit -
+   PyTorch's pip wheels bundle the CUDA runtime they need. Verify the driver
+   installed correctly by opening Command Prompt and running:
+   ```
+   nvidia-smi
+   ```
+   This should list your GPU and driver version. If it doesn't, the rest of
+   this won't detect a GPU either - fix that first.
+
+2. **Python 3.10+**. Download the installer from
+   [python.org/downloads](https://www.python.org/downloads/windows/) and run
+   it. On the first installer screen, check **"Add python.exe to PATH"**
+   before clicking Install - easy to miss, and everything below assumes it's
+   checked. Verify in a fresh Command Prompt:
+   ```
+   python --version
+   ```
+
+3. **Git for Windows** (to clone the repo; skip if you'll download a zip
+   instead). Install from [git-scm.com](https://git-scm.com/download/win)
+   with default options.
+
+4. **Clone the repo and set up a virtual environment:**
+   ```
+   git clone https://github.com/frifox/sts.git
+   cd sts
+   python -m venv .venv
+   .venv\Scripts\activate
+   ```
+   You should see `(.venv)` at the start of the prompt from here on - every
+   command below assumes it's still active (reactivate with the same command
+   if you close and reopen the terminal).
+
+5. **Install PyTorch with CUDA support explicitly, before anything else.**
+   Whether a plain `pip install torch` gets you a CUDA-capable build or a
+   CPU-only one has changed across PyTorch releases and isn't something to
+   rely on either way - install explicitly from the CUDA index, matching a
+   CUDA version your driver supports (12.4 is a safe current choice for most
+   recent drivers; use the selector at
+   [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/)
+   if you need a different one):
+   ```
+   pip install torch --index-url https://download.pytorch.org/whl/cu124
+   ```
+   Verify it can see the GPU before moving on:
+   ```
+   python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+   ```
+   This should print `True` and your GPU's name. If it prints `False`,
+   stop here and recheck the driver (step 1) and that you installed the
+   `cu124` (or matching) build, not plain `torch`.
+
+6. **Install the project:**
+   ```
+   pip install -e .
+   ```
+   Add the Qwen3-TTS backend too if you want it (`pip install -e ".[qwen3]"`)
+   — see **Older NVIDIA GPUs (pre-Ampere) and Windows** above for what that
+   backend needs on a card like a GTX 1080 Ti specifically.
+
+7. **Known rough edge: faster-whisper (ASR) on Windows + CUDA.** Its
+   CTranslate2 backend needs cuBLAS/cuDNN, and Windows wheels have
+   historically been less consistent than Linux about bundling them. If
+   `sts` fails specifically when loading the Whisper model (not at the
+   PyTorch step above, which is a separate library), that's almost always
+   this - check [faster-whisper's own install
+   docs](https://github.com/SYSTRAN/faster-whisper#gpu) for current
+   Windows-specific guidance, since this varies by faster-whisper version
+   more than anything else here. Forcing `--asr-device cpu` (ASR still runs
+   fine on CPU, just slower) is the immediate workaround while sorting it
+   out.
+
+8. **Run it** - see **First run, on any OS** at the end of this section.
+   Two Windows-specific prompts to expect the first time you do: a
+   **Windows Defender Firewall**
+   prompt when the caption web server binds its port (allow it, at least for
+   Private networks), and possibly a **microphone permission**
+   prompt/block under Settings -> Privacy & security -> Microphone if
+   `sounddevice` can't see your input device - enable access for desktop
+   apps there if `--list-devices` doesn't show your mic.
+
+### Fresh macOS install
+
+For Apple Silicon (see **Apple Silicon / Metal** above for what `--device
+mps` does and doesn't cover) or Intel Macs with no dev environment yet:
+
+1. **Xcode Command Line Tools** (gives you `git` and basic build tools;
+   skip if you already have Homebrew or Xcode installed):
+   ```
+   xcode-select --install
+   ```
+
+2. **Homebrew**, if you don't have it - follow the install command at
+   [brew.sh](https://brew.sh/). Then:
+   ```
+   brew install python@3.12
+   ```
+   (Any 3.10+ works; `python.org`'s own macOS installer is an equally fine
+   alternative to Homebrew here.)
+
+3. **Clone the repo and set up a virtual environment:**
+   ```
+   git clone https://github.com/frifox/sts.git
+   cd sts
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+   `(.venv)` should appear at the start of the prompt - reactivate with the
+   same `source` command in any new terminal tab/window.
+
+4. **Install the project:**
+   ```
+   pip install -e .
+   ```
+   `pip install torch` on macOS installs a universal build with Apple
+   Silicon (MPS) support already included - no separate CUDA-style index-url
+   step like Windows/Linux. Verify MPS is available on Apple Silicon:
+   ```
+   python -c "import torch; print(torch.backends.mps.is_available())"
+   ```
+   This should print `True`. On Intel Macs it'll print `False` - expected,
+   use `--device cpu` there.
+
+5. **`sounddevice`'s PortAudio dependency is bundled in its wheel** - no
+   separate `brew install portaudio` needed in the normal case. If capture
+   fails to find your input device anyway, that's the fallback to try.
+
+6. **Run it** - see **First run, on any OS** at the end of this section.
+   Two macOS-specific prompts to expect the first time: a
+   **"Accept incoming network connections?"** firewall prompt for the
+   caption web server (allow it), and a **microphone permission** prompt for
+   Terminal/iTerm under System Settings -> Privacy & Security -> Microphone
+   if `--list-devices` doesn't show your input device.
+
+### Fresh Linux install
+
+Commands below are for Debian/Ubuntu (`apt`); substitute your distro's
+package manager (`dnf`, `pacman`, ...) for the system packages - the Python
+side is identical everywhere.
+
+1. **Python 3.10+, git, and PortAudio.** Linux is the one OS here where
+   `sounddevice`'s PortAudio dependency is **not** bundled in the wheel and
+   needs installing separately, or audio capture will fail to import:
+   ```
+   sudo apt update
+   sudo apt install python3 python3-venv python3-pip git libportaudio2
+   ```
+
+2. **NVIDIA driver** (skip if using `--device cpu`). Easiest path on Ubuntu:
+   ```
+   sudo ubuntu-drivers autoinstall
+   ```
+   then reboot and verify:
+   ```
+   nvidia-smi
+   ```
+   (On other distros, install your distro's recommended proprietary NVIDIA
+   driver package instead.) As on Windows, you don't need the full CUDA
+   Toolkit - just the driver; PyTorch's wheel brings its own CUDA runtime.
+
+3. **Clone the repo and set up a virtual environment:**
+   ```
+   git clone https://github.com/frifox/sts.git
+   cd sts
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+
+4. **Install PyTorch with CUDA support explicitly**, same reasoning as the
+   Windows step - install from the CUDA index rather than relying on
+   whatever a plain `pip install torch` happens to resolve to:
+   ```
+   pip install torch --index-url https://download.pytorch.org/whl/cu124
+   python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+   ```
+   Should print `True` and your GPU's name; if `False`, recheck the driver
+   (step 2) before going further.
+
+5. **Install the project:**
+   ```
+   pip install -e .
+   ```
+   Add `pip install -e ".[qwen3]"` for the Qwen3-TTS backend if you want it.
+
+6. **Run it** - see **First run, on any OS** below. Linux generally has no
+   OS-level app-permission prompts for mic/network access
+   the way Windows/macOS do; if `--list-devices` doesn't list your input
+   device, check `arecord -l` (or your audio server's equivalent) to confirm
+   the OS itself sees the device, and that your user is in the `audio`
+   group on distros that gate device access that way. If you have `ufw`
+   enabled and can't reach the caption page from another machine on the
+   network, `sudo ufw allow 8765` (or your `--web-port`).
+
+### First run, on any OS
+
+```bash
+sts --list-devices                 # confirm your mic/speakers show up
+sts --web
 ```
 
 Model weights (Whisper, NLLB, XTTS, Silero VAD) download automatically on
