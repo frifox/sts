@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Audio artifacts
+*.wav
+*.mp3
+*.flac
+
+# OS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
