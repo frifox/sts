@@ -143,6 +143,18 @@
 
   #controls button:hover { border-color: #777; }
 
+  #controls input, #controls select {
+    font: inherit;
+    font-size: 0.9rem;
+    padding: 0.5em 0.7em;
+    border-radius: 6px;
+    border: 1px solid #444;
+    background: #111;
+    color: #ccc;
+  }
+
+  #train-name { width: 9em; }
+
   #btn-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   #btn-train.is-active { background: #4d3a1f; border-color: #c9a24b; color: #ffe9bf; }
   #btn-reset { color: #e08a8a; }
@@ -169,7 +181,11 @@
 
   <div id="controls">
     <button id="btn-toggle">Start</button>
+    <input id="train-name" type="text" placeholder="Speaker name" />
     <button id="btn-train">Train voice</button>
+    <select id="speaker-select">
+      <option value="">— no cloned voice —</option>
+    </select>
     <button id="btn-reset">Reset</button>
   </div>
 
@@ -213,7 +229,9 @@
   const toggleBtn = document.getElementById('btn-toggle');
   const trainBtn = document.getElementById('btn-train');
   const resetBtn = document.getElementById('btn-reset');
-  let lastStatus = { active: false, training: false, training_seconds: 0, training_target_seconds: 0, cloned: false };
+  const trainNameInput = document.getElementById('train-name');
+  const speakerSelect = document.getElementById('speaker-select');
+  let lastStatus = { active: false, training: false, training_seconds: 0, training_target_seconds: 0, cloned: false, active_speaker_id: null };
 
   function applyStatus(status) {
     lastStatus = status;
@@ -227,18 +245,43 @@
       trainBtn.textContent = status.cloned ? 'Train voice (cloned ✓)' : 'Train voice';
     }
     trainBtn.classList.toggle('is-active', status.training);
+
+    speakerSelect.value = status.active_speaker_id || '';
+  }
+
+  function applyLibrary(msg) {
+    const current = speakerSelect.value;
+    speakerSelect.innerHTML = '';
+    const noneOpt = document.createElement('option');
+    noneOpt.value = '';
+    noneOpt.textContent = '— no cloned voice —';
+    speakerSelect.appendChild(noneOpt);
+    for (const speaker of msg.speakers) {
+      const opt = document.createElement('option');
+      opt.value = speaker.id;
+      opt.textContent = speaker.name;
+      speakerSelect.appendChild(opt);
+    }
+    speakerSelect.value = lastStatus.active_speaker_id || current || '';
   }
 
   let ws = null;
-  function send(action) {
+  function send(action, extra = {}) {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ action }));
+      ws.send(JSON.stringify({ action, ...extra }));
     }
   }
 
   toggleBtn.addEventListener('click', () => send(lastStatus.active ? 'stop' : 'start'));
-  trainBtn.addEventListener('click', () => send(lastStatus.training ? 'train_stop' : 'train_start'));
+  trainBtn.addEventListener('click', () => {
+    if (lastStatus.training) {
+      send('train_stop');
+    } else {
+      send('train_start', { name: trainNameInput.value });
+    }
+  });
   resetBtn.addEventListener('click', () => send('reset'));
+  speakerSelect.addEventListener('change', () => send('select_speaker', { speaker_id: speakerSelect.value }));
 
   function connect() {
     const status = document.getElementById('status');
@@ -258,6 +301,7 @@
       else if (msg.type === 'verse') showVerse(msg);
       else if (msg.type === 'reset') clearCaptions();
       else if (msg.type === 'status') applyStatus(msg);
+      else if (msg.type === 'library') applyLibrary(msg);
     };
   }
 

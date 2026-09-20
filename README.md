@@ -30,9 +30,20 @@ sound card -> VAD segmenter -> Whisper ASR (ru) -> NLLB translation (ru->en) -> 
   glossary (`sts.translate.glossary`) force-substitutes known Baptist/Christian
   terms (grace, repentance, communion, sanctification, ...) so the model
   can't mistranslate them, matching inflected Russian forms via stemming.
-- **TTS** (`sts.tts.xtts`) — Coqui XTTS v2. Ships with natural built-in
-  speakers for day-to-day use, and directly supports the stretch goal:
-  zero-shot voice cloning from a short reference clip of the actual speaker.
+- **TTS** (`sts.tts`) — two swappable backends, picked via `--tts-backend`:
+  - `xtts` (default) — Coqui XTTS v2. Ships natural built-in speakers, plus
+    zero-shot cloning from a short reference clip.
+  - `qwen3` — Qwen3-TTS-Base (`pip install -e '.[qwen3]'`), Apache-2.0,
+    self-hosted. Also zero-shot cloning, and officially supports
+    cross-lingual cloning (Russian reference clip -> English output) with a
+    reusable "clone prompt" object built from the clip once. It has no
+    XTTS-style built-in default voice, so synthesis is silent until a voice
+    is picked or trained. Unverified against real hardware in this repo (no
+    GPU here) — see `sts/tts/qwen3.py` for exactly what the integration
+    assumes, taken from the upstream README's example code.
+  Both back a persistent, cross-session **voice library**
+  (`sts.tts.voice_library`, dropdown on the caption page — see Operator
+  controls below) rather than a one-off in-memory clone.
 
 All stages run on separate threads connected by queues (`sts.pipeline`), so a
 slow translation or TTS call doesn't stall audio capture.
@@ -69,15 +80,32 @@ slow translation or TTS call doesn't stall audio capture.
     every connected screen, drops any text already in flight through the
     pipeline, and forgets the current cloned voice (falls back to the
     default TTS voice).
-  - **Train voice** — starts capturing the current speaker's live audio for a
-    voice clone; stops automatically at 18s or on a second click, whichever
-    comes first, then feeds whatever was captured into XTTS. Click Reset
-    before the next speaker so their voice doesn't get training samples
-    mixed in with the previous one's.
+  - **Train voice** — type a speaker name, then start capturing their live
+    audio for a voice clone; stops automatically at 18s or on a second
+    click, whichever comes first. What's captured is transcribed (for a
+    higher-quality clone on backends that use a reference transcript) and
+    saved into the voice library under that name — reusable from the
+    **speaker dropdown** in later sessions, not just this one. Click Reset
+    before the next speaker so their audio doesn't get folded into the
+    previous one's training sample.
+  - **Speaker dropdown** — picks a previously trained/saved voice from the
+    library (or "— no cloned voice —" to fall back to the default) without
+    retraining.
 
-  All three are relayed over the same websocket the captions arrive on
-  (`{"action": "start"}` etc.); the server broadcasts current state back to
-  every connected screen so multiple open tabs stay in sync.
+  All of this is relayed over the same websocket the captions arrive on
+  (`{"action": "start"}`, `{"action": "train_start", "name": "..."}`,
+  `{"action": "select_speaker", "speaker_id": "..."}`, etc.); the server
+  broadcasts current state and the library list back to every connected
+  screen so multiple open tabs stay in sync. Library entries live under
+  `--voice-library-dir` (default `voices/`) as `<speaker-id>/reference.wav`
+  + `meta.json` — the raw reference clip and transcript, not a backend's
+  in-memory prompt object, so they're portable across restarts and backend
+  swaps and a clone prompt only needs recomputing (seconds) when a speaker
+  is actually selected.
+
+  This is zero-shot clone caching, not true model fine-tuning — a
+  from-scratch per-speaker model needs far more data (10-30 min of clean
+  audio) and training time than a live session realistically gives you.
 
 ## Setup
 
@@ -108,6 +136,9 @@ sts --clone reference.wav          # stretch goal: clone the speaker's voice
 sts --web --web-port 8765          # also serve live captions at :8765
                                     # (open it full-screen / kiosk mode on a
                                     # second monitor or projector)
+sts --web --tts-backend qwen3 --voice-library-dir /data/sts-voices
+                                    # Qwen3-TTS backend + a custom voice
+                                    # library location
 ```
 
 ## Tests
@@ -117,7 +148,8 @@ pip install -e ".[dev]"
 pytest
 ```
 
-The glossary term-matching, Bible reference detection/lookup, and the
-start/stop/reset/train control state machine (`sts.control`) are unit tested
-here — the audio/ASR/translation/TTS stages need real hardware (mic, GPU)
-and aren't exercised by the test suite.
+The glossary term-matching, Bible reference detection/lookup, the
+start/stop/reset/train control state machine (`sts.control`), and the voice
+library (`sts.tts.voice_library`) are unit tested here — the audio/ASR/
+translation/TTS stages need real hardware (mic, GPU) and aren't exercised by
+the test suite.

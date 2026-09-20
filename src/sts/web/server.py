@@ -25,8 +25,9 @@ class CaptionBroadcaster:
     def __init__(self) -> None:
         self.loop: asyncio.AbstractEventLoop | None = None
         self._clients: set[WebSocket] = set()
-        self.on_control: Callable[[str], None] | None = None
+        self.on_control: Callable[[dict], None] | None = None
         self._last_status: dict | None = None
+        self._last_library: dict | None = None
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
@@ -35,6 +36,8 @@ class CaptionBroadcaster:
         self._clients.add(websocket)
         if self._last_status is not None:
             await websocket.send_text(json.dumps(self._last_status))
+        if self._last_library is not None:
+            await websocket.send_text(json.dumps(self._last_library))
 
     async def unregister(self, websocket: WebSocket) -> None:
         self._clients.discard(websocket)
@@ -93,6 +96,7 @@ class CaptionBroadcaster:
         training_seconds: float,
         training_target_seconds: float,
         cloned: bool,
+        active_speaker_id: str | None = None,
     ) -> None:
         message = {
             "type": "status",
@@ -101,8 +105,16 @@ class CaptionBroadcaster:
             "training_seconds": round(training_seconds, 1),
             "training_target_seconds": training_target_seconds,
             "cloned": cloned,
+            "active_speaker_id": active_speaker_id,
         }
         self._last_status = message
+        if self.loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
+
+    def broadcast_library(self, speakers: list[dict]) -> None:
+        message = {"type": "library", "speakers": speakers}
+        self._last_library = message
         if self.loop is None:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
@@ -112,9 +124,8 @@ class CaptionBroadcaster:
             data = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             return
-        action = data.get("action") if isinstance(data, dict) else None
-        if action and self.on_control:
-            self.on_control(action)
+        if isinstance(data, dict) and data.get("action") and self.on_control:
+            self.on_control(data)
 
 
 def create_app(broadcaster: CaptionBroadcaster) -> FastAPI:

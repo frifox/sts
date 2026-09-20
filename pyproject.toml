@@ -19,6 +19,9 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+qwen3 = [
+    "qwen-tts",
+]
 
 [project.scripts]
 sts = "sts.cli:main"

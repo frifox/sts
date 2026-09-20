@@ -13,6 +13,7 @@ independently of whether recognition is on.
 import queue
 import tempfile
 import threading
+import time
 import wave
 
 import numpy as np
@@ -26,7 +27,8 @@ from sts.bible.reference import find_references
 from sts.config import PipelineConfig
 from sts.control import RecognitionControl
 from sts.translate.translator import Translator
-from sts.tts.xtts import SAMPLE_RATE, XTTSSynthesizer
+from sts.tts import create_synthesizer
+from sts.tts.voice_library import VoiceLibrary
 from sts.web.server import CaptionBroadcaster
 
 
@@ -38,10 +40,13 @@ class Pipeline:
         self.segmenter = SpeechSegmenter(cfg.audio, cfg.vad)
         self.asr = WhisperASR(cfg.asr)
         self.translator = Translator(cfg.translation)
-        self.tts = XTTSSynthesizer(cfg.tts)
+        self.tts = create_synthesizer(cfg.tts)
+        self.voice_library = VoiceLibrary(cfg.tts.voice_library_dir)
         self.bible_lookup = BibleLookup()
         self.broadcaster = broadcaster
         self.control = RecognitionControl(cfg.audio.sample_rate)
+        self._training_name: str | None = None
+        self._active_speaker_id: str | None = None
 
         self._segments: queue.Queue = queue.Queue()
         self._transcripts: queue.Queue = queue.Queue()
@@ -54,7 +59,8 @@ class Pipeline:
 
     # -- operator controls, invoked from the caption page's buttons --------
 
-    def handle_control(self, action: str) -> None:
+    def handle_control(self, data: dict) -> None:
+        action = data.get("action")
         if action == "start":
             self.control.start()
         elif action == "stop":
@@ -62,9 +68,12 @@ class Pipeline:
         elif action == "reset":
             self._reset()
         elif action == "train_start":
+            self._training_name = (data.get("name") or "").strip() or f"speaker-{int(time.time())}"
             self.control.start_training()
         elif action == "train_stop":
             self._finish_training()
+        elif action == "select_speaker":
+            self._select_speaker(data.get("speaker_id"))
         else:
             return
         self._broadcast_status()
@@ -75,17 +84,40 @@ class Pipeline:
         if self.control.training.is_set():
             self.control.stop_training(discard=True)
         self.tts.reset_voice()
+        self._active_speaker_id = None
         self._drain(self._segments)
         self._drain(self._transcripts)
         self._drain(self._translations)
         if self.broadcaster:
             self.broadcaster.broadcast_reset()
 
+    def _select_speaker(self, speaker_id: str | None) -> None:
+        if not speaker_id:
+            self.tts.reset_voice()
+            self._active_speaker_id = None
+            return
+        entry = self.voice_library.get(speaker_id)
+        if entry is not None:
+            self.tts.clone_from_entry(entry)
+            self._active_speaker_id = speaker_id
+
     def _finish_training(self, discard: bool = False) -> None:
         audio = self.control.stop_training(discard=discard)
-        if audio is not None:
-            path = self._write_training_wav(audio)
-            self.tts.clone_voice(path)
+        name, self._training_name = self._training_name, None
+        if audio is None:
+            return
+
+        path = self._write_training_wav(audio)
+        try:
+            ref_text = self.asr.transcribe(audio) or None
+        except Exception as exc:  # a failed transcript just means a lower-quality clone, not a lost one
+            print(f"[train] couldn't transcribe reference clip, falling back to embedding-only clone: {exc}")
+            ref_text = None
+
+        entry = self.voice_library.save(name or "speaker", path, ref_text)
+        self.tts.clone_from_entry(entry)
+        self._active_speaker_id = entry.speaker_id
+        self._broadcast_library()
 
     def _write_training_wav(self, audio: np.ndarray) -> str:
         path = tempfile.NamedTemporaryFile(prefix="sts_voice_", suffix=".wav", delete=False).name
@@ -113,7 +145,15 @@ class Pipeline:
                 training_seconds=self.control.training_seconds,
                 training_target_seconds=self.control.target_seconds,
                 cloned=self.tts.cloned_speaker_wav is not None,
+                active_speaker_id=self._active_speaker_id,
             )
+
+    def _broadcast_library(self) -> None:
+        if self.broadcaster:
+            speakers = [
+                {"id": e.speaker_id, "name": e.name} for e in self.voice_library.list()
+            ]
+            self.broadcaster.broadcast_library(speakers)
 
     # -- pipeline stages -----------------------------------------------
 
@@ -164,9 +204,9 @@ class Pipeline:
     def _tts_loop(self) -> None:
         while not self._stop.is_set():
             text = self._translations.get()
-            audio = self.tts.synthesize(text)
+            audio, sample_rate = self.tts.synthesize(text)
             if audio.size:
-                self.playback.play(audio, sample_rate=SAMPLE_RATE, blocking=True)
+                self.playback.play(audio, sample_rate=sample_rate, blocking=True)
 
     def start(self) -> None:
         self.capture.start()
@@ -180,6 +220,7 @@ class Pipeline:
             thread.start()
             self._threads.append(thread)
         self._broadcast_status()
+        self._broadcast_library()
 
     def stop(self) -> None:
         self._stop.set()

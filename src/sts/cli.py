@@ -32,6 +32,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--web-host", default="0.0.0.0", help="Caption web server bind address")
     parser.add_argument("--web-port", type=int, default=8765, help="Caption web server port")
+    parser.add_argument(
+        "--tts-backend",
+        default="xtts",
+        choices=["xtts", "qwen3"],
+        help="Voice cloning/synthesis backend (qwen3 needs the 'qwen3' extra: pip install -e '.[qwen3]')",
+    )
+    parser.add_argument(
+        "--voice-library-dir",
+        default="voices",
+        help="Directory where trained/selectable speaker voices are saved",
+    )
     return parser
 
 
@@ -50,6 +61,8 @@ def main() -> None:
     cfg.asr.model_size = args.whisper_model
     cfg.translation.device = args.device
     cfg.tts.device = args.device
+    cfg.tts.backend = args.tts_backend
+    cfg.tts.voice_library_dir = args.voice_library_dir
 
     broadcaster = None
     if args.web:

@@ -48,13 +48,18 @@ class TranslationConfig:
 
 @dataclass
 class TTSConfig:
+    backend: str = "xtts"  # "xtts" or "qwen3"
     model_name: str = "tts_models/multilingual/multi-dataset/xtts_v2"
+    qwen3_model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
     device: str = "cuda"
     language: str = "en"
-    # Built-in XTTS speaker used when no cloned voice is requested.
+    # Built-in XTTS speaker used when no cloned voice is requested (XTTS
+    # only - Qwen3-TTS's cloning model has no built-in default speaker).
     default_speaker: str = "Claribel Dervla"
     # When set, clone this reference speaker instead (stretch goal).
     speaker_wav: str | None = None
+    # Where per-speaker reference clips are saved for reuse across sessions.
+    voice_library_dir: str = "voices"
 
 
 @dataclass
