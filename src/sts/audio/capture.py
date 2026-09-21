@@ -7,6 +7,7 @@ import numpy as np
 import sounddevice as sd
 
 from sts.config import AudioConfig
+from sts.log import vlog
 
 
 def list_devices() -> str:
@@ -44,6 +45,9 @@ class AudioCapture:
             callback=self._callback,
         )
         self._stream.start()
+        info = sd.query_devices(self.cfg.input_device, "input")
+        vlog("audio", f"listening on input [{info['index']}] {info['name']} "
+                      f"({self.cfg.sample_rate} Hz, {self.cfg.block_ms} ms frames)")
 
     def stop(self) -> None:
         self._stop.set()
@@ -51,3 +55,4 @@ class AudioCapture:
             self._stream.stop()
             self._stream.close()
             self._stream = None
+            vlog("audio", "stopped listening")

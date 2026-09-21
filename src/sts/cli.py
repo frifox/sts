@@ -7,6 +7,7 @@ import time
 from sts.audio.capture import list_devices
 from sts.config import PipelineConfig
 from sts.devices import detect_device, resolve_devices
+from sts.log import set_verbose, vlog
 from sts.pipeline import Pipeline
 from sts.web.server import CaptionBroadcaster, run_server
 
@@ -58,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Voice cloning/synthesis backend (qwen3 needs the 'qwen3' extra: pip install -e '.[qwen3]')",
     )
     parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Log pipeline activity to stdout: speech segments, ASR/translation/TTS timings, audio device events",
+    )
+    parser.add_argument(
         "--voice-library-dir",
         default="voices",
         help="Directory where trained/selectable speaker voices are saved",
@@ -72,6 +79,7 @@ def main() -> None:
         print(list_devices())
         return
 
+    set_verbose(args.verbose)
     asr_device, translation_device, tts_device = resolve_devices(args.device or detect_device(), args.asr_device)
 
     cfg = PipelineConfig()
@@ -93,7 +101,10 @@ def main() -> None:
         ).start()
         print(f"Captions: http://{args.web_host}:{args.web_port}/")
 
+    vlog("init", f"loading models (whisper={cfg.asr.model_size} on {asr_device}, translation on {translation_device}, "
+         f"tts={cfg.tts.backend} on {tts_device})")
     pipeline = Pipeline(cfg, broadcaster=broadcaster)
+    vlog("init", "models loaded")
     if args.clone:
         pipeline.clone_voice(args.clone, name=args.clone_name)
     if broadcaster:

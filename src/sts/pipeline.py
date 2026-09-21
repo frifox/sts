@@ -29,6 +29,7 @@ from sts.bible.lookup import BibleLookup
 from sts.bible.reference import find_references
 from sts.config import PipelineConfig
 from sts.control import RecognitionControl
+from sts.log import vlog
 from sts.translate.translator import Translator
 from sts.tts import create_synthesizer
 from sts.tts.voice_library import VoiceLibrary
@@ -80,6 +81,7 @@ class Pipeline:
 
     def handle_control(self, data: dict) -> None:
         action = data.get("action")
+        vlog("control", f"operator action: {action}")
         if action == "start":
             self.control.start()
         elif action == "stop":
@@ -204,7 +206,9 @@ class Pipeline:
     def _asr_loop(self) -> None:
         while not self._stop.is_set():
             segment = self._segments.get()
+            t0 = time.monotonic()
             text = self.asr.transcribe(segment)
+            vlog("asr", f"transcribed {len(segment) / self.cfg.audio.sample_rate:.1f}s of audio in {time.monotonic() - t0:.2f}s")
             if text:
                 print(f"[ru] {text}")
                 if self.broadcaster:
@@ -223,7 +227,9 @@ class Pipeline:
     def _translate_loop(self) -> None:
         while not self._stop.is_set():
             text = self._transcripts.get()
+            t0 = time.monotonic()
             translated = self.translator.translate(text)
+            vlog("translate", f"translated in {time.monotonic() - t0:.2f}s")
             if translated:
                 print(f"[en] {translated}")
                 if self.broadcaster:
@@ -234,8 +240,11 @@ class Pipeline:
         while not self._stop.is_set():
             text = self._translations.get()
             if not self.control.voice_enabled.is_set():
+                vlog("tts", "voice is off, skipping synthesis")
                 continue
+            t0 = time.monotonic()
             audio, sample_rate = self.tts.synthesize(text)
+            vlog("tts", f"synthesized {audio.size / sample_rate:.1f}s of speech in {time.monotonic() - t0:.2f}s")
             if audio.size:
                 self.playback.play(audio, sample_rate=sample_rate, blocking=True)
 

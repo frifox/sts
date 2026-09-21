@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from sts.config import AudioConfig, VADConfig
+from sts.log import vlog
 
 
 class SpeechSegmenter:
@@ -35,11 +36,14 @@ class SpeechSegmenter:
 
     def _flush(self) -> np.ndarray | None:
         if not self._buffer or self._speech_ms < self.vad_cfg.min_speech_ms:
+            if self._buffer:
+                vlog("vad", f"dropped {self._speech_ms / 1000:.2f}s of speech (shorter than min_speech_ms)")
             self._buffer = []
             self._speech_ms = 0.0
             self._silence_ms = 0.0
             return None
         segment = np.concatenate(self._buffer)
+        vlog("vad", f"speech ended, segment of {len(segment) / self.audio_cfg.sample_rate:.1f}s")
         self._buffer = []
         self._speech_ms = 0.0
         self._silence_ms = 0.0
@@ -51,6 +55,8 @@ class SpeechSegmenter:
         frame_ms = self.audio_cfg.block_ms
 
         if speech:
+            if not self._buffer:
+                vlog("vad", "speech started")
             self._buffer.append(frame)
             self._speech_ms += frame_ms
             self._silence_ms = 0.0

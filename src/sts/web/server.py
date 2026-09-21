@@ -20,6 +20,8 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
+from sts.log import vlog
+
 _STATIC_DIR = Path(__file__).parent / "static"
 
 # Recent caption lines (per kind) replayed to newly connected pages, so a
@@ -45,6 +47,7 @@ class CaptionBroadcaster:
 
     async def register(self, websocket: WebSocket) -> None:
         self._clients.add(websocket)
+        vlog("web", f"caption page connected ({len(self._clients)} client(s))")
         if self._last_status is not None:
             await websocket.send_text(json.dumps(self._last_status))
         if self._last_library is not None:
@@ -57,6 +60,7 @@ class CaptionBroadcaster:
 
     async def unregister(self, websocket: WebSocket) -> None:
         self._clients.discard(websocket)
+        vlog("web", f"caption page disconnected ({len(self._clients)} client(s))")
 
     async def _send_to_all(self, message: dict) -> None:
         dead = []
