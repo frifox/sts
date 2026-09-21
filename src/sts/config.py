@@ -67,7 +67,8 @@ class TTSConfig:
     # speaker), so English cloned from it comes out accented. XTTS's style/accent
     # conditioning is separate from timbre, so the clone's style is blended
     # toward a built-in voice's. `accent_voice` is a key into builtin_voices, or
-    # None to follow the selected default voice. Strength 0 disables the blend.
+    # None to follow the selected default voice; any XTTS built-in speaker name
+    # (e.g. "Andrew Chipper") is also accepted. Strength 0 disables the blend.
     accent_voice: str | None = None
     accent_strength: float = 0.7
     # When set, clone this reference speaker instead (stretch goal).

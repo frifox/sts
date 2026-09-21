@@ -131,7 +131,7 @@ class XTTSSynthesizer:
         """(gpt_cond_latent, speaker_embedding) for the active clone, with its
         style latent blended toward the accent voice's. Cached per (clip, accent)."""
         accent_key = self.cfg.accent_voice or self.default_voice
-        accent_speaker = self.cfg.builtin_voices[accent_key]
+        accent_speaker = self.cfg.builtin_voices.get(accent_key, accent_key)
         strength = self.cfg.accent_strength
         key = (wav_path, accent_speaker, strength)
         if key not in self._conditioning_cache:

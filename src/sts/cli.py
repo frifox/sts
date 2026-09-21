@@ -67,8 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--accent-voice",
         default=None,
-        choices=["male", "female"],
-        help="Built-in voice whose accent cloned voices are steered toward (default: the selected --default-voice)",
+        help="Built-in voice whose accent cloned voices are steered toward: male, female, or any XTTS "
+        "speaker name such as 'Andrew Chipper' (default: the selected --default-voice)",
     )
     parser.add_argument(
         "--accent-strength",
