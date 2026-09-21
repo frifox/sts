@@ -53,9 +53,15 @@
     gap: 0.4em;
   }
 
-  .line {
+  /* All snippets of a panel run together as one flowing paragraph: each new
+     snippet continues on the same line as the previous one instead of starting
+     its own block. */
+  .flow {
     font-size: clamp(1.4rem, 4vw, 3.2rem);
     line-height: 1.25;
+  }
+
+  .line {
     animation: fade-in 0.25s ease-out;
   }
 
@@ -65,8 +71,8 @@
   #translated-lines .line { color: #e8c07d; }
 
   @keyframes fade-in {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
   #indicators {
@@ -309,16 +315,27 @@
 <script>
   function addLine(containerId, text) {
     const container = document.getElementById(containerId);
-    const line = document.createElement('div');
-    line.className = 'line';
-    line.textContent = text;
-    for (const previous of container.children) previous.classList.add('old');
-    container.appendChild(line);
+    let flow = container.querySelector('.flow');
+    if (!flow) {
+      flow = document.createElement('p');
+      flow.className = 'flow';
+      flow.style.margin = '0';
+      container.appendChild(flow);
+    }
+    const snippet = document.createElement('span');
+    snippet.className = 'line';
+    snippet.textContent = text + ' ';  // the space keeps consecutive snippets apart on one line
+    for (const previous of flow.children) previous.classList.add('old');
+    flow.appendChild(snippet);
 
-    // Drop the oldest lines once content no longer fits, so the DOM (and
+    // Drop the oldest snippets once the text no longer fits, so the DOM (and
     // the visible page) never grows without bound during a long stream.
-    while (container.children.length > 1 && container.scrollHeight > container.clientHeight) {
-      container.removeChild(container.firstChild);
+    // (The container is bottom-aligned, so overflow extends upward where
+    // scrollHeight can't see it; compare the text block's own height instead.)
+    const style = getComputedStyle(container);
+    const available = container.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    while (flow.children.length > 1 && flow.offsetHeight > available) {
+      flow.removeChild(flow.firstChild);
     }
   }
 
