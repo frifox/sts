@@ -88,10 +88,11 @@ def test_qwen3_text_splitting_and_plausibility():
     assert all(len(p) <= 140 for p in pieces)
     assert " ".join(pieces).replace(" ", "") == text.replace(" ", "")  # nothing dropped
     assert split_for_qwen("  ", 140) == []
-    assert speech_length_plausible("one two three four five six seven eight", 4.0, 0.25, 1.3)
-    assert not speech_length_plausible("one two three four five six seven eight", 1.0, 0.25, 1.3)  # skipped
-    assert not speech_length_plausible("one two three four five six seven eight", 20.0, 0.25, 1.3)  # babble
-    assert speech_length_plausible("Amen.", 0.6, 0.25, 1.3)
+    text = "One two three four five six seven eight nine ten."  # 50 characters
+    assert speech_length_plausible(text, 3.2, 0.04, 0.16)
+    assert not speech_length_plausible(text, 1.0, 0.04, 0.16)   # skipped
+    assert not speech_length_plausible(text, 12.0, 0.04, 0.16)  # babble
+    assert speech_length_plausible("Amen.", 0.6, 0.04, 0.16)    # too short to judge
 
 
 def test_qwen3_clone_mode_selection():

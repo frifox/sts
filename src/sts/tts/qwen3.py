@@ -84,22 +84,25 @@ def use_icl_conditioning(mode: str, ref_text: str | None) -> bool:
     return mode == "icl" or transcript_is_english(ref_text)
 
 
-def min_plausible_seconds_per_word(pace_history, floor: float) -> float:
-    """Shortest believable time per word. Voices differ a lot in speaking pace
-    (0.28 s/word is normal for a fast one), so once a voice has a few accepted
-    sentences the bar is 70% of its own median pace, never below `floor`."""
-    if len(pace_history) < 3:
+MIN_CHARS_TO_JUDGE = 20  # shorter texts vary too much in pace to judge
+
+
+def min_plausible_seconds_per_char(pace_history, floor: float) -> float:
+    """Shortest believable time per character. After a few accepted sentences the
+    bar is 75% of the voice's own median pace (sentence-to-sentence pace varies
+    by roughly +-10%), never below `floor`."""
+    if len(pace_history) < 5:
         return floor
-    return max(floor, 0.7 * statistics.median(pace_history))
+    return max(floor, 0.75 * statistics.median(pace_history))
 
 
-def speech_length_plausible(text: str, seconds: float, min_spw: float, max_spw: float) -> bool:
+def speech_length_plausible(text: str, seconds: float, min_spc: float, max_spc: float) -> bool:
     """False when the audio is far shorter (words skipped) or longer (babble)
     than `text` could plausibly take to say. Very short texts are exempt."""
-    words = len(text.split())
-    if words < 4:
+    chars = len(text.strip())
+    if chars < MIN_CHARS_TO_JUDGE:
         return seconds > 0
-    return min_spw * words <= seconds <= max_spw * words
+    return min_spc * chars <= seconds <= max_spc * chars
 
 
 def _cuda_supports_bf16_and_flash_attention() -> bool:
@@ -281,19 +284,25 @@ class Qwen3TTSSynthesizer:
 
     def _synthesize_checked(self, text: str) -> tuple[np.ndarray, int]:
         """One piece, regenerated if the result looks like skipped or runaway speech."""
+        chars = len(text.strip())
         best: tuple[np.ndarray, int] | None = None
+        previous_seconds: float | None = None
         for attempt in range(self.cfg.qwen3_max_retries + 1):
             audio, sample_rate = self._generate_once(text)
             seconds = len(audio) / sample_rate
-            words = len(text.split())
-            min_spw = min_plausible_seconds_per_word(self._pace_history, self.cfg.qwen3_min_seconds_per_word)
-            if speech_length_plausible(text, seconds, min_spw, self.cfg.qwen3_max_seconds_per_word):
-                if words >= 4:
-                    self._pace_history.append(seconds / words)
+            min_spc = min_plausible_seconds_per_char(self._pace_history, self.cfg.qwen3_min_seconds_per_char)
+            plausible = speech_length_plausible(text, seconds, min_spc, self.cfg.qwen3_max_seconds_per_char)
+            # A skipped middle is a random failure, so it comes out a different length
+            # each time. The same length twice running means the model is consistently
+            # reading the whole text (just at this pace); retrying again would only delay audio.
+            repeated = previous_seconds is not None and abs(seconds - previous_seconds) <= 0.1 * previous_seconds
+            if plausible or repeated:
+                if plausible and chars >= MIN_CHARS_TO_JUDGE:
+                    self._pace_history.append(seconds / chars)
                 return audio, sample_rate
-            vlog("tts", f"suspicious speech length ({seconds:.1f}s for {words} words, "
-                        f"expected at least {min_spw * words:.1f}s), "
-                        f"regenerating (attempt {attempt + 1}): {text[:60]!r}")
+            vlog("tts", f"suspicious speech length ({seconds:.1f}s for {chars} characters, "
+                        f"expected at least {min_spc * chars:.1f}s), regenerating (attempt {attempt + 1}): {text[:60]!r}")
+            previous_seconds = seconds
             # Skipped-word failures come out too short, so the longest attempt is the best fallback.
             if best is None or len(audio) > len(best[0]):
                 best = (audio, sample_rate)

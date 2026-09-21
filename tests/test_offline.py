@@ -90,8 +90,24 @@ def test_pace_bar_follows_the_voice():
     stub = types.ModuleType("qwen_tts")
     stub.Qwen3TTSModel = object
     sys.modules.setdefault("qwen_tts", stub)
-    from sts.tts.qwen3 import min_plausible_seconds_per_word
+    from sts.tts.qwen3 import min_plausible_seconds_per_char, speech_length_plausible
 
-    assert min_plausible_seconds_per_word([], 0.2) == 0.2                      # no record yet: absolute floor
-    assert min_plausible_seconds_per_word([0.28, 0.28, 0.29], 0.2) < 0.21      # fast voice: 0.28 s/word is fine
-    assert abs(min_plausible_seconds_per_word([0.5, 0.5, 0.5], 0.2) - 0.35) < 1e-9  # slower voice: stricter bar
+    assert min_plausible_seconds_per_char([0.06] * 4, 0.04) == 0.04               # too little history: absolute floor
+    assert abs(min_plausible_seconds_per_char([0.06] * 5, 0.04) - 0.045) < 1e-9   # 75% of the voice's median
+    assert min_plausible_seconds_per_char([0.03] * 5, 0.04) == 0.04               # never below the floor
+
+
+def test_measured_sentences_are_not_flagged_but_a_skip_is():
+    """Real measurements from a cloned Qwen3 voice: (characters, seconds) of correct, complete speech."""
+    from sts.tts.qwen3 import min_plausible_seconds_per_char, speech_length_plausible
+
+    measured = [(104, 5.7), (100, 6.4), (103, 6.6), (94, 7.0), (90, 5.6), (99, 6.5),
+                (84, 5.3), (66, 5.2), (85, 5.4), (99, 6.2), (42, 2.9), (45, 3.0)]
+    for i, (chars, seconds) in enumerate(measured):
+        history = [s / c for j, (c, s) in enumerate(measured) if j != i]
+        bar = min_plausible_seconds_per_char(history, 0.04)
+        assert speech_length_plausible("x" * chars, seconds, bar, 0.16), (chars, seconds)
+    # the same 100-character sentence with a third of it skipped
+    history = [s / c for c, s in measured]
+    bar = min_plausible_seconds_per_char(history, 0.04)
+    assert not speech_length_plausible("x" * 100, 6.4 * 0.64, bar, 0.16)
