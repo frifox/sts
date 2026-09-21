@@ -74,9 +74,22 @@
     top: 0.6vh;
     right: 1.2vw;
     font-size: 0.75rem;
-    color: #444;
+    color: #777;
     z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 0.45em;
   }
+
+  #status::before {
+    content: '';
+    width: 0.6em;
+    height: 0.6em;
+    border-radius: 50%;
+    background: #d9534f;
+  }
+
+  #status.connected::before { background: #4cbb6c; }
 
   #verse-overlay {
     position: fixed;
@@ -174,7 +187,7 @@
       <div class="lines" id="translated-lines"></div>
     </div>
   </div>
-  <div id="status"></div>
+  <div id="status" class="disconnected">Not connected</div>
 
   <div id="verse-overlay">
     <div class="verse-reference" id="verse-reference"></div>
@@ -301,10 +314,17 @@
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws`);
 
-    ws.onopen = () => { status.textContent = ''; };
+    ws.onopen = () => {
+      // The server replays recent captions on connect, so start clean to
+      // avoid duplicates after a reconnect.
+      clearCaptions();
+      status.textContent = 'Connected';
+      status.className = 'connected';
+    };
     ws.onerror = () => ws.close();
     ws.onclose = () => {
-      status.textContent = 'reconnecting…';
+      status.textContent = 'Not connected';
+      status.className = 'disconnected';
       setTimeout(connect, 1000);
     };
     ws.onmessage = (event) => {
