@@ -59,6 +59,8 @@
     animation: fade-in 0.25s ease-out;
   }
 
+  .line.old { opacity: 0.4; transition: opacity 0.6s ease; }
+
   #original-lines .line { color: #9cdcfe; }
   #translated-lines .line { color: #e8c07d; }
 
@@ -197,6 +199,7 @@
     const line = document.createElement('div');
     line.className = 'line';
     line.textContent = text;
+    for (const previous of container.children) previous.classList.add('old');
     container.appendChild(line);
 
     // Drop the oldest lines once content no longer fits, so the DOM (and
