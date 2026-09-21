@@ -11,12 +11,22 @@ about per device.
 """
 
 import numpy as np
+import torch
 from TTS.api import TTS
+from TTS.config.shared_configs import BaseDatasetConfig
+from TTS.tts.configs.xtts_config import XttsConfig
+from TTS.tts.models.xtts import XttsArgs, XttsAudioConfig
 
 from sts.config import TTSConfig
 from sts.tts.voice_library import VoiceEntry
 
 SAMPLE_RATE = 24_000  # XTTS v2 output rate
+
+# Coqui TTS 0.22 predates PyTorch 2.6's weights_only=True default for
+# torch.load, so its own checkpoint (which pickles these config classes)
+# fails to load unless they're allowlisted.
+if hasattr(torch.serialization, "add_safe_globals"):
+    torch.serialization.add_safe_globals([XttsConfig, XttsAudioConfig, BaseDatasetConfig, XttsArgs])
 
 
 class XTTSSynthesizer:
