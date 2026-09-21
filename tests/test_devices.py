@@ -58,3 +58,17 @@ def test_voice_resolution():
     assert cfg.default_voice in cfg.all_voices()
     assert len(cfg.all_voices()) == 13
     assert all(cfg.resolve_voice(alias) in cfg.all_voices() for alias in cfg.voice_aliases)
+
+
+def test_qwen3_backend_voices():
+    from sts.config import TTSConfig
+
+    cfg = TTSConfig()
+    cfg.backend = "qwen3"
+    cfg.use_backend_voices()
+    assert cfg.all_voices() == ["Aiden", "Ryan"]
+    assert cfg.resolve_voice(cfg.default_voice) == "Aiden"
+    assert cfg.resolve_voice("male") == "Aiden"
+    xtts = TTSConfig()
+    xtts.use_backend_voices()
+    assert "Adde Michal" in xtts.all_voices()

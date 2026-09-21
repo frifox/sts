@@ -36,6 +36,7 @@ class CaptionBroadcaster:
         self.on_control: Callable[[dict], None] | None = None
         self._last_status: dict | None = None
         self._last_library: dict | None = None
+        self._last_design: dict = {"type": "design", "state": "idle", "message": "", "has_voice": False}
         self._last_stage: dict = {"type": "stage", "text": "Starting…", "ready": False}
         self._history: dict[str, deque[str]] = {
             "original": deque(maxlen=CAPTION_HISTORY_LINES),
@@ -54,6 +55,7 @@ class CaptionBroadcaster:
             await websocket.send_text(json.dumps(self._last_status))
         if self._last_library is not None:
             await websocket.send_text(json.dumps(self._last_library))
+        await websocket.send_text(json.dumps(self._last_design))
         with self._history_lock:
             history = {kind: list(lines) for kind, lines in self._history.items()}
         for kind, lines in history.items():
@@ -118,6 +120,13 @@ class CaptionBroadcaster:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all(self._last_stage), self.loop)
 
+    def broadcast_design(self, state: str, message: str = "", has_voice: bool = False) -> None:
+        """Progress of the "Create Voice" dialog: idle | busy | ready | saved | error."""
+        self._last_design = {"type": "design", "state": state, "message": message, "has_voice": has_voice}
+        if self.loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_to_all(self._last_design), self.loop)
+
     def broadcast_reset(self) -> None:
         with self._history_lock:
             for lines in self._history.values():
@@ -136,6 +145,7 @@ class CaptionBroadcaster:
         cloned: bool,
         active_speaker_id: str | None = None,
         can_save: bool = False,
+        can_design: bool = False,
         default_voice: str | None = None,
         voice_groups: dict[str, list[str]] | None = None,
     ) -> None:
@@ -149,6 +159,7 @@ class CaptionBroadcaster:
             "cloned": cloned,
             "active_speaker_id": active_speaker_id,
             "can_save": can_save,
+            "can_design": can_design,
             "default_voice": default_voice,
             "voice_groups": voice_groups,
         }

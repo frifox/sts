@@ -192,6 +192,28 @@
   }
 
   #btn-save-voice:disabled { opacity: 0.4; cursor: default; }
+  #btn-create-voice[hidden] { display: none; }
+  #design-dialog {
+    position: fixed; inset: 0; z-index: 10; display: none;
+    align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.6);
+  }
+  #design-dialog.show { display: flex; }
+  #design-dialog .card {
+    background: #16161c; border: 1px solid #333; border-radius: 10px;
+    padding: 1.2rem 1.4rem; width: min(34rem, 92vw); max-height: 92vh; overflow-y: auto;
+    color: #ddd; font-size: 0.95rem;
+  }
+  #design-dialog h3 { margin: 0 0 0.8rem; font-size: 1rem; }
+  #design-dialog label { display: block; margin: 0.9rem 0 0.3rem; font-size: 0.8rem; color: #9a9aa5; }
+  #design-dialog textarea, #design-dialog input[type=text] {
+    width: 100%; box-sizing: border-box; padding: 0.5rem; font: inherit; resize: vertical;
+  }
+  #design-dialog .row { display: flex; gap: 0.6rem; align-items: center; margin-top: 0.5rem; }
+  #design-dialog .row input { flex: 1; }
+  #design-status { min-height: 1.3em; margin-top: 0.6rem; font-size: 0.85rem; color: #e0b341; }
+  #design-status.error { color: #e08a8a; }
+  #design-dialog .footer { display: flex; justify-content: flex-end; margin-top: 1rem; }
+  #design-dialog button:disabled { opacity: 0.4; cursor: default; }
   #save-dialog {
     position: fixed; inset: 0; z-index: 10; display: none;
     align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.6);
@@ -238,6 +260,7 @@
     <button id="btn-toggle">Stop</button>
     <button id="btn-voice">🔇 Voice off</button>
     <select id="default-voice" title="Built-in voice (used when no trained voice is selected)"></select>
+    <button id="btn-create-voice" hidden title="Design a new voice from a text description (Qwen3 backend)">Create Voice</button>
     <button id="btn-train">Train voice</button>
     <button id="btn-save-voice" disabled title="Save the trained voice to the library">Save Voice</button>
     <select id="speaker-select">
@@ -246,7 +269,29 @@
     <button id="btn-reset">Reset</button>
   </div>
 
-<div id="save-dialog">
+<div id="design-dialog">
+    <div class="card">
+      <h3>Create voice</h3>
+      <label for="design-prompt">Describe the voice</label>
+      <textarea id="design-prompt" rows="3">A calm, deep male voice with a warm, natural American accent, speaking slowly and gently like a preacher giving a sermon.</textarea>
+      <div class="row"><button type="button" id="design-generate">Generate</button></div>
+
+      <label for="design-sample">Sample text to try the voice on</label>
+      <textarea id="design-sample" rows="3">The Lord is my shepherd; I shall not want. He makes me lie down in green pastures; He leads me beside still waters.</textarea>
+      <div class="row"><button type="button" id="design-play" disabled>Play sample</button></div>
+
+      <div id="design-status"></div>
+
+      <label for="design-name">Voice name</label>
+      <div class="row">
+        <input id="design-name" type="text" placeholder="e.g. Calm preacher" autocomplete="off" />
+        <button type="button" id="design-save" disabled>Save</button>
+      </div>
+      <div class="footer"><button type="button" id="design-close">Close</button></div>
+    </div>
+  </div>
+
+  <div id="save-dialog">
     <form id="save-form">
       <h3>Save trained voice</h3>
       <input id="save-name" type="text" placeholder="Voice name" autocomplete="off" required />
@@ -301,6 +346,15 @@
   const trainBtn = document.getElementById('btn-train');
   const resetBtn = document.getElementById('btn-reset');
   const saveBtn = document.getElementById('btn-save-voice');
+  const createBtn = document.getElementById('btn-create-voice');
+  const designDialog = document.getElementById('design-dialog');
+  const designPrompt = document.getElementById('design-prompt');
+  const designSample = document.getElementById('design-sample');
+  const designName = document.getElementById('design-name');
+  const designStatus = document.getElementById('design-status');
+  const designGenerate = document.getElementById('design-generate');
+  const designPlay = document.getElementById('design-play');
+  const designSave = document.getElementById('design-save');
   const saveDialog = document.getElementById('save-dialog');
   const saveName = document.getElementById('save-name');
   const saveNote = document.getElementById('save-note');
@@ -346,6 +400,7 @@
     }
     trainBtn.classList.toggle('is-active', status.training);
     saveBtn.disabled = !status.can_save || status.training;
+    createBtn.hidden = !status.can_design;
     if (!status.can_save) closeSaveDialog();
 
     if (status.voice_groups) buildVoiceOptions(status.voice_groups);
@@ -388,6 +443,42 @@
   });
   resetBtn.addEventListener('click', () => send('reset'));
   defaultVoiceSelect.addEventListener('change', () => send('default_voice', { voice: defaultVoiceSelect.value }));
+  // -- Create Voice (Qwen3 voice design) ------------------------------------
+  function applyDesign(msg) {
+    const busy = msg.state === 'busy';
+    designStatus.textContent = msg.message || '';
+    designStatus.classList.toggle('error', msg.state === 'error');
+    designGenerate.disabled = busy;
+    designPlay.disabled = busy || !msg.has_voice;
+    designSave.disabled = busy || !msg.has_voice;
+    if (msg.state === 'saved') {
+      designDialog.classList.remove('show');
+    }
+  }
+
+  createBtn.addEventListener('click', () => {
+    designName.value = '';
+    designDialog.classList.add('show');
+    designPrompt.focus();
+  });
+  designGenerate.addEventListener('click', () => {
+    if (designPrompt.value.trim()) send('design_generate', { prompt: designPrompt.value });
+  });
+  designPlay.addEventListener('click', () => {
+    if (designSample.value.trim()) send('design_play', { text: designSample.value });
+  });
+  designSave.addEventListener('click', () => {
+    const name = designName.value.trim();
+    if (!name) { designName.focus(); return; }
+    const exists = libraryNames.some((existing) => existing.trim().toLowerCase() === name.toLowerCase());
+    if (exists && !confirm(`A voice named "${name}" already exists. Replace it?`)) return;
+    send('design_save', { name });
+  });
+  document.getElementById('design-close').addEventListener('click', () => {
+    designDialog.classList.remove('show');
+    send('design_close');
+  });
+
   function openSaveDialog() {
     saveName.value = '';
     saveNote.textContent = '';
@@ -448,6 +539,7 @@
       }
       else if (msg.type === 'status') applyStatus(msg);
       else if (msg.type === 'library') applyLibrary(msg);
+      else if (msg.type === 'design') applyDesign(msg);
     };
   }
 

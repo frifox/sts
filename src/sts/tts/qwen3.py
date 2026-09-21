@@ -26,9 +26,10 @@ cache eviction here, only what `reset_voice()`/picking a different speaker
 overwrites as the *active* one (cached entries stay loaded for fast
 re-selection).
 
-Unlike XTTS, there is no built-in default speaker for either path - the Base
-model always needs a reference clip or a trained adapter, so `synthesize()`
-returns silence with a warning until a voice has been picked or trained.
+When no cloned/trained voice is active, a preset speaker from Qwen3-TTS's
+separate CustomVoice model is used instead (default: Aiden, with a calm
+"preacher" style instruction), so no reference clip is needed to get sound.
+It's a second model load alongside the Base model.
 
 This backend is unverified against real hardware in this repo (no GPU
 available in dev) - the call shapes come directly from the two upstream
@@ -46,6 +47,9 @@ below check the actual GPU's compute capability (via
 unit-testable without a GPU) and fall back to float16 + SDPA attention on
 mps or an older/absent GPU, same reasoning as the Metal case either way.
 """
+
+import gc
+import threading
 
 import numpy as np
 import torch
@@ -86,17 +90,78 @@ class Qwen3TTSSynthesizer:
             dtype=_dtype_for_device(cfg.device),
             attn_implementation=_attn_impl_for_device(cfg.device),
         )
+        self._custom_model = Qwen3TTSModel.from_pretrained(
+            cfg.qwen3_custom_model_name,
+            device_map=cfg.device,
+            dtype=_dtype_for_device(cfg.device),
+            attn_implementation=_attn_impl_for_device(cfg.device),
+        )
+        self.default_voice = cfg.resolve_voice(cfg.default_voice)
+        # MPS/CUDA models aren't safe to run from two threads at once, and the
+        # voice-design dialog synthesizes previews while the live pipeline runs.
+        self._lock = threading.Lock()
+        self._design_model = None
+        self._design_load_lock = threading.Lock()
         self._prompt = None
         self.cloned_speaker_wav: str | None = None  # set whenever a zero-shot clone is active
         self._lora_models: dict[str, tuple[Qwen3TTSModel, str]] = {}  # speaker_id -> (model, speaker_name)
         self._active_lora_speaker_id: str | None = None
 
+    # -- voice design ("Create Voice" dialog) --------------------------------
+
+    @property
+    def design_loaded(self) -> bool:
+        return self._design_model is not None
+
+    def design_reference(self, instruct: str, ref_text: str) -> tuple[np.ndarray, int]:
+        """Invents a voice from `instruct` and returns it speaking `ref_text`.
+
+        Each call designs a *different* voice, so the returned clip is used as
+        the reference for cloning (`preview`, and the saved library voice)
+        rather than re-running the description for every sentence.
+        """
+        with self._design_load_lock:
+            if self._design_model is None:
+                self._design_model = Qwen3TTSModel.from_pretrained(
+                    self.cfg.qwen3_design_model_name,
+                    device_map=self.cfg.device,
+                    dtype=_dtype_for_device(self.cfg.device),
+                    attn_implementation=_attn_impl_for_device(self.cfg.device),
+                )
+        with self._lock:
+            wavs, sample_rate = self._design_model.generate_voice_design(
+                text=ref_text, instruct=instruct, language="English"
+            )
+        return np.asarray(wavs[0], dtype=np.float32), sample_rate
+
+    def unload_designer(self) -> None:
+        """Frees the VoiceDesign model when the dialog closes (it's a multi-GB model)."""
+        with self._design_load_lock:
+            self._design_model = None
+        gc.collect()
+        if self.cfg.device == "mps":
+            torch.mps.empty_cache()
+        elif self.cfg.device == "cuda":
+            torch.cuda.empty_cache()
+
+    def preview(self, text: str, reference_wav_path: str, ref_text: str) -> tuple[np.ndarray, int]:
+        """Speaks `text` in the voice of a reference clip, without changing the active voice."""
+        with self._lock:
+            prompt = self.model.create_voice_clone_prompt(
+                ref_audio=reference_wav_path, ref_text=ref_text, x_vector_only_mode=False
+            )
+            wavs, sample_rate = self.model.generate_voice_clone(
+                text=text, language="English", voice_clone_prompt=prompt
+            )
+        return np.asarray(wavs[0], dtype=np.float32), sample_rate
+
     def clone_voice(self, reference_wav_path: str, ref_text: str | None = None) -> None:
-        self._prompt = self.model.create_voice_clone_prompt(
-            ref_audio=reference_wav_path,
-            ref_text=ref_text,
-            x_vector_only_mode=ref_text is None,
-        )
+        with self._lock:
+            self._prompt = self.model.create_voice_clone_prompt(
+                ref_audio=reference_wav_path,
+                ref_text=ref_text,
+                x_vector_only_mode=ref_text is None,
+            )
         self.cloned_speaker_wav = reference_wav_path
         self._active_lora_speaker_id = None
 
@@ -114,8 +179,10 @@ class Qwen3TTSSynthesizer:
         self.cloned_speaker_wav = None
 
     def set_default_voice(self, voice: str) -> None:
-        # Qwen3-TTS-Base has no built-in male/female voices to choose between.
-        print(f"[qwen3-tts] no built-in '{voice}' voice - pick or train a speaker instead")
+        voice = self.cfg.resolve_voice(voice)
+        if voice not in self.cfg.all_voices():
+            raise ValueError(f"unknown preset voice {voice!r}; choose from {self.cfg.all_voices()}")
+        self.default_voice = voice
 
     def reset_voice(self) -> None:
         self._prompt = None
@@ -126,21 +193,24 @@ class Qwen3TTSSynthesizer:
         if not text.strip():
             return np.zeros(0, dtype=np.float32), 24_000
 
-        if self._active_lora_speaker_id:
-            lora_model, speaker_name = self._lora_models[self._active_lora_speaker_id]
-            wavs, sample_rate = lora_model.generate_custom_voice(
-                text=text, speaker=speaker_name, language="English"
-            )
-            return np.asarray(wavs[0], dtype=np.float32), sample_rate
-
-        if self._prompt is not None:
-            wavs, sample_rate = self.model.generate_voice_clone(
-                text=text, language="English", voice_clone_prompt=self._prompt
-            )
-            return np.asarray(wavs[0], dtype=np.float32), sample_rate
-
-        print("[qwen3-tts] no voice selected yet - pick or train a speaker first; skipping synthesis")
-        return np.zeros(0, dtype=np.float32), 24_000
+        with self._lock:
+            if self._active_lora_speaker_id:
+                lora_model, speaker_name = self._lora_models[self._active_lora_speaker_id]
+                wavs, sample_rate = lora_model.generate_custom_voice(
+                    text=text, speaker=speaker_name, language="English"
+                )
+            elif self._prompt is not None:
+                wavs, sample_rate = self.model.generate_voice_clone(
+                    text=text, language="English", voice_clone_prompt=self._prompt
+                )
+            else:
+                wavs, sample_rate = self._custom_model.generate_custom_voice(
+                    text=text,
+                    speaker=self.default_voice.lower(),
+                    language="English",
+                    instruct=self.cfg.qwen3_style_instruct or None,
+                )
+        return np.asarray(wavs[0], dtype=np.float32), sample_rate
 
 
 def _load_lora_model(cfg: TTSConfig, entry: VoiceEntry) -> tuple[Qwen3TTSModel, str]:

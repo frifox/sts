@@ -35,6 +35,14 @@ from sts.tts import create_synthesizer
 from sts.tts.voice_library import VoiceLibrary
 from sts.web.server import CaptionBroadcaster
 
+# What the designed voice says when its reference clip is generated. The clip
+# becomes the saved voice's reference, so it should be a natural, moderately
+# long passage (about 8-10 s), and it must match the text passed to the model.
+DESIGN_REFERENCE_TEXT = (
+    "Brothers and sisters, we gather today to remember God's grace, "
+    "and to rest in the peace that He gives to all who trust in Him."
+)
+
 
 class Pipeline:
     def __init__(self, cfg: PipelineConfig, broadcaster: CaptionBroadcaster | None = None):
@@ -57,6 +65,9 @@ class Pipeline:
         # A freshly trained voice is active immediately but unsaved until the
         # operator names it (the "Save Voice" button): (wav path, transcript).
         self._pending_voice: tuple[str, str | None] | None = None
+        # "Create Voice" dialog: the designed voice's reference clip + its text.
+        self._design: tuple[str, str] | None = None
+        self._design_busy = threading.Lock()
         self._active_speaker_id: str | None = None
 
         self._segments: queue.Queue = queue.Queue()
@@ -110,6 +121,8 @@ class Pipeline:
             self.control.start_training()
         elif action == "train_stop":
             self._finish_training()
+        elif action in ("design_generate", "design_play", "design_save", "design_close"):
+            self._handle_design_action(action, data)
         elif action == "save_voice":
             self._save_pending_voice(str(data.get("name") or ""))
         elif action == "default_voice":
@@ -189,14 +202,88 @@ class Pipeline:
         self._broadcast_library()
 
     def _write_training_wav(self, audio: np.ndarray) -> str:
+        return self._write_wav(audio, self.cfg.audio.sample_rate)
+
+    @staticmethod
+    def _write_wav(audio: np.ndarray, sample_rate: int) -> str:
         path = tempfile.NamedTemporaryFile(prefix="sts_voice_", suffix=".wav", delete=False).name
         pcm16 = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
         with wave.open(path, "wb") as wav_file:
-            wav_file.setnchannels(self.cfg.audio.channels)
+            wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
-            wav_file.setframerate(self.cfg.audio.sample_rate)
+            wav_file.setframerate(sample_rate)
             wav_file.writeframes(pcm16.tobytes())
         return path
+
+    # -- "Create Voice" dialog (Qwen3 voice design) ---------------------------
+
+    def _design_state(self, state: str, message: str = "") -> None:
+        vlog("design", f"{state}: {message}" if message else state)
+        if self.broadcaster:
+            self.broadcaster.broadcast_design(state, message, has_voice=self._design is not None)
+
+    def _handle_design_action(self, action: str, data: dict) -> None:
+        if not hasattr(self.tts, "design_reference"):
+            return
+        if action == "design_close":
+            self._design = None
+            self.tts.unload_designer()
+            self._design_state("idle")
+            return
+        if action == "design_save":
+            self._design_save(str(data.get("name") or ""))
+            return
+        # Generating / previewing run for seconds to minutes, and control
+        # messages arrive on the web server's event loop, so use a worker thread.
+        if not self._design_busy.acquire(blocking=False):
+            return  # a previous generate/play is still running
+        task = self._design_generate if action == "design_generate" else self._design_play
+        argument = str(data.get("prompt" if action == "design_generate" else "text") or "").strip()
+
+        def run() -> None:
+            try:
+                if argument:
+                    task(argument)
+            except Exception as exc:
+                print(f"[design] {action} failed: {exc!r}")
+                self._design_state("error", f"{action.split('_')[1].capitalize()} failed: {exc}")
+            finally:
+                self._design_busy.release()
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _design_generate(self, prompt: str) -> None:
+        self._design_state(
+            "busy",
+            "Loading the voice designer (the first time this downloads several GB)…"
+            if not self.tts.design_loaded else "Generating voice…",
+        )
+        audio, sample_rate = self.tts.design_reference(prompt, DESIGN_REFERENCE_TEXT)
+        self._design = (self._write_wav(audio, sample_rate), DESIGN_REFERENCE_TEXT)
+        self._design_state("ready", "Voice generated. Play a sample to check it, or Generate again for a different one.")
+
+    def _design_play(self, text: str) -> None:
+        if self._design is None:
+            self._design_state("error", "Generate a voice first.")
+            return
+        self._design_state("busy", "Synthesizing sample…")
+        path, ref_text = self._design
+        audio, sample_rate = self.tts.preview(text, path, ref_text)
+        self._design_state("busy", "Playing sample…")
+        self.playback.play(audio, sample_rate=sample_rate)
+        self._design_state("ready", "Play again, tweak the description and Generate, or name it and Save.")
+
+    def _design_save(self, name: str) -> None:
+        name = name.strip()
+        if self._design is None or not name:
+            return
+        path, ref_text = self._design
+        self._save_and_activate(name, path, ref_text)
+        self._pending_voice = None
+        self._design = None
+        self.tts.unload_designer()
+        self._design_state("saved", f"Saved '{name}'.")
+        self._broadcast_status()
 
     @staticmethod
     def _drain(q: queue.Queue) -> None:
@@ -216,6 +303,7 @@ class Pipeline:
                 training_target_seconds=self.control.target_seconds,
                 cloned=self.tts.cloned_speaker_wav is not None,
                 can_save=self._pending_voice is not None,
+                can_design=hasattr(self.tts, "design_reference"),
                 default_voice=self.cfg.tts.resolve_voice(self.cfg.tts.default_voice),
                 voice_groups=self.cfg.tts.voice_groups,
                 active_speaker_id=self._active_speaker_id,

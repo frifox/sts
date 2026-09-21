@@ -55,6 +55,17 @@ class TTSConfig:
     backend: str = "xtts"  # "xtts" or "qwen3"
     model_name: str = "tts_models/multilingual/multi-dataset/xtts_v2"
     qwen3_model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+    # Qwen3-TTS's CustomVoice variant: named preset speakers, no reference clip
+    # needed. Used when no cloned/trained voice is active. `qwen3_style_instruct`
+    # steers delivery (ignored by the 0.6B variant).
+    qwen3_custom_model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+    # VoiceDesign variant: invents a voice from a text description (the "Create
+    # Voice" dialog). Loaded only while that dialog is in use.
+    qwen3_design_model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+    qwen3_style_instruct: str = (
+        "Speak in a calm, warm, measured tone, like a gentle preacher delivering a sermon. "
+        "American English accent."
+    )
     device: str = "cuda"
     language: str = "en"
     # Built-in (non-cloned) XTTS voices offered in the page's dropdown, used
@@ -86,6 +97,14 @@ class TTSConfig:
     accent_strength: float = 0.7
     # When set, clone this reference speaker instead (stretch goal).
     speaker_wav: str | None = None
+
+    def use_backend_voices(self) -> None:
+        """Swaps in the preset-voice list for the selected backend. Call after
+        `backend` is set, and before applying any --default-voice override."""
+        if self.backend == "qwen3":
+            self.voice_groups = {"Male": ["Aiden", "Ryan"]}
+            self.voice_aliases = {"male": "Aiden"}
+            self.default_voice = "Aiden"
 
     def all_voices(self) -> list[str]:
         return [name for names in self.voice_groups.values() for name in names]

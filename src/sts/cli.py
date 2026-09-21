@@ -109,6 +109,7 @@ def main() -> None:
     cfg.translation.device = translation_device
     cfg.tts.device = tts_device
     cfg.tts.backend = args.tts_backend
+    cfg.tts.use_backend_voices()
     cfg.tts.voice_library_dir = args.voice_library_dir
     if args.default_voice:
         cfg.tts.default_voice = cfg.tts.resolve_voice(args.default_voice)

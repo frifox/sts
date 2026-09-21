@@ -95,6 +95,15 @@ slow translation or TTS call doesn't stall audio capture.
     first. What's captured is transcribed (for a higher-quality clone on
     backends that use a reference transcript) and the clone becomes active
     right away, so you can listen to it. It is **not** saved yet.
+  - **Create Voice** (Qwen3 backend only) — designs a brand-new voice from a
+    written description, no recording needed. Describe the voice, hit
+    **Generate**, then paste any text into the second box and **Play sample**
+    (plays on the output device) to hear it. Not right? Tweak the description
+    and Generate again - each generation is a *different* voice, so keep
+    regenerating until one fits. When it does, name it and **Save**: it's
+    stored in the voice library like a trained voice and appears in the
+    speaker dropdown. Uses the Qwen3-TTS VoiceDesign model, which is loaded
+    only while the dialog is open (first use downloads it).
   - **Save Voice** — enabled once a trained voice is active. Asks for a name
     and, on Save, stores it in the voice library so it's reusable from the
     **speaker dropdown** in later sessions. Naming an existing voice replaces
