@@ -9,7 +9,7 @@ class AudioConfig:
     output_device: int | None = None
     sample_rate: int = 16_000
     channels: int = 1
-    block_ms: int = 30  # frame size fed to the VAD
+    block_ms: int = 32  # frame fed to the VAD; Silero needs exactly 512 samples at 16 kHz (32 ms)
 
 
 @dataclass
