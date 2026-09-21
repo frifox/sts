@@ -75,3 +75,28 @@ def clean_transcript(text: str) -> str:
     text = re.sub(r"\s+([,.!?;:])", r"\1", text)
     text = re.sub(r"([,.;:])\1+", r"\1", text)
     return text.strip()
+
+
+def split_for_tts(text: str, limit: int) -> list[str]:
+    """One piece per sentence, so each gets its own natural intonation and can
+    be checked and retried on its own. Only a sentence longer than `limit`
+    characters is cut further: at commas/semicolons first, then at spaces.
+    Nothing is dropped."""
+    pieces: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        if not sentence:
+            continue
+        current = ""
+        for clause in re.split(r"(?<=[,;:])\s+", sentence):
+            for word in clause.split():
+                if current and len(current) + 1 + len(word) > limit:
+                    pieces.append(current)
+                    current = word
+                else:
+                    current = f"{current} {word}".strip()
+            if current and len(current) > limit * 0.6 and clause.endswith((",", ";", ":")):
+                pieces.append(current)
+                current = ""
+        if current:
+            pieces.append(current)
+    return pieces

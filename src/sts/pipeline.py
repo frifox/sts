@@ -397,9 +397,10 @@ class Pipeline:
                         continue
                     vlog("tts", f"synthesized {audio.size / sample_rate:.1f}s of speech in "
                                 f"{time.monotonic() - t0:.2f}s ({self._translations.qsize()} sentences waiting)")
-                    # Only the start of a translated text gets the pause; the
-                    # chunks of one long sentence must flow together.
-                    self._audio.put((audio, sample_rate, self.cfg.audio.pause_between_s if first_piece else 0.0))
+                    # A longer pause before a new translated text, a shorter one
+                    # between the sentences within it.
+                    pause = self.cfg.audio.pause_between_s if first_piece else self.cfg.audio.pause_within_s
+                    self._audio.put((audio, sample_rate, pause))
                     first_piece = False
                     t0 = time.monotonic()
             except Exception as exc:  # one bad sentence shouldn't kill voicing for the rest of the session

@@ -23,6 +23,7 @@ from TTS.tts.models.xtts import XttsArgs, XttsAudioConfig
 
 from sts.config import TTSConfig
 from sts.gpu import gpu_lock
+from sts.textclean import split_for_tts
 from sts.tts.voice_library import VoiceEntry
 
 SAMPLE_RATE = 24_000  # XTTS v2 output rate
@@ -35,43 +36,13 @@ if hasattr(torch.serialization, "add_safe_globals"):
 
 
 # XTTS asserts on more than 400 tokens per sentence and warns past 250 characters
-# for English, so long unpunctuated sentences are cut at clause boundaries first.
+# for English. Text is spoken one sentence at a time; only a sentence longer than
+# this is cut further, at clause boundaries.
 MAX_CHARS_PER_CHUNK = 220
 
 
 def split_for_xtts(text: str, limit: int = MAX_CHARS_PER_CHUNK) -> list[str]:
-    text = text.strip()
-    if not text:
-        return []
-    if len(text) <= limit:
-        return [text]
-    chunks: list[str] = []
-    current = ""
-    # Prefer sentence ends, then commas/semicolons, then plain spaces.
-    for part in re.split(r"(?<=[.!?])\s+|(?<=[,;:])\s+", text):
-        for word_run in _hard_wrap(part, limit):
-            if current and len(current) + 1 + len(word_run) > limit:
-                chunks.append(current)
-                current = word_run
-            else:
-                current = f"{current} {word_run}".strip()
-    if current:
-        chunks.append(current)
-    return chunks
-
-
-def _hard_wrap(text: str, limit: int) -> list[str]:
-    lines: list[str] = []
-    current = ""
-    for word in text.split():
-        if current and len(current) + 1 + len(word) > limit:
-            lines.append(current)
-            current = word
-        else:
-            current = f"{current} {word}".strip()
-    if current:
-        lines.append(current)
-    return lines
+    return split_for_tts(text, limit)
 
 
 def _load_with_soundfile(path, *args, **kwargs):
@@ -123,11 +94,13 @@ class XTTSSynthesizer:
         for chunk in split_for_xtts(text):
             yield self._synthesize_piece(chunk), SAMPLE_RATE
 
-    def synthesize(self, text: str) -> tuple[np.ndarray, int]:
+    def synthesize(self, text: str, pause_s: float = 0.35) -> tuple[np.ndarray, int]:
+        """Whole text as one clip, with `pause_s` of silence between sentences."""
         pieces = [self._synthesize_piece(chunk) for chunk in split_for_xtts(text)]
         if not pieces:
             return np.zeros(0, dtype=np.float32), SAMPLE_RATE
-        return np.concatenate(pieces), SAMPLE_RATE
+        gap = np.zeros(int(pause_s * SAMPLE_RATE), dtype=np.float32)
+        return np.concatenate([part for i, piece in enumerate(pieces) for part in ((gap, piece) if i else (piece,))]), SAMPLE_RATE
 
     def _clone_conditioning(self, wav_path: str):
         """(gpt_cond_latent, speaker_embedding) for the active clone, with its

@@ -521,6 +521,11 @@ sts --input-device 2 --output-device 3
 sts --default-voice "Craig Gutsy"   # a different built-in voice (default: Adde Michal)
 sts --accent-voice "Andrew Chipper" --accent-strength 1.0
                                     # steer cloned voices' accent toward a built-in speaker
+sts --pause-s 1.0 --sentence-pause-s 0.35
+                                    # silence between spoken translations / between the
+                                    # sentences within one (each sentence is spoken separately)
+sts --min-silence-ms 400 --max-segment-s 10
+                                    # cut captions sooner (shorter pause / shorter maximum segment)
 sts --clone reference.wav          # stretch goal: clone the speaker's voice
                                     # from a 10-20s reference clip instead of
                                     # using the default TTS voice (one-off,

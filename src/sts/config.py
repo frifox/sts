@@ -12,6 +12,9 @@ class AudioConfig:
     # Minimum silence between one translated text and the next when they play
     # back to back (e.g. while playback is catching up).
     pause_between_s: float = 1.0
+    # Silence between the sentences of one spoken text (each sentence is
+    # synthesized separately so it gets its own natural intonation).
+    pause_within_s: float = 0.35
     block_ms: int = 32  # frame fed to the VAD; Silero needs exactly 512 samples at 16 kHz (32 ms)
 
 

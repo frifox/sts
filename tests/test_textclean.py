@@ -53,6 +53,12 @@ def test_xtts_chunking():
     from sts.tts.xtts import split_for_xtts
 
     assert split_for_xtts("Short one.") == ["Short one."]
+    three = "Christians live fruitful lives. You need to repent. Jesus speaks, and we should listen."
+    assert split_for_xtts(three) == [
+        "Christians live fruitful lives.",
+        "You need to repent.",
+        "Jesus speaks, and we should listen.",
+    ]  # one generation per sentence, not packed together
     long = "of course we live in a time when they say " + ", ".join(["once"] * 200)
     chunks = split_for_xtts(long)
     assert all(len(c) <= 220 for c in chunks) and len(chunks) > 1

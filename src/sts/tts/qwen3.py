@@ -60,30 +60,12 @@ from sts.config import TTSConfig
 from sts.devices import supports_bf16_and_flash_attention
 from sts.gpu import gpu_lock
 from sts.log import vlog
+from sts.textclean import split_for_tts
 from sts.tts.voice_library import VoiceEntry
 
 
 def split_for_qwen(text: str, limit: int) -> list[str]:
-    """Sentence-sized pieces of at most ~`limit` characters. Long sentences are
-    cut at commas/semicolons, then at spaces; nothing is dropped."""
-    pieces: list[str] = []
-    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
-        if not sentence:
-            continue
-        current = ""
-        for clause in re.split(r"(?<=[,;:])\s+", sentence):
-            for word in clause.split():
-                if current and len(current) + 1 + len(word) > limit:
-                    pieces.append(current)
-                    current = word
-                else:
-                    current = f"{current} {word}".strip()
-            if current and len(current) > limit * 0.6 and clause.endswith((",", ";", ":")):
-                pieces.append(current)
-                current = ""
-        if current:
-            pieces.append(current)
-    return pieces
+    return split_for_tts(text, limit)
 
 
 def transcript_is_english(text: str | None) -> bool:
@@ -268,12 +250,13 @@ class Qwen3TTSSynthesizer:
         for piece in split_for_qwen(text, self.cfg.qwen3_max_chars):
             yield self._synthesize_checked(piece)
 
-    def synthesize(self, text: str) -> tuple[np.ndarray, int]:
+    def synthesize(self, text: str, pause_s: float = 0.35) -> tuple[np.ndarray, int]:
+        """Whole text as one clip, with `pause_s` of silence between sentences."""
         pieces = list(self.synthesize_stream(text))
         if not pieces:
             return np.zeros(0, dtype=np.float32), 24_000
         sample_rate = pieces[0][1]
-        gap = np.zeros(int(0.15 * sample_rate), dtype=np.float32)
+        gap = np.zeros(int(pause_s * sample_rate), dtype=np.float32)
         audio = np.concatenate([part for i, (a, _) in enumerate(pieces) for part in ((gap, a) if i else (a,))])
         return audio, sample_rate
 

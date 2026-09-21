@@ -97,6 +97,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum silence between consecutive spoken translations (seconds, default 1.0; 0 disables)",
     )
     parser.add_argument(
+        "--sentence-pause-s",
+        type=float,
+        default=None,
+        help="Silence between the sentences of one spoken translation (seconds, default 0.35)",
+    )
+    parser.add_argument(
         "--min-silence-ms",
         type=int,
         default=None,
@@ -144,6 +150,8 @@ def main() -> None:
         cfg.tts.qwen3_clone_mode = args.qwen_clone_mode
     if args.qwen_temperature is not None:
         cfg.tts.qwen3_temperature = args.qwen_temperature
+    if args.sentence_pause_s is not None:
+        cfg.audio.pause_within_s = args.sentence_pause_s
     if args.pause_s is not None:
         cfg.audio.pause_between_s = args.pause_s
     if args.min_silence_ms is not None:
