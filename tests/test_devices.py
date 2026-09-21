@@ -46,3 +46,15 @@ def test_turing_does_not_support_bf16_or_flash_attention():
 def test_ampere_and_newer_support_bf16_and_flash_attention():
     assert supports_bf16_and_flash_attention(8) is True  # e.g. RTX 3090
     assert supports_bf16_and_flash_attention(9) is True  # e.g. H100/H200
+
+
+def test_voice_resolution():
+    from sts.config import TTSConfig
+
+    cfg = TTSConfig()
+    assert cfg.resolve_voice("male") == "Damien Black"
+    assert cfg.resolve_voice("Female") == "Ana Florence"
+    assert cfg.resolve_voice("Craig Gutsy") == "Craig Gutsy"
+    assert cfg.default_voice in cfg.all_voices()
+    assert len(cfg.all_voices()) == 14
+    assert all(cfg.resolve_voice(alias) in cfg.all_voices() for alias in cfg.voice_aliases)

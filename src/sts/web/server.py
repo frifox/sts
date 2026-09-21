@@ -136,6 +136,7 @@ class CaptionBroadcaster:
         cloned: bool,
         active_speaker_id: str | None = None,
         default_voice: str | None = None,
+        voice_groups: dict[str, list[str]] | None = None,
     ) -> None:
         message = {
             "type": "status",
@@ -147,6 +148,7 @@ class CaptionBroadcaster:
             "cloned": cloned,
             "active_speaker_id": active_speaker_id,
             "default_voice": default_voice,
+            "voice_groups": voice_groups,
         }
         self._last_status = message
         if self.loop is None:

@@ -57,22 +57,42 @@ class TTSConfig:
     qwen3_model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
     device: str = "cuda"
     language: str = "en"
-    # Built-in (non-cloned) XTTS voices, used when no cloned/trained voice is
-    # active. XTTS only - Qwen3-TTS's cloning model has no built-in speakers.
-    builtin_voices: dict[str, str] = field(
-        default_factory=lambda: {"male": "Damien Black", "female": "Claribel Dervla"}
+    # Built-in (non-cloned) XTTS voices offered in the page's dropdown, used
+    # when no cloned/trained voice is active. Hand-picked for a US-sounding
+    # accent. XTTS only - Qwen3-TTS's cloning model has no built-in speakers.
+    voice_groups: dict[str, list[str]] = field(
+        default_factory=lambda: {
+            "Male": [
+                "Adde Michal", "Craig Gutsy", "Damien Black", "Damjan Chapman",
+                "Dionisio Schuyler", "Eugenio Mataracı", "Ilkin Urbano",
+            ],
+            "Female": [
+                "Ana Florence", "Andrew Chipper", "Barbora MacLean", "Brenda Stern",
+                "Chandra MacFarland", "Daisy Studious", "Maja Ruoho",
+            ],
+        }
     )
-    default_voice: str = "male"  # key into builtin_voices
+    voice_aliases: dict[str, str] = field(
+        default_factory=lambda: {"male": "Damien Black", "female": "Ana Florence"}
+    )
+    default_voice: str = "Damien Black"  # an XTTS speaker name from voice_groups (or "male"/"female")
     # Cloned voices inherit the accent of their reference clip (here: a Russian
     # speaker), so English cloned from it comes out accented. XTTS's style/accent
     # conditioning is separate from timbre, so the clone's style is blended
-    # toward a built-in voice's. `accent_voice` is a key into builtin_voices, or
-    # None to follow the selected default voice; any XTTS built-in speaker name
-    # (e.g. "Andrew Chipper") is also accepted. Strength 0 disables the blend.
+    # toward a built-in voice's. `accent_voice` is an XTTS speaker name (or
+    # "male"/"female"), or None to follow the selected default voice. Strength
+    # 0 disables the blend.
     accent_voice: str | None = None
     accent_strength: float = 0.7
     # When set, clone this reference speaker instead (stretch goal).
     speaker_wav: str | None = None
+
+    def all_voices(self) -> list[str]:
+        return [name for names in self.voice_groups.values() for name in names]
+
+    def resolve_voice(self, name: str) -> str:
+        """Expands the "male"/"female" shorthands; anything else is returned as-is."""
+        return self.voice_aliases.get(name.strip().lower(), name)
     # Where per-speaker reference clips are saved for reuse across sessions.
     voice_library_dir: str = "voices"
 

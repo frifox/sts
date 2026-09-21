@@ -110,8 +110,8 @@ class Pipeline:
         elif action == "train_stop":
             self._finish_training()
         elif action == "default_voice":
-            voice = data.get("voice")
-            if voice not in self.cfg.tts.builtin_voices:
+            voice = self.cfg.tts.resolve_voice(str(data.get("voice") or ""))
+            if voice not in self.cfg.tts.all_voices():
                 return
             self.cfg.tts.default_voice = voice
             self.tts.set_default_voice(voice)
@@ -197,7 +197,8 @@ class Pipeline:
                 training_seconds=self.control.training_seconds,
                 training_target_seconds=self.control.target_seconds,
                 cloned=self.tts.cloned_speaker_wav is not None,
-                default_voice=self.cfg.tts.default_voice,
+                default_voice=self.cfg.tts.resolve_voice(self.cfg.tts.default_voice),
+                voice_groups=self.cfg.tts.voice_groups,
                 active_speaker_id=self._active_speaker_id,
             )
 

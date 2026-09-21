@@ -98,11 +98,14 @@ slow translation or TTS call doesn't stall audio capture.
     **speaker dropdown** in later sessions, not just this one. Click Reset
     before the next speaker so their audio doesn't get folded into the
     previous one's training sample.
-  - **Male / Female voice** — picks the built-in (non-trained) voice used
-    whenever no trained/cloned voice is active; defaults to Male
-    (`--default-voice male|female` sets the starting choice). Picking one
-    also drops any cloned/trained voice. XTTS backend only - Qwen3-TTS has
-    no built-in voices.
+  - **Built-in voice dropdown** — picks one of 14 built-in (non-trained)
+    voices (7 male, 7 female, grouped in the list) used whenever no
+    trained/cloned voice is active; defaults to Damien Black
+    (`--default-voice "Craig Gutsy"` or `male`/`female` sets the starting
+    choice). Picking one also drops any cloned/trained voice. XTTS backend
+    only - Qwen3-TTS has no built-in voices. The list lives in
+    `TTSConfig.voice_groups` (`sts/config.py`); any of XTTS's 58 speakers can
+    be added there.
   - **Speaker dropdown** — picks a previously trained/saved voice from the
     library (or "— no cloned voice —" to fall back to the default) without
     retraining.
@@ -495,7 +498,9 @@ KJV Pure Cambridge Edition (1769) texts, both public domain, sourced from
 ```bash
 sts --list-devices                 # find your sound card's input/output index
 sts --input-device 2 --output-device 3
-sts --default-voice female          # built-in female voice instead of the default male
+sts --default-voice "Craig Gutsy"   # a different built-in voice (default: Damien Black)
+sts --accent-voice "Andrew Chipper" --accent-strength 1.0
+                                    # steer cloned voices' accent toward a built-in speaker
 sts --clone reference.wav          # stretch goal: clone the speaker's voice
                                     # from a 10-20s reference clip instead of
                                     # using the default TTS voice (one-off,

@@ -60,14 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--default-voice",
-        default="male",
-        choices=["male", "female"],
-        help="Built-in (non-cloned) voice used when no trained/cloned voice is active (xtts backend)",
+        default=None,
+        help="Built-in (non-cloned) voice used when no trained/cloned voice is active (xtts backend): "
+        "an XTTS speaker name from the page's dropdown, e.g. 'Craig Gutsy', or male/female (default: Damien Black)",
     )
     parser.add_argument(
         "--accent-voice",
         default=None,
-        help="Built-in voice whose accent cloned voices are steered toward: male, female, or any XTTS "
+        help="Built-in voice whose accent cloned voices are steered toward: male/female, or any XTTS "
         "speaker name such as 'Andrew Chipper' (default: the selected --default-voice)",
     )
     parser.add_argument(
@@ -110,7 +110,10 @@ def main() -> None:
     cfg.tts.device = tts_device
     cfg.tts.backend = args.tts_backend
     cfg.tts.voice_library_dir = args.voice_library_dir
-    cfg.tts.default_voice = args.default_voice
+    if args.default_voice:
+        cfg.tts.default_voice = cfg.tts.resolve_voice(args.default_voice)
+        if cfg.tts.default_voice not in cfg.tts.all_voices():
+            raise SystemExit(f"unknown --default-voice {args.default_voice!r}; choose from: {', '.join(cfg.tts.all_voices())}")
     cfg.tts.accent_voice = args.accent_voice
     cfg.tts.accent_strength = args.accent_strength
 

@@ -93,13 +93,14 @@ class XTTSSynthesizer:
         self.cfg = cfg
         self.tts = TTS(cfg.model_name).to(cfg.device)
         self.cloned_speaker_wav: str | None = cfg.speaker_wav
-        self.default_voice = cfg.default_voice
+        self.default_voice = cfg.resolve_voice(cfg.default_voice)
         self._conditioning_cache: dict = {}
 
     def set_default_voice(self, voice: str) -> None:
-        """Picks which built-in voice ("male"/"female") is used when no cloned voice is active."""
-        if voice not in self.cfg.builtin_voices:
-            raise ValueError(f"unknown built-in voice {voice!r}; choose from {list(self.cfg.builtin_voices)}")
+        """Picks which built-in voice is used when no cloned voice is active."""
+        voice = self.cfg.resolve_voice(voice)
+        if voice not in self.cfg.all_voices():
+            raise ValueError(f"unknown built-in voice {voice!r}; choose from {self.cfg.all_voices()}")
         self.default_voice = voice
 
     def clone_voice(self, reference_wav_path: str, ref_text: str | None = None) -> None:
@@ -130,8 +131,7 @@ class XTTSSynthesizer:
     def _clone_conditioning(self, wav_path: str):
         """(gpt_cond_latent, speaker_embedding) for the active clone, with its
         style latent blended toward the accent voice's. Cached per (clip, accent)."""
-        accent_key = self.cfg.accent_voice or self.default_voice
-        accent_speaker = self.cfg.builtin_voices.get(accent_key, accent_key)
+        accent_speaker = self.cfg.resolve_voice(self.cfg.accent_voice or self.default_voice)
         strength = self.cfg.accent_strength
         key = (wav_path, accent_speaker, strength)
         if key not in self._conditioning_cache:
@@ -153,6 +153,6 @@ class XTTSSynthesizer:
             wav = out["wav"]
         else:
             wav = self.tts.tts(
-                text=text, speaker=self.cfg.builtin_voices[self.default_voice], language=self.cfg.language
+                text=text, speaker=self.default_voice, language=self.cfg.language
             )
         return np.asarray(wav, dtype=np.float32)

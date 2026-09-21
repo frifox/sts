@@ -224,10 +224,7 @@
   <div id="controls">
     <button id="btn-toggle">Stop</button>
     <button id="btn-voice">🔇 Voice off</button>
-    <select id="default-voice" title="Built-in voice (used when no trained voice is selected)">
-      <option value="male">Male voice</option>
-      <option value="female">Female voice</option>
-    </select>
+    <select id="default-voice" title="Built-in voice (used when no trained voice is selected)"></select>
     <input id="train-name" type="text" placeholder="Speaker name" />
     <button id="btn-train">Train voice</button>
     <select id="speaker-select">
@@ -286,6 +283,24 @@
     training_seconds: 0, training_target_seconds: 0, cloned: false, active_speaker_id: null,
   };
 
+  function buildVoiceOptions(groups) {
+    const signature = JSON.stringify(groups);
+    if (defaultVoiceSelect.dataset.signature === signature) return;
+    defaultVoiceSelect.dataset.signature = signature;
+    defaultVoiceSelect.innerHTML = '';
+    for (const [label, names] of Object.entries(groups)) {
+      const group = document.createElement('optgroup');
+      group.label = label;
+      for (const name of names) {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        group.appendChild(option);
+      }
+      defaultVoiceSelect.appendChild(group);
+    }
+  }
+
   function applyStatus(status) {
     lastStatus = status;
 
@@ -302,6 +317,7 @@
     }
     trainBtn.classList.toggle('is-active', status.training);
 
+    if (status.voice_groups) buildVoiceOptions(status.voice_groups);
     if (status.default_voice) defaultVoiceSelect.value = status.default_voice;
     speakerSelect.value = status.active_speaker_id || '';
   }
