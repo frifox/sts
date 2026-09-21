@@ -135,6 +135,7 @@ class CaptionBroadcaster:
         training_target_seconds: float,
         cloned: bool,
         active_speaker_id: str | None = None,
+        can_save: bool = False,
         default_voice: str | None = None,
         voice_groups: dict[str, list[str]] | None = None,
     ) -> None:
@@ -147,6 +148,7 @@ class CaptionBroadcaster:
             "training_target_seconds": training_target_seconds,
             "cloned": cloned,
             "active_speaker_id": active_speaker_id,
+            "can_save": can_save,
             "default_voice": default_voice,
             "voice_groups": voice_groups,
         }

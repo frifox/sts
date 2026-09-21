@@ -191,7 +191,20 @@
     color: #ccc;
   }
 
-  #train-name { width: 9em; }
+  #btn-save-voice:disabled { opacity: 0.4; cursor: default; }
+  #save-dialog {
+    position: fixed; inset: 0; z-index: 10; display: none;
+    align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.6);
+  }
+  #save-dialog.show { display: flex; }
+  #save-dialog form {
+    background: #16161c; border: 1px solid #333; border-radius: 10px;
+    padding: 1.2rem 1.4rem; width: min(22rem, 90vw); color: #ddd; font-size: 0.95rem;
+  }
+  #save-dialog h3 { margin: 0 0 0.8rem; font-size: 1rem; }
+  #save-dialog input { width: 100%; box-sizing: border-box; padding: 0.5rem; font-size: 1rem; }
+  #save-dialog .note { min-height: 1.2em; margin: 0.5rem 0; color: #e0b341; font-size: 0.8rem; }
+  #save-dialog .actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.4rem; }
 
   #btn-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   #btn-voice.is-active { background: #1f3d4d; border-color: #3a90c9; color: #d7f3ff; }
@@ -225,12 +238,24 @@
     <button id="btn-toggle">Stop</button>
     <button id="btn-voice">🔇 Voice off</button>
     <select id="default-voice" title="Built-in voice (used when no trained voice is selected)"></select>
-    <input id="train-name" type="text" placeholder="Speaker name" />
     <button id="btn-train">Train voice</button>
+    <button id="btn-save-voice" disabled title="Save the trained voice to the library">Save Voice</button>
     <select id="speaker-select">
       <option value="">— no cloned voice —</option>
     </select>
     <button id="btn-reset">Reset</button>
+  </div>
+
+<div id="save-dialog">
+    <form id="save-form">
+      <h3>Save trained voice</h3>
+      <input id="save-name" type="text" placeholder="Voice name" autocomplete="off" required />
+      <div class="note" id="save-note"></div>
+      <div class="actions">
+        <button type="button" id="save-cancel">Cancel</button>
+        <button type="submit" id="save-confirm">Save</button>
+      </div>
+    </form>
   </div>
 
 <script>
@@ -275,7 +300,11 @@
   const voiceBtn = document.getElementById('btn-voice');
   const trainBtn = document.getElementById('btn-train');
   const resetBtn = document.getElementById('btn-reset');
-  const trainNameInput = document.getElementById('train-name');
+  const saveBtn = document.getElementById('btn-save-voice');
+  const saveDialog = document.getElementById('save-dialog');
+  const saveName = document.getElementById('save-name');
+  const saveNote = document.getElementById('save-note');
+  let libraryNames = [];
   const speakerSelect = document.getElementById('speaker-select');
   const defaultVoiceSelect = document.getElementById('default-voice');
   let lastStatus = {
@@ -316,6 +345,8 @@
       trainBtn.textContent = status.cloned ? 'Train voice (cloned ✓)' : 'Train voice';
     }
     trainBtn.classList.toggle('is-active', status.training);
+    saveBtn.disabled = !status.can_save || status.training;
+    if (!status.can_save) closeSaveDialog();
 
     if (status.voice_groups) buildVoiceOptions(status.voice_groups);
     if (status.default_voice) defaultVoiceSelect.value = status.default_voice;
@@ -324,6 +355,7 @@
 
   function applyLibrary(msg) {
     const current = speakerSelect.value;
+    libraryNames = msg.speakers.map((speaker) => speaker.name);
     speakerSelect.innerHTML = '';
     const noneOpt = document.createElement('option');
     noneOpt.value = '';
@@ -351,11 +383,37 @@
     if (lastStatus.training) {
       send('train_stop');
     } else {
-      send('train_start', { name: trainNameInput.value });
+      send('train_start');
     }
   });
   resetBtn.addEventListener('click', () => send('reset'));
   defaultVoiceSelect.addEventListener('change', () => send('default_voice', { voice: defaultVoiceSelect.value }));
+  function openSaveDialog() {
+    saveName.value = '';
+    saveNote.textContent = '';
+    saveDialog.classList.add('show');
+    saveName.focus();
+  }
+
+  function closeSaveDialog() {
+    saveDialog.classList.remove('show');
+  }
+
+  saveName.addEventListener('input', () => {
+    const name = saveName.value.trim().toLowerCase();
+    const exists = libraryNames.some((existing) => existing.trim().toLowerCase() === name);
+    saveNote.textContent = exists ? 'A voice with this name already exists - saving will replace it.' : '';
+  });
+  saveBtn.addEventListener('click', openSaveDialog);
+  document.getElementById('save-cancel').addEventListener('click', closeSaveDialog);
+  document.getElementById('save-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const name = saveName.value.trim();
+    if (!name) return;
+    send('save_voice', { name });
+    closeSaveDialog();
+  });
+
   speakerSelect.addEventListener('change', () => send('select_speaker', { speaker_id: speakerSelect.value }));
 
   function connect() {

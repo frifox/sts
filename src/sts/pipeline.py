@@ -54,7 +54,9 @@ class Pipeline:
         self.voice_library = VoiceLibrary(cfg.tts.voice_library_dir)
         self.bible_lookup = BibleLookup()
         self.control = RecognitionControl(cfg.audio.sample_rate)
-        self._training_name: str | None = None
+        # A freshly trained voice is active immediately but unsaved until the
+        # operator names it (the "Save Voice" button): (wav path, transcript).
+        self._pending_voice: tuple[str, str | None] | None = None
         self._active_speaker_id: str | None = None
 
         self._segments: queue.Queue = queue.Queue()
@@ -105,10 +107,11 @@ class Pipeline:
         elif action == "reset":
             self._reset()
         elif action == "train_start":
-            self._training_name = (data.get("name") or "").strip() or f"speaker-{int(time.time())}"
             self.control.start_training()
         elif action == "train_stop":
             self._finish_training()
+        elif action == "save_voice":
+            self._save_pending_voice(str(data.get("name") or ""))
         elif action == "default_voice":
             voice = self.cfg.tts.resolve_voice(str(data.get("voice") or ""))
             if voice not in self.cfg.tts.all_voices():
@@ -129,6 +132,7 @@ class Pipeline:
             self.control.stop_training(discard=True)
         self.tts.reset_voice()
         self._active_speaker_id = None
+        self._pending_voice = None
         self._drain(self._segments)
         self._drain(self._transcripts)
         self._drain(self._translations)
@@ -138,6 +142,7 @@ class Pipeline:
             self.broadcaster.broadcast_reset()
 
     def _select_speaker(self, speaker_id: str | None) -> None:
+        self._pending_voice = None
         if not speaker_id:
             self.tts.reset_voice()
             self._active_speaker_id = None
@@ -149,13 +154,26 @@ class Pipeline:
 
     def _finish_training(self, discard: bool = False) -> None:
         audio = self.control.stop_training(discard=discard)
-        name, self._training_name = self._training_name, None
         if audio is None:
             return
 
         path = self._write_training_wav(audio)
         ref_text = self._transcribe_or_none(audio)
-        self._save_and_activate(name or "speaker", path, ref_text)
+        # Activate the clone right away so the operator can listen to it, but
+        # don't write it to the library until they choose to (Save Voice).
+        self.tts.clone_voice(path, ref_text)
+        self._active_speaker_id = None
+        self._pending_voice = (path, ref_text)
+        vlog("voice", "trained voice is active but not saved yet")
+
+    def _save_pending_voice(self, name: str) -> None:
+        name = name.strip()
+        if self._pending_voice is None or not name:
+            return
+        path, ref_text = self._pending_voice
+        self._save_and_activate(name, path, ref_text)
+        self._pending_voice = None
+        vlog("voice", f"saved voice {name!r} to the library")
 
     def _transcribe_or_none(self, audio) -> str | None:
         try:
@@ -197,6 +215,7 @@ class Pipeline:
                 training_seconds=self.control.training_seconds,
                 training_target_seconds=self.control.target_seconds,
                 cloned=self.tts.cloned_speaker_wav is not None,
+                can_save=self._pending_voice is not None,
                 default_voice=self.cfg.tts.resolve_voice(self.cfg.tts.default_voice),
                 voice_groups=self.cfg.tts.voice_groups,
                 active_speaker_id=self._active_speaker_id,

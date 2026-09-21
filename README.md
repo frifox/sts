@@ -90,14 +90,17 @@ slow translation or TTS call doesn't stall audio capture.
     every connected screen, drops any text already in flight through the
     pipeline, and forgets the current cloned voice (falls back to the
     default TTS voice).
-  - **Train voice** — type a speaker name, then start capturing their live
-    audio for a voice clone; stops automatically at 18s or on a second
-    click, whichever comes first. What's captured is transcribed (for a
-    higher-quality clone on backends that use a reference transcript) and
-    saved into the voice library under that name — reusable from the
-    **speaker dropdown** in later sessions, not just this one. Click Reset
-    before the next speaker so their audio doesn't get folded into the
-    previous one's training sample.
+  - **Train voice** — start capturing the live speaker's audio for a voice
+    clone; stops automatically at 18s or on a second click, whichever comes
+    first. What's captured is transcribed (for a higher-quality clone on
+    backends that use a reference transcript) and the clone becomes active
+    right away, so you can listen to it. It is **not** saved yet.
+  - **Save Voice** — enabled once a trained voice is active. Asks for a name
+    and, on Save, stores it in the voice library so it's reusable from the
+    **speaker dropdown** in later sessions. Naming an existing voice replaces
+    it. Skip it to keep the voice for this session only. Click Reset before
+    the next speaker so their audio doesn't get folded into the previous
+    one's training sample.
   - **Built-in voice dropdown** — picks one of 13 built-in (non-trained)
     voices (6 male, 7 female, grouped in the list) used whenever no
     trained/cloned voice is active; defaults to Adde Michal
@@ -112,7 +115,7 @@ slow translation or TTS call doesn't stall audio capture.
 
   All of this is relayed over the same websocket the captions arrive on
   (`{"action": "start"}`, `{"action": "voice_on"}`,
-  `{"action": "train_start", "name": "..."}`,
+  `{"action": "train_start"}`, `{"action": "save_voice", "name": "..."}`,
   `{"action": "select_speaker", "speaker_id": "..."}`, etc.); the server
   broadcasts current state and the library list back to every connected
   screen so multiple open tabs stay in sync. Library entries live under
