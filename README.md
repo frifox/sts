@@ -229,7 +229,7 @@ based on.
 
 ## Setup
 
-Requires Python 3.10+ and a GPU for real-time performance — NVIDIA/CUDA
+Requires Python 3.10 or 3.11 (not 3.12+: Coqui TTS does not support it) and a GPU for real-time performance — NVIDIA/CUDA
 (`--device cuda`), Apple Silicon (`--device mps`, see above), or CPU (works,
 but will lag). Supported on Windows, macOS, and Linux.
 
@@ -261,7 +261,7 @@ the path a Windows + NVIDIA GPU setup - e.g. a GTX 1080 Ti - would follow):
    This should list your GPU and driver version. If it doesn't, the rest of
    this won't detect a GPU either - fix that first.
 
-2. **Python 3.10+**. Download the installer from
+2. **Python 3.10 or 3.11** (not 3.12+). Download the installer from
    [python.org/downloads](https://www.python.org/downloads/windows/) and run
    it. On the first installer screen, check **"Add python.exe to PATH"**
    before clicking Install - easy to miss, and everything below assumes it's
@@ -347,16 +347,16 @@ mps` does and doesn't cover) or Intel Macs with no dev environment yet:
 2. **Homebrew**, if you don't have it - follow the install command at
    [brew.sh](https://brew.sh/). Then:
    ```
-   brew install python@3.12
+   brew install python@3.11
    ```
-   (Any 3.10+ works; `python.org`'s own macOS installer is an equally fine
+   (Use 3.10 or 3.11 - Coqui TTS does not install on 3.12+. `python.org`'s own macOS installer is an equally fine
    alternative to Homebrew here.)
 
 3. **Clone the repo and set up a virtual environment:**
    ```
    git clone https://github.com/frifox/sts.git
    cd sts
-   python3 -m venv .venv
+   python3.11 -m venv .venv
    source .venv/bin/activate
    ```
    `(.venv)` should appear at the start of the prompt - reactivate with the
@@ -393,10 +393,12 @@ Ubuntu, which diverges on the driver step in particular. Substitute your
 distro's package manager (`dnf`, `pacman`, ...) if you're on something else;
 the Python side is identical everywhere.
 
-1. **Python 3.10+, git, and PortAudio.** Linux is the one OS here where
+1. **Python 3.10 or 3.11 (not 3.12+), git, and PortAudio.** Linux is the one OS here where
    `sounddevice`'s PortAudio dependency is **not** bundled in the wheel and
    needs installing separately, or audio capture will fail to import.
-   Debian stable ships a new enough Python by default:
+   Debian 12 (bookworm) ships Python 3.11, which works. Debian 13 and newer
+   ship 3.13, which Coqui TTS can't install on - use `uv` or `pyenv` to get
+   3.11 there (e.g. `uv venv --python 3.11 .venv`).
    ```
    sudo apt update
    sudo apt install python3 python3-venv python3-pip git libportaudio2

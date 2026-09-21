@@ -2,7 +2,7 @@
 name = "sts"
 version = "0.1.0"
 description = "Live Russian-to-English speech-to-speech pipeline for pulpit audio"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.12"
 dependencies = [
     "sounddevice>=0.4.6",
     "numpy>=1.26",
