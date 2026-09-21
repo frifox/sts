@@ -32,7 +32,10 @@ def build_parser() -> argparse.ArgumentParser:
         "reprocessing the file every time.",
     )
     parser.add_argument(
-        "--web", action="store_true", help="Serve live original/translated captions over HTTP"
+        "--web",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Serve the live captions page and operator controls over HTTP (on by default; --no-web disables)",
     )
     parser.add_argument("--web-host", default="0.0.0.0", help="Caption web server bind address")
     parser.add_argument("--web-port", type=int, default=8765, help="Caption web server port")

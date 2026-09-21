@@ -53,7 +53,7 @@ sound card -> VAD segmenter -> Whisper ASR (ru) -> NLLB translation (ru->en) -> 
 All stages run on separate threads connected by queues (`sts.pipeline`), so a
 slow translation or TTS call doesn't stall audio capture.
 
-- **Live captions** (`sts.web`) — an optional FastAPI/uvicorn server (`--web`)
+- **Live captions** (`sts.web`) — a FastAPI/uvicorn server, on by default (`--no-web` turns it off)
   that serves a full-screen caption page and pushes recognized/translated
   text to it over a websocket as it's produced. The page is a top half
   (original) / bottom half (translated) split; each new line fades in at the
@@ -238,8 +238,8 @@ on a discrete GPU. What's unverified is per-op MPS support and real-world
 throughput, not whether the models fit.
 
 ```bash
-sts --web --device mps                          # XTTS backend
-sts --web --device mps --tts-backend qwen3       # Qwen3-TTS backend (or just run it from .venv-qwen)
+sts --device mps                                # XTTS backend
+sts --device mps --tts-backend qwen3             # Qwen3-TTS backend (or just run it from .venv-qwen)
 ```
 
 ## Older NVIDIA GPUs (pre-Ampere) and Windows
@@ -519,7 +519,7 @@ the Python side is identical everywhere.
 
 ```bash
 sts --list-devices                 # confirm your mic/speakers show up
-sts --web
+sts
 ```
 
 Model weights (Whisper, NLLB, XTTS, Silero VAD) download automatically on
@@ -554,10 +554,11 @@ sts --clone reference.wav --clone-name "Pastor Ivan"
                                     # dropdown in later sessions without
                                     # reprocessing the file - zero-shot is
                                     # often good enough on its own
-sts --web --web-port 8765          # also serve live captions at :8765
+sts --web-port 8765                # live captions are served at :8765 by default
                                     # (open it full-screen / kiosk mode on a
-                                    # second monitor or projector)
-sts --web --voice-library-dir /data/sts-voices
+                                    # second monitor or projector); --no-web
+                                    # runs without the page, printing text only
+sts --voice-library-dir /data/sts-voices
                                     # a custom voice library location
 
 # import a LoRA adapter trained via training/qwen3_lora/ (see its README):
