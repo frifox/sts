@@ -98,9 +98,9 @@ slow translation or TTS call doesn't stall audio capture.
     **speaker dropdown** in later sessions, not just this one. Click Reset
     before the next speaker so their audio doesn't get folded into the
     previous one's training sample.
-  - **Built-in voice dropdown** — picks one of 14 built-in (non-trained)
-    voices (7 male, 7 female, grouped in the list) used whenever no
-    trained/cloned voice is active; defaults to Damien Black
+  - **Built-in voice dropdown** — picks one of 13 built-in (non-trained)
+    voices (6 male, 7 female, grouped in the list) used whenever no
+    trained/cloned voice is active; defaults to Adde Michal
     (`--default-voice "Craig Gutsy"` or `male`/`female` sets the starting
     choice). Picking one also drops any cloned/trained voice. XTTS backend
     only - Qwen3-TTS has no built-in voices. The list lives in
@@ -498,7 +498,7 @@ KJV Pure Cambridge Edition (1769) texts, both public domain, sourced from
 ```bash
 sts --list-devices                 # find your sound card's input/output index
 sts --input-device 2 --output-device 3
-sts --default-voice "Craig Gutsy"   # a different built-in voice (default: Damien Black)
+sts --default-voice "Craig Gutsy"   # a different built-in voice (default: Adde Michal)
 sts --accent-voice "Andrew Chipper" --accent-strength 1.0
                                     # steer cloned voices' accent toward a built-in speaker
 sts --clone reference.wav          # stretch goal: clone the speaker's voice

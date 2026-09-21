@@ -63,7 +63,7 @@ class TTSConfig:
     voice_groups: dict[str, list[str]] = field(
         default_factory=lambda: {
             "Male": [
-                "Adde Michal", "Craig Gutsy", "Damien Black", "Damjan Chapman",
+                "Adde Michal", "Craig Gutsy", "Damien Black",
                 "Dionisio Schuyler", "Eugenio Mataracı", "Ilkin Urbano",
             ],
             "Female": [
@@ -73,9 +73,9 @@ class TTSConfig:
         }
     )
     voice_aliases: dict[str, str] = field(
-        default_factory=lambda: {"male": "Damien Black", "female": "Ana Florence"}
+        default_factory=lambda: {"male": "Adde Michal", "female": "Ana Florence"}
     )
-    default_voice: str = "Damien Black"  # an XTTS speaker name from voice_groups (or "male"/"female")
+    default_voice: str = "Adde Michal"  # an XTTS speaker name from voice_groups (or "male"/"female")
     # Cloned voices inherit the accent of their reference clip (here: a Russian
     # speaker), so English cloned from it comes out accented. XTTS's style/accent
     # conditioning is separate from timbre, so the clone's style is blended

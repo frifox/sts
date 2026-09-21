@@ -52,9 +52,9 @@ def test_voice_resolution():
     from sts.config import TTSConfig
 
     cfg = TTSConfig()
-    assert cfg.resolve_voice("male") == "Damien Black"
+    assert cfg.resolve_voice("male") == "Adde Michal"
     assert cfg.resolve_voice("Female") == "Ana Florence"
     assert cfg.resolve_voice("Craig Gutsy") == "Craig Gutsy"
     assert cfg.default_voice in cfg.all_voices()
-    assert len(cfg.all_voices()) == 14
+    assert len(cfg.all_voices()) == 13
     assert all(cfg.resolve_voice(alias) in cfg.all_voices() for alias in cfg.voice_aliases)
