@@ -601,6 +601,19 @@ timestamps; the text is split into sentences, translated one sentence at a
 time, and spoken in a cloned voice; each sentence is then placed on the
 timeline where the Russian sentence began.
 
+- **Several speakers (`--multiple`):** works out who says each sentence and
+  clones a separate voice for each person from their own speech, so a video
+  of five people each reading two verses gets five different English voices.
+  Speakers are told apart with WeSpeaker's speaker-embedding model (a small
+  public download, no login). **Pass `--speakers N` when you know the count**
+  (implies `--multiple`): guessing is unreliable when voices are alike, such
+  as children or two men, and the script prints the number it found so you can
+  check. `--save-voice NAME` keeps each cloned voice as `NAME 1`, `NAME 2`, ...
+  in the library. The cloned voices are zero-shot clones from a
+  ~10-20 s sample of each person, not trained models. Limits: a speaker change
+  in the middle of a sentence isn't detected (a long run of continuous speech
+  by several people may be labelled as one person), overlapping speech isn't
+  separated, and a speaker with under ~2 s of speech gets the built-in voice.
 - **Voice:** by default the speaker is cloned from the cleanest ~10-20 s
   stretch of the video's own audio. `--voice NAME` uses one from the voice
   library instead (e.g. trained in the live app), and `--no-clone` uses the

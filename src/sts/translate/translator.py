@@ -13,6 +13,30 @@ from sts.translate import glossary
 _DEGENERATE = re.compile(r"Z{6,}|ZZGLOSS|(\b\w+\b)(?:[\s,.]+\1\b){5,}", re.IGNORECASE)
 
 
+# One- and two-word utterances are what NLLB handles worst: given «Аминь.» on its
+# own it invents a sentence ("I'm not going to."). These common church replies
+# are translated exactly instead.
+SHORT_PHRASES = {
+    "аминь": "Amen.",
+    "аллилуйя": "Hallelujah.",
+    "алиллуйя": "Hallelujah.",
+    "слава богу": "Praise God.",
+    "слава господу": "Glory to the Lord.",
+    "спасибо": "Thank you.",
+    "благодарю": "Thank you.",
+    "да": "Yes.",
+    "нет": "No.",
+    "хорошо": "Good.",
+    "пожалуйста": "Please.",
+}
+
+
+def short_phrase(text: str) -> str | None:
+    """The exact English for a known one- or two-word utterance, else None."""
+    key = re.sub(r"[^\w\s]", "", text.lower()).strip()
+    return SHORT_PHRASES.get(re.sub(r"\s+", " ", key))
+
+
 def split_sentences(text: str, min_words: int = 2) -> list[str]:
     """Splits on sentence-ending punctuation; fragments shorter than
     `min_words` are merged into the previous sentence rather than translated alone."""
@@ -51,6 +75,9 @@ class Translator:
         return " ".join(self._translate_sentence(sentence) for sentence in split_sentences(text)).strip()
 
     def _translate_sentence(self, text: str) -> str:
+        known = short_phrase(text)
+        if known:
+            return known
         result = ""
         if self.cfg.apply_glossary:
             source, placeholder_values = glossary.mask(text)

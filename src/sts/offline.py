@@ -45,6 +45,7 @@ class Unit:
     text: str
     avg_logprob: float
     translation: str = ""
+    speaker: int = 0  # who says it (0 unless --multiple identified several speakers)
 
 
 def default_output_path(input_path: Path) -> Path:
@@ -106,6 +107,30 @@ def pick_reference_window(
     if best is None:
         return None
     return best[2], best[3]
+
+
+def pick_reference_units(
+    units: list[Unit], indices: list[int], max_seconds: float = 18.0, min_logprob: float = -0.6
+) -> list[int]:
+    """Which of one speaker's sentences (`indices` into `units`) to build their
+    voice-cloning reference from: the most confidently transcribed ones, until
+    about `max_seconds` of speech is collected, returned in time order. A
+    speaker's sentences are rarely back to back, so unlike the single-speaker
+    case this can join sentences from different places in the video."""
+    candidates = sorted(
+        indices, key=lambda i: (units[i].avg_logprob >= min_logprob, units[i].end - units[i].start), reverse=True
+    )
+    chosen: list[int] = []
+    total = 0.0
+    for i in candidates:
+        length = units[i].end - units[i].start
+        if chosen and total + length > max_seconds * 1.15:
+            continue  # this one would overshoot; a shorter one may still fit
+        chosen.append(i)
+        total += length
+        if total >= max_seconds:
+            break
+    return sorted(chosen)
 
 
 @dataclass
@@ -228,7 +253,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Don't clone anyone; use the built-in default voice (see --default-voice)",
     )
     parser.add_argument("--save-voice", default=None, metavar="NAME",
-                        help="Save the voice cloned from the video into the voice library under this name")
+                        help="Save the voice cloned from the video into the voice library under this name "
+                        "(with --multiple: NAME 1, NAME 2, ...)")
+    parser.add_argument("--multiple", action="store_true",
+                        help="The video has several speakers: work out who says what and give each person their "
+                        "own voice, cloned from their own speech")
+    parser.add_argument("--speakers", type=int, default=None, metavar="N",
+                        help="Number of speakers, when you know it (implies --multiple). Much more reliable than "
+                        "letting the script guess")
+    parser.add_argument("--speaker-threshold", type=float, default=None,
+                        help="How different two voices must be to count as different people when guessing the "
+                        "number of speakers (cosine distance; lower = splits more readily; default 0.32)")
     parser.add_argument("--max-speedup", type=float, default=1.3,
                         help="Fastest an English clip may be sped up to fit the time of the Russian it replaces (default 1.3)")
     parser.add_argument("--keep-original", action="store_true", help="Also keep the original audio as a second track")
@@ -241,6 +276,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     input_path: Path = args.input
+    multiple = args.multiple or args.speakers is not None
+    if multiple and (args.voice or args.no_clone):
+        raise SystemExit("--multiple gives each speaker their own cloned voice, so it can't be combined with "
+                         "--voice or --no-clone (they choose one voice for everyone).")
+    if args.speakers is not None and args.speakers < 1:
+        raise SystemExit("--speakers must be at least 1")
     if not input_path.is_file():
         raise SystemExit(f"Input not found: {input_path}")
     output_path: Path = args.output or default_output_path(input_path)
@@ -305,7 +346,50 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Found {len(units)} sentences of speech.", flush=True)
 
     # -- voice ----------------------------------------------------------
-    if args.voice:
+    speaker_voices: dict[int, tuple[Path, str] | None] = {}  # speaker -> (reference wav, its text); None = built-in voice
+    if multiple:
+        from sts.diarize import DEFAULT_DISTANCE_THRESHOLD, SpeakerEncoder, assign_speakers
+
+        print("Working out who is speaking…", flush=True)
+        assignment = assign_speakers(
+            units, audio, SpeakerEncoder(), num_speakers=args.speakers,
+            threshold=args.speaker_threshold or DEFAULT_DISTANCE_THRESHOLD,
+        )
+        for unit, label in zip(units, assignment.labels):
+            unit.speaker = label
+        guessed = "" if args.speakers else "  (a guess: pass --speakers N if that's wrong)"
+        print(f"Found {assignment.count} speaker(s){guessed}:", flush=True)
+        work = Path(tempfile.mkdtemp(prefix="sts_speakers_"))
+        for speaker in range(assignment.count):
+            mine = [i for i, u in enumerate(units) if u.speaker == speaker]
+            picked = pick_reference_units(units, mine)
+            speech = sum(units[i].end - units[i].start for i in mine)
+            pad = int(0.1 * ASR_SAMPLE_RATE)
+            gap = np.zeros(int(0.25 * ASR_SAMPLE_RATE), dtype=np.float32)
+            pieces = []
+            for i in picked:
+                begin = max(0, int(units[i].start * ASR_SAMPLE_RATE) - pad)
+                pieces += [audio[begin: int(units[i].end * ASR_SAMPLE_RATE) + pad], gap]
+            clip = np.concatenate(pieces[:-1]) if pieces else np.zeros(0, dtype=np.float32)
+            reference_seconds = len(clip) / ASR_SAMPLE_RATE
+            first, last = units[mine[0]].start, units[mine[-1]].end
+            line = (f"  Speaker {speaker + 1}: {len(mine)} sentence(s), {_fmt(first)}–{_fmt(last)}, "
+                    f"{speech:.0f}s of speech; voice reference {reference_seconds:.0f}s")
+            if reference_seconds < 2.0:
+                speaker_voices[speaker] = None
+                print(line + "  -> too little speech to clone, using the built-in voice", flush=True)
+                continue
+            if reference_seconds < 6.0:
+                line += "  (short: the cloned voice may be a weak match)"
+            print(line, flush=True)
+            reference_path = work / f"speaker{speaker + 1}.wav"
+            ref_text = " ".join(units[i].text for i in picked)
+            write_wav(reference_path, clip, ASR_SAMPLE_RATE)
+            speaker_voices[speaker] = (reference_path, ref_text)
+            if args.save_voice:
+                entry = library.save(f"{args.save_voice} {speaker + 1}", reference_path, ref_text)
+                print(f"    Saved as voice '{entry.name}' in {cfg.tts.voice_library_dir}/.", flush=True)
+    elif args.voice:
         wanted = args.voice.strip().lower()
         entry = next((e for e in library.list() if wanted in (e.name.lower(), e.speaker_id.lower())), None)
         if entry is None:
@@ -344,24 +428,34 @@ def main(argv: list[str] | None = None) -> None:
     print("Speaking the translation…", flush=True)
     import librosa
 
-    clips: list[np.ndarray | None] = []
+    clips: list[np.ndarray | None] = [None] * len(units)
     sample_rate = None
     synth_started = time.monotonic()
-    for index, unit in enumerate(units, start=1):
+    # One speaker at a time, so each voice is set up once; the timeline below doesn't care about the order.
+    order = sorted(range(len(units)), key=lambda i: (units[i].speaker, i))
+    active_speaker = None
+    for done, i in enumerate(order, start=1):
+        unit = units[i]
+        if multiple and unit.speaker != active_speaker:
+            active_speaker = unit.speaker
+            voice = speaker_voices.get(unit.speaker)
+            if voice is None:
+                tts.reset_voice()
+            else:
+                tts.clone_voice(str(voice[0]), voice[1])
         try:
             clip, rate = tts.synthesize(unit.translation, pause_s=cfg.audio.pause_within_s)
             if sample_rate is None:
                 sample_rate = rate
             elif rate != sample_rate:
                 clip = librosa.resample(clip, orig_sr=rate, target_sr=sample_rate)
-            clips.append(clip)
+            clips[i] = clip
         except Exception as exc:  # one bad sentence leaves a gap rather than aborting an hour-long job
-            print(f"  Warning: couldn't speak sentence {index} at {_fmt(unit.start)} ({exc!r}); leaving it silent.", flush=True)
-            clips.append(None)
-        if index % 10 == 0 or index == len(units):
+            print(f"  Warning: couldn't speak the sentence at {_fmt(unit.start)} ({exc!r}); leaving it silent.", flush=True)
+        if done % 10 == 0 or done == len(order):
             elapsed = time.monotonic() - synth_started
-            eta = elapsed / index * (len(units) - index)
-            print(f"  spoken {index}/{len(units)}  (about {_fmt(eta)} left)", flush=True)
+            eta = elapsed / done * (len(order) - done)
+            print(f"  spoken {done}/{len(order)}  (about {_fmt(eta)} left)", flush=True)
     if sample_rate is None:
         raise SystemExit("Speech synthesis produced no audio")
 
@@ -395,7 +489,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.save_transcript:
         transcript = output_path.with_suffix(".json")
         transcript.write_text(json.dumps(
-            [{"start": round(u.start, 2), "end": round(u.end, 2), "ru": u.text, "en": u.translation} for u in units],
+            [{"start": round(u.start, 2), "end": round(u.end, 2), **({"speaker": u.speaker + 1} if multiple else {}),
+              "ru": u.text, "en": u.translation} for u in units],
             ensure_ascii=False, indent=2))
         print(f"Wrote {transcript}", flush=True)
 

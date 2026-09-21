@@ -76,3 +76,14 @@ def test_split_sentences():
         "Здесь речь не идет о ветвях.",
     ]
     assert split_sentences("  ") == []
+
+
+def test_known_one_word_replies_are_translated_exactly():
+    from sts.translate.translator import short_phrase
+
+    assert short_phrase("Аминь.") == "Amen."
+    assert short_phrase("  аминь!  ") == "Amen."
+    assert short_phrase("Слава Богу...") == "Praise God."
+    assert short_phrase("Аминь, аминь.") is None          # not in the table: left to the model
+    assert short_phrase("Аминь всем нам.") is None
+    assert short_phrase("") is None

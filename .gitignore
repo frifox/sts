@@ -8,6 +8,13 @@ venv/
 .env
 .pytest_cache/
 
+# Video/audio media (test recordings etc.)
+*.mkv
+*.mp4
+*.mov
+*.avi
+*.webm
+
 # Audio artifacts
 *.wav
 *.mp3

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from sts.asr.whisper_asr import TimedSegment
-from sts.offline import Unit, default_output_path, group_units, pick_reference_window, plan_timeline
+from sts.offline import Unit, default_output_path, group_units, pick_reference_units, pick_reference_window, plan_timeline
 
 
 def seg(start, end, text="слово", logprob=-0.2):
@@ -111,3 +111,19 @@ def test_measured_sentences_are_not_flagged_but_a_skip_is():
     history = [s / c for c, s in measured]
     bar = min_plausible_seconds_per_char(history, 0.04)
     assert not speech_length_plausible("x" * 100, 6.4 * 0.64, bar, 0.16)
+
+
+def test_speaker_reference_takes_the_clearest_sentences_in_time_order():
+    units = [Unit(0, 5, "a", -0.2), Unit(10, 20, "b", -1.5),        # b is a poor transcription
+             Unit(30, 40, "c", -0.3), Unit(50, 53, "d", -0.1), Unit(60, 70, "e", -0.2)]
+    picked = pick_reference_units(units, [0, 1, 2, 3, 4], max_seconds=18)
+    assert 1 not in picked                                           # skipped: low confidence
+    assert picked == sorted(picked)                                  # returned in time order
+    total = sum(units[i].end - units[i].start for i in picked)
+    assert 15 <= total <= 18 * 1.15 + 1                              # about the requested amount of speech
+
+
+def test_speaker_reference_uses_everything_when_there_is_little():
+    units = [Unit(0, 2, "a", -0.2), Unit(5, 6, "b", -0.9)]
+    assert pick_reference_units(units, [0, 1]) == [0, 1]
+    assert pick_reference_units(units, []) == []
