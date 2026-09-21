@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--accent-strength",
         type=float,
         default=0.7,
-        help="0-1: how far a cloned voice's accent is pulled toward the accent voice; 0 disables (default 0.7)",
+        help="How far a cloned voice's accent is pulled toward the accent voice: 0 disables, 1 fully adopts it, above 1 exaggerates it (can get unstable) (default 0.7)",
     )
     parser.add_argument(
         "-v",
