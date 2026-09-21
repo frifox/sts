@@ -1,9 +1,30 @@
 """Transcribes Russian speech segments with faster-whisper."""
 
+import re
+
 import numpy as np
 from faster_whisper import WhisperModel
 
 from sts.config import ASRConfig
+from sts.log import vlog
+
+# Whisper was trained on lots of subtitled video, so on silence/music/noise it
+# sometimes emits subtitle credits nobody spoke. These are stock phrases from
+# that hallucination family; a pastor has no reason to say any of them.
+_HALLUCINATION_PATTERNS = re.compile(
+    r"субтитры\b|субтитров|"
+    r"продолжение следует|подписывайтесь на канал|"
+    r"thanks for watching|subtitles by|amara\.org",
+    re.IGNORECASE,
+)
+
+
+def is_hallucination(text: str, no_speech_prob: float, avg_logprob: float, cfg: ASRConfig) -> bool:
+    if _HALLUCINATION_PATTERNS.search(text):
+        return True
+    # Whisper's own "this probably isn't speech" signal, only trusted when the
+    # decoder was also unsure of what it wrote.
+    return no_speech_prob > cfg.no_speech_threshold and avg_logprob < cfg.min_avg_logprob
 
 
 class WhisperASR:
@@ -28,5 +49,15 @@ class WhisperASR:
             language=self.cfg.source_language,
             initial_prompt=self.cfg.initial_prompt,
             vad_filter=False,  # segmentation is already handled upstream
+            # Stops one hallucinated line from snowballing into the next segment's decoding.
+            condition_on_previous_text=False,
         )
-        return " ".join(segment.text.strip() for segment in segments).strip()
+        kept = []
+        for segment in segments:
+            text = segment.text.strip()
+            if is_hallucination(text, segment.no_speech_prob, segment.avg_logprob, self.cfg):
+                vlog("asr", f"dropped likely hallucination: {text!r} "
+                            f"(no_speech={segment.no_speech_prob:.2f}, logprob={segment.avg_logprob:.2f})")
+                continue
+            kept.append(text)
+        return " ".join(kept).strip()

@@ -30,6 +30,10 @@ class ASRConfig:
     device: str = "cuda"
     compute_type: str = "float16"
     source_language: str = "ru"
+    # Drop a segment when Whisper both thinks it is probably not speech AND is
+    # unsure of its own transcription (guards against hallucinated text on noise).
+    no_speech_threshold: float = 0.6
+    min_avg_logprob: float = -1.0
     # Nudges Whisper's decoding toward Baptist/religious vocabulary.
     initial_prompt: str = (
         "Проповедь. Библия, церковь, молитва, благодать, покаяние, "
