@@ -53,9 +53,12 @@ class TTSConfig:
     qwen3_model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
     device: str = "cuda"
     language: str = "en"
-    # Built-in XTTS speaker used when no cloned voice is requested (XTTS
-    # only - Qwen3-TTS's cloning model has no built-in default speaker).
-    default_speaker: str = "Claribel Dervla"
+    # Built-in (non-cloned) XTTS voices, used when no cloned/trained voice is
+    # active. XTTS only - Qwen3-TTS's cloning model has no built-in speakers.
+    builtin_voices: dict[str, str] = field(
+        default_factory=lambda: {"male": "Damien Black", "female": "Claribel Dervla"}
+    )
+    default_voice: str = "male"  # key into builtin_voices
     # When set, clone this reference speaker instead (stretch goal).
     speaker_wav: str | None = None
     # Where per-speaker reference clips are saved for reuse across sessions.

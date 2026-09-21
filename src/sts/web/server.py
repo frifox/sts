@@ -135,6 +135,7 @@ class CaptionBroadcaster:
         training_target_seconds: float,
         cloned: bool,
         active_speaker_id: str | None = None,
+        default_voice: str | None = None,
     ) -> None:
         message = {
             "type": "status",
@@ -145,6 +146,7 @@ class CaptionBroadcaster:
             "training_target_seconds": training_target_seconds,
             "cloned": cloned,
             "active_speaker_id": active_speaker_id,
+            "default_voice": default_voice,
         }
         self._last_status = message
         if self.loop is None:

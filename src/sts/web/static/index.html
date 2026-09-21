@@ -224,6 +224,10 @@
   <div id="controls">
     <button id="btn-toggle">Stop</button>
     <button id="btn-voice">🔇 Voice off</button>
+    <select id="default-voice" title="Built-in voice (used when no trained voice is selected)">
+      <option value="male">Male voice</option>
+      <option value="female">Female voice</option>
+    </select>
     <input id="train-name" type="text" placeholder="Speaker name" />
     <button id="btn-train">Train voice</button>
     <select id="speaker-select">
@@ -276,6 +280,7 @@
   const resetBtn = document.getElementById('btn-reset');
   const trainNameInput = document.getElementById('train-name');
   const speakerSelect = document.getElementById('speaker-select');
+  const defaultVoiceSelect = document.getElementById('default-voice');
   let lastStatus = {
     active: true, voice_enabled: false, training: false,
     training_seconds: 0, training_target_seconds: 0, cloned: false, active_speaker_id: null,
@@ -297,6 +302,7 @@
     }
     trainBtn.classList.toggle('is-active', status.training);
 
+    if (status.default_voice) defaultVoiceSelect.value = status.default_voice;
     speakerSelect.value = status.active_speaker_id || '';
   }
 
@@ -333,6 +339,7 @@
     }
   });
   resetBtn.addEventListener('click', () => send('reset'));
+  defaultVoiceSelect.addEventListener('change', () => send('default_voice', { voice: defaultVoiceSelect.value }));
   speakerSelect.addEventListener('change', () => send('select_speaker', { speaker_id: speakerSelect.value }));
 
   function connect() {

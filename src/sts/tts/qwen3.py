@@ -113,6 +113,10 @@ class Qwen3TTSSynthesizer:
         self._prompt = None
         self.cloned_speaker_wav = None
 
+    def set_default_voice(self, voice: str) -> None:
+        # Qwen3-TTS-Base has no built-in male/female voices to choose between.
+        print(f"[qwen3-tts] no built-in '{voice}' voice - pick or train a speaker instead")
+
     def reset_voice(self) -> None:
         self._prompt = None
         self.cloned_speaker_wav = None

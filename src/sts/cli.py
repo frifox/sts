@@ -59,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Voice cloning/synthesis backend (qwen3 needs the 'qwen3' extra: pip install -e '.[qwen3]')",
     )
     parser.add_argument(
+        "--default-voice",
+        default="male",
+        choices=["male", "female"],
+        help="Built-in (non-cloned) voice used when no trained/cloned voice is active (xtts backend)",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -92,6 +98,7 @@ def main() -> None:
     cfg.tts.device = tts_device
     cfg.tts.backend = args.tts_backend
     cfg.tts.voice_library_dir = args.voice_library_dir
+    cfg.tts.default_voice = args.default_voice
 
     broadcaster = None
     if args.web:

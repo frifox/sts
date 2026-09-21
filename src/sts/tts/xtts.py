@@ -34,6 +34,13 @@ class XTTSSynthesizer:
         self.cfg = cfg
         self.tts = TTS(cfg.model_name).to(cfg.device)
         self.cloned_speaker_wav: str | None = cfg.speaker_wav
+        self.default_voice = cfg.default_voice
+
+    def set_default_voice(self, voice: str) -> None:
+        """Picks which built-in voice ("male"/"female") is used when no cloned voice is active."""
+        if voice not in self.cfg.builtin_voices:
+            raise ValueError(f"unknown built-in voice {voice!r}; choose from {list(self.cfg.builtin_voices)}")
+        self.default_voice = voice
 
     def clone_voice(self, reference_wav_path: str, ref_text: str | None = None) -> None:
         """Registers a reference clip (10-20s is enough) to clone for
@@ -58,6 +65,6 @@ class XTTSSynthesizer:
             )
         else:
             wav = self.tts.tts(
-                text=text, speaker=self.cfg.default_speaker, language=self.cfg.language
+                text=text, speaker=self.cfg.builtin_voices[self.default_voice], language=self.cfg.language
             )
         return np.asarray(wav, dtype=np.float32), SAMPLE_RATE
