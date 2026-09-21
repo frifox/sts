@@ -36,6 +36,7 @@ class CaptionBroadcaster:
         self.on_control: Callable[[dict], None] | None = None
         self._last_status: dict | None = None
         self._last_library: dict | None = None
+        self._last_devices: dict | None = None
         self._last_design: dict = {"type": "design", "state": "idle", "message": "", "has_voice": False}
         self._last_stage: dict = {"type": "stage", "text": "Starting…", "ready": False}
         self._history: dict[str, deque[str]] = {
@@ -56,6 +57,8 @@ class CaptionBroadcaster:
         if self._last_library is not None:
             await websocket.send_text(json.dumps(self._last_library))
         await websocket.send_text(json.dumps(self._last_design))
+        if self._last_devices is not None:
+            await websocket.send_text(json.dumps(self._last_devices))
         with self._history_lock:
             history = {kind: list(lines) for kind, lines in self._history.items()}
         for kind, lines in history.items():
@@ -119,6 +122,13 @@ class CaptionBroadcaster:
         if self.loop is None:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all(self._last_stage), self.loop)
+
+    def broadcast_devices(self, message: dict) -> None:
+        """The audio device lists and current selection (plus an `error`/`applied` note after an Apply)."""
+        self._last_devices = {**message, "error": None, "applied": False}
+        if self.loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
     def broadcast_design(self, state: str, message: str = "", has_voice: bool = False) -> None:
         """Progress of the "Create Voice" dialog: idle | busy | ready | saved | error."""

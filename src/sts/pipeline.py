@@ -71,6 +71,7 @@ class Pipeline:
         # "Create Voice" dialog: the designed voice's reference clip + its text.
         self._design: tuple[str, str] | None = None
         self._design_busy = threading.Lock()
+        self._device_lock = threading.Lock()
         self._active_speaker_id: str | None = None
 
         self._segments: queue.Queue = queue.Queue()
@@ -135,6 +136,9 @@ class Pipeline:
             self.cfg.tts.default_voice = voice
             self.tts.set_default_voice(voice)
             self._select_speaker(None)  # picking a built-in voice drops any cloned/trained one
+        elif action in ("refresh_devices", "set_audio_devices"):
+            threading.Thread(target=self._handle_device_action, args=(action, data), daemon=True).start()
+            return
         elif action == "set_min_silence":
             try:
                 ms = int(data.get("ms"))
@@ -240,6 +244,55 @@ class Pipeline:
             wav_file.setframerate(sample_rate)
             wav_file.writeframes(pcm16.tobytes())
         return path
+
+    # -- audio device selection (the configuration dialog) --------------------
+
+    def _broadcast_devices(self, error: str | None = None, applied: bool = False) -> None:
+        if not self.broadcaster:
+            return
+        from sts.audio.devices import describe_devices
+
+        try:
+            message = describe_devices(self.cfg.audio.input_device, self.cfg.audio.output_device)
+        except Exception as exc:
+            message = {"type": "devices", "inputs": [], "outputs": [], "input": None, "output": None}
+            error = error or f"Couldn't list audio devices: {exc}"
+        message.update(error=error, applied=applied)
+        self.broadcaster.broadcast_devices(message)
+
+    def _handle_device_action(self, action: str, data: dict) -> None:
+        # Opening audio streams can take a moment, so this runs off the web server's event loop.
+        if action == "refresh_devices":
+            self._broadcast_devices()
+            return
+
+        def parse(value):
+            return None if value in (None, "") else int(value)
+
+        try:
+            new_input, new_output = parse(data.get("input")), parse(data.get("output"))
+        except (TypeError, ValueError):
+            return
+        audio = self.cfg.audio
+        with self._device_lock:
+            try:
+                from sts.audio.devices import check_input, check_output
+
+                if new_input != audio.input_device:
+                    check_input(new_input, audio.sample_rate, audio.channels)
+                if new_output != audio.output_device:
+                    check_output(new_output, 24_000)
+                if new_input != audio.input_device:
+                    self.capture.switch_device(new_input)
+                if new_output != audio.output_device:
+                    audio.output_device = new_output
+                    self.playback.stop()  # the output stream reopens on the new device with the next clip
+            except Exception as exc:
+                print(f"[audio] couldn't apply the selected devices: {exc}")
+                self._broadcast_devices(error=f"Couldn't use that device: {exc}")
+                return
+            vlog("audio", f"devices applied: input={audio.input_device}, output={audio.output_device}")
+            self._broadcast_devices(applied=True)
 
     # -- "Create Voice" dialog (Qwen3 voice design) ---------------------------
 
@@ -450,6 +503,7 @@ class Pipeline:
             self._threads.append(thread)
         self._broadcast_status()
         self._broadcast_library()
+        self._broadcast_devices()
 
     def stop(self) -> None:
         self._stop.set()

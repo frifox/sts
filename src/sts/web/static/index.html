@@ -211,6 +211,57 @@
 
   #btn-save-voice:disabled { opacity: 0.4; cursor: default; }
   #btn-create-voice[hidden] { display: none; }
+  /* Dark styling for the modal dialogs' own buttons and fields (the header's are styled via #controls). */
+  #config-dialog button, #design-dialog button, #save-dialog button {
+    font: inherit;
+    font-size: 0.9rem;
+    padding: 0.5em 1em;
+    border-radius: 6px;
+    border: 1px solid #444;
+    background: #1a1a1e;
+    color: #ccc;
+    cursor: pointer;
+  }
+  #config-dialog button:hover:not(:disabled), #design-dialog button:hover:not(:disabled),
+  #save-dialog button:hover:not(:disabled) { border-color: #777; }
+  #config-dialog select, #design-dialog textarea, #design-dialog input[type=text], #save-dialog input {
+    border-radius: 6px;
+    border: 1px solid #444;
+    background: #111;
+    color: #ddd;
+  }
+
+  #btn-config {
+    font: inherit;
+    font-size: 1.15rem;
+    line-height: 1;
+    padding: 0.3em 0.45em;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #9a9aa5;
+    cursor: pointer;
+  }
+  #btn-config:hover { color: #ddd; border-color: #444; }
+
+  #config-dialog {
+    position: fixed; inset: 0; z-index: 10; display: none;
+    align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.6);
+  }
+  #config-dialog.show { display: flex; }
+  #config-dialog .card {
+    background: #16161c; border: 1px solid #333; border-radius: 10px;
+    padding: 1.2rem 1.4rem; width: min(30rem, 92vw); max-height: 92vh; overflow-y: auto;
+    color: #ddd; font-size: 0.95rem;
+  }
+  #config-dialog h3 { margin: 0 0 0.2rem; font-size: 1.05rem; }
+  #config-dialog h4 { margin: 1.1rem 0 0.2rem; font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase; color: #777; }
+  #config-dialog label { display: block; margin: 0.8rem 0 0.3rem; font-size: 0.85rem; color: #9a9aa5; }
+  #config-dialog select { width: 100%; box-sizing: border-box; padding: 0.5rem; font: inherit; }
+  #config-note { min-height: 1.3em; margin-top: 0.9rem; font-size: 0.85rem; color: #e0b341; }
+  #config-note.error { color: #e08a8a; }
+  #config-dialog .footer { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.9rem; }
+  #config-dialog button:disabled { opacity: 0.4; cursor: default; }
   #design-dialog {
     position: fixed; inset: 0; z-index: 10; display: none;
     align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.6);
@@ -274,6 +325,7 @@
       </label>
       <div id="stage"></div>
       <div id="status" class="disconnected">Not connected</div>
+      <button id="btn-config" title="Configuration" aria-label="Configuration">⚙</button>
     </div>
   </div>
     <div class="panel" id="original-panel">
@@ -293,7 +345,23 @@
   </div>
 
 
-<div id="design-dialog">
+<div id="config-dialog">
+    <div class="card">
+      <h3>Configuration</h3>
+      <h4>Audio</h4>
+      <label for="cfg-input">Input device (microphone / line in)</label>
+      <select id="cfg-input"></select>
+      <label for="cfg-output">Output device (where the translated voice plays)</label>
+      <select id="cfg-output"></select>
+      <div id="config-note"></div>
+      <div class="footer">
+        <button type="button" id="cfg-cancel">Close</button>
+        <button type="button" id="cfg-apply" disabled>Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="design-dialog">
     <div class="card">
       <h3>Create voice</h3>
       <label for="design-prompt">Describe the voice</label>
@@ -389,6 +457,13 @@
   const trainBtn = document.getElementById('btn-train');
   const resetBtn = document.getElementById('btn-reset');
   const saveBtn = document.getElementById('btn-save-voice');
+  const configBtn = document.getElementById('btn-config');
+  const configDialog = document.getElementById('config-dialog');
+  const cfgInput = document.getElementById('cfg-input');
+  const cfgOutput = document.getElementById('cfg-output');
+  const cfgApply = document.getElementById('cfg-apply');
+  const configNote = document.getElementById('config-note');
+  let lastDevices = null;
   const pauseSlider = document.getElementById('pause-slider');
   const pauseValue = document.getElementById('pause-value');
   let draggingPause = false;
@@ -577,6 +652,68 @@
     pauseTimer = setTimeout(() => send('set_min_silence', { ms: Number(pauseSlider.value) }), 80);
   });
 
+  // -- Configuration: audio devices -------------------------------------------
+  const deviceValue = (index) => (index == null ? '' : String(index));
+
+  function fillDeviceSelect(select, devices, selected, defaultIndex) {
+    select.innerHTML = '';
+    const defaultName = devices.find((d) => d.index === defaultIndex)?.name;
+    const systemDefault = document.createElement('option');
+    systemDefault.value = '';
+    systemDefault.textContent = defaultName ? `System default (${defaultName})` : 'System default';
+    select.appendChild(systemDefault);
+    for (const device of devices) {
+      const option = document.createElement('option');
+      option.value = String(device.index);
+      option.textContent = `${device.index}: ${device.name}`;
+      select.appendChild(option);
+    }
+    select.value = deviceValue(selected);
+    select.dataset.applied = select.value;  // what the backend is using right now
+  }
+
+  function updateApplyState() {
+    cfgApply.disabled = !lastDevices ||
+      (cfgInput.value === cfgInput.dataset.applied && cfgOutput.value === cfgOutput.dataset.applied);
+  }
+
+  function applyDevices(msg) {
+    lastDevices = msg;
+    // Don't rebuild the lists under the user's cursor while they're choosing.
+    if (document.activeElement !== cfgInput && document.activeElement !== cfgOutput) {
+      fillDeviceSelect(cfgInput, msg.inputs, msg.input, msg.default_input);
+      fillDeviceSelect(cfgOutput, msg.outputs, msg.output, msg.default_output);
+    }
+    if (msg.error) {
+      configNote.textContent = msg.error;
+      configNote.classList.add('error');
+      fillDeviceSelect(cfgInput, msg.inputs, msg.input, msg.default_input);   // show what is really in use
+      fillDeviceSelect(cfgOutput, msg.outputs, msg.output, msg.default_output);
+    } else if (msg.applied) {
+      configNote.textContent = 'Applied.';
+      configNote.classList.remove('error');
+    }
+    updateApplyState();
+  }
+
+  configBtn.addEventListener('click', () => {
+    configNote.textContent = '';
+    configNote.classList.remove('error');
+    configDialog.classList.add('show');
+    send('refresh_devices');  // pick up devices plugged in since the page loaded
+  });
+  document.getElementById('cfg-cancel').addEventListener('click', () => configDialog.classList.remove('show'));
+  configDialog.addEventListener('click', (event) => { if (event.target === configDialog) configDialog.classList.remove('show'); });
+  window.addEventListener('keydown', (event) => { if (event.key === 'Escape') configDialog.classList.remove('show'); });
+  cfgInput.addEventListener('change', updateApplyState);
+  cfgOutput.addEventListener('change', updateApplyState);
+  cfgApply.addEventListener('click', () => {
+    configNote.textContent = 'Applying…';
+    configNote.classList.remove('error');
+    cfgApply.disabled = true;
+    send('set_audio_devices', { input: cfgInput.value, output: cfgOutput.value });
+  });
+
   function syncDeleteButton() {
     // Only offered while a saved (Custom) voice is selected.
     deleteBtn.hidden = !voiceSelect.value.startsWith('saved:');
@@ -628,6 +765,7 @@
       else if (msg.type === 'status') applyStatus(msg);
       else if (msg.type === 'library') applyLibrary(msg);
       else if (msg.type === 'design') applyDesign(msg);
+      else if (msg.type === 'devices') applyDevices(msg);
     };
   }
 

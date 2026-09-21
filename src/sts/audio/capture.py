@@ -49,6 +49,22 @@ class AudioCapture:
         vlog("audio", f"listening on input [{info['index']}] {info['name']} "
                       f"({self.cfg.sample_rate} Hz, {self.cfg.block_ms} ms frames)")
 
+    def switch_device(self, device: int | None) -> None:
+        """Moves capture to another input device while running. If the new
+        device won't open, capture goes back to the old one and the error is raised."""
+        previous = self.cfg.input_device
+        self.stop()
+        self.cfg.input_device = device
+        try:
+            self.start()
+        except Exception:
+            self.cfg.input_device = previous
+            self.start()
+            raise
+        finally:
+            with self.frames.mutex:
+                self.frames.queue.clear()  # audio queued from the old device isn't part of the new stream
+
     def stop(self) -> None:
         self._stop.set()
         if self._stream is not None:

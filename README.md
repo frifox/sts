@@ -110,6 +110,15 @@ slow translation or TTS call doesn't stall audio capture.
     it. Skip it to keep the voice for this session only. Click Reset before
     the next speaker so their audio doesn't get folded into the previous
     one's training sample.
+  - **Configuration** (gear icon, far right of the header) — opens a dialog
+    to choose the **input** and **output** audio devices from everything the
+    machine has (or "System default"). **Apply** switches them live, without
+    restarting: capture moves to the new input, and the next spoken sentence
+    plays on the new output. If a device can't be opened, you get an error
+    and the previous one stays in use. The list refreshes each time the
+    dialog opens, so a device plugged in after start-up shows up. Choices
+    last until `sts` restarts (`--input-device` / `--output-device` set the
+    starting ones).
   - **Pause slider** (top right, next to the connection indicator) — how long
     the speaker must pause before a caption ends and a new one starts
     (200-1500 ms, default 700; `--min-silence-ms` sets the starting value).
