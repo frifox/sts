@@ -77,6 +77,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="How far a cloned voice's accent is pulled toward the accent voice: 0 disables, 1 fully adopts it, above 1 exaggerates it (can get unstable) (default 0.7)",
     )
     parser.add_argument(
+        "--min-silence-ms",
+        type=int,
+        default=None,
+        help="Pause length (ms) that ends a caption segment; lower = shorter, more frequent captions (default 700)",
+    )
+    parser.add_argument(
+        "--max-segment-s",
+        type=float,
+        default=None,
+        help="Longest a single caption segment may run (seconds) before it is cut regardless of pauses (default 20)",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -108,6 +120,10 @@ def main() -> None:
     cfg.asr.model_size = args.whisper_model
     cfg.translation.device = translation_device
     cfg.tts.device = tts_device
+    if args.min_silence_ms is not None:
+        cfg.vad.min_silence_ms = args.min_silence_ms
+    if args.max_segment_s is not None:
+        cfg.vad.max_segment_ms = int(args.max_segment_s * 1000)
     cfg.tts.backend = args.tts_backend
     cfg.tts.use_backend_voices()
     cfg.tts.voice_library_dir = args.voice_library_dir
