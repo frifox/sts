@@ -50,7 +50,9 @@ mps or an older/absent GPU, same reasoning as the Metal case either way.
 
 import gc
 import re
+import statistics
 import threading
+from collections import deque
 
 import numpy as np
 import torch
@@ -80,6 +82,15 @@ def use_icl_conditioning(mode: str, ref_text: str | None) -> bool:
     if ref_text is None or mode == "xvector":
         return False
     return mode == "icl" or transcript_is_english(ref_text)
+
+
+def min_plausible_seconds_per_word(pace_history, floor: float) -> float:
+    """Shortest believable time per word. Voices differ a lot in speaking pace
+    (0.28 s/word is normal for a fast one), so once a voice has a few accepted
+    sentences the bar is 70% of its own median pace, never below `floor`."""
+    if len(pace_history) < 3:
+        return floor
+    return max(floor, 0.7 * statistics.median(pace_history))
 
 
 def speech_length_plausible(text: str, seconds: float, min_spw: float, max_spw: float) -> bool:
@@ -121,17 +132,13 @@ class Qwen3TTSSynthesizer:
             dtype=_dtype_for_device(cfg.device),
             attn_implementation=_attn_impl_for_device(cfg.device),
         )
-        self._custom_model = Qwen3TTSModel.from_pretrained(
-            cfg.qwen3_custom_model_name,
-            device_map=cfg.device,
-            dtype=_dtype_for_device(cfg.device),
-            attn_implementation=_attn_impl_for_device(cfg.device),
-        )
+        self._custom_model = self._load_custom_model() if cfg.qwen3_preload_presets else None
         self.default_voice = cfg.resolve_voice(cfg.default_voice)
         # MPS/CUDA models aren't safe to run from two threads at once, and the
         # voice-design dialog synthesizes previews while the live pipeline runs.
         # (On mps this is the process-wide GPU lock shared with translation.)
         self._lock = gpu_lock(cfg.device) if cfg.device == "mps" else threading.Lock()
+        self._pace_history: deque = deque(maxlen=20)  # seconds/word of recently accepted sentences
         self._design_model = None
         self._design_load_lock = threading.Lock()
         self._prompt = None
@@ -204,6 +211,7 @@ class Qwen3TTSSynthesizer:
         return np.asarray(wavs[0], dtype=np.float32), sample_rate
 
     def clone_voice(self, reference_wav_path: str, ref_text: str | None = None) -> None:
+        self._pace_history.clear()
         with self._lock:
             self._prompt = self.model.create_voice_clone_prompt(
                 ref_audio=reference_wav_path,
@@ -222,6 +230,7 @@ class Qwen3TTSSynthesizer:
             self.clone_voice(str(entry.wav_path), entry.ref_text)
 
     def _activate_lora(self, entry: VoiceEntry) -> None:
+        self._pace_history.clear()
         if entry.speaker_id not in self._lora_models:
             self._lora_models[entry.speaker_id] = _load_lora_model(self.cfg, entry)
         self._active_lora_speaker_id = entry.speaker_id
@@ -232,6 +241,7 @@ class Qwen3TTSSynthesizer:
         voice = self.cfg.resolve_voice(voice)
         if voice not in self.cfg.all_voices():
             raise ValueError(f"unknown preset voice {voice!r}; choose from {self.cfg.all_voices()}")
+        self._pace_history.clear()
         self.default_voice = voice
 
     def forget_voice(self, speaker_id: str) -> None:
@@ -240,9 +250,18 @@ class Qwen3TTSSynthesizer:
             gc.collect()
 
     def reset_voice(self) -> None:
+        self._pace_history.clear()
         self._prompt = None
         self.cloned_speaker_wav = None
         self._active_lora_speaker_id = None
+
+    def _load_custom_model(self):
+        return Qwen3TTSModel.from_pretrained(
+            self.cfg.qwen3_custom_model_name,
+            device_map=self.cfg.device,
+            dtype=_dtype_for_device(self.cfg.device),
+            attn_implementation=_attn_impl_for_device(self.cfg.device),
+        )
 
     def synthesize_stream(self, text: str):
         """Yields (audio, sample_rate) per short piece, so playback can start
@@ -266,11 +285,14 @@ class Qwen3TTSSynthesizer:
         for attempt in range(self.cfg.qwen3_max_retries + 1):
             audio, sample_rate = self._generate_once(text)
             seconds = len(audio) / sample_rate
-            if speech_length_plausible(
-                text, seconds, self.cfg.qwen3_min_seconds_per_word, self.cfg.qwen3_max_seconds_per_word
-            ):
+            words = len(text.split())
+            min_spw = min_plausible_seconds_per_word(self._pace_history, self.cfg.qwen3_min_seconds_per_word)
+            if speech_length_plausible(text, seconds, min_spw, self.cfg.qwen3_max_seconds_per_word):
+                if words >= 4:
+                    self._pace_history.append(seconds / words)
                 return audio, sample_rate
-            vlog("tts", f"suspicious speech length ({seconds:.1f}s for {len(text.split())} words), "
+            vlog("tts", f"suspicious speech length ({seconds:.1f}s for {words} words, "
+                        f"expected at least {min_spw * words:.1f}s), "
                         f"regenerating (attempt {attempt + 1}): {text[:60]!r}")
             # Skipped-word failures come out too short, so the longest attempt is the best fallback.
             if best is None or len(audio) > len(best[0]):
@@ -289,6 +311,8 @@ class Qwen3TTSSynthesizer:
                     text=text, language="English", voice_clone_prompt=self._prompt, **self._sampling()
                 )
             else:
+                if self._custom_model is None:
+                    self._custom_model = self._load_custom_model()
                 wavs, sample_rate = self._custom_model.generate_custom_voice(
                     text=text,
                     speaker=self.default_voice.lower(),

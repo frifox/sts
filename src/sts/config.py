@@ -65,6 +65,10 @@ class TTSConfig:
     # needed. Used when no cloned/trained voice is active. `qwen3_style_instruct`
     # steers delivery (ignored by the 0.6B variant).
     qwen3_custom_model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+    # Load the preset-voice model at start-up (live use, where the preset is the
+    # default voice). False loads it only if it is actually needed, which saves
+    # several GB when a cloned voice is used throughout (video translation).
+    qwen3_preload_presets: bool = True
     # VoiceDesign variant: invents a voice from a text description (the "Create
     # Voice" dialog). Loaded only while that dialog is in use.
     qwen3_design_model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
@@ -79,7 +83,7 @@ class TTSConfig:
     # this many characters, and a piece whose audio is implausibly short (or
     # long) for its word count is regenerated, up to `qwen3_max_retries` times.
     qwen3_max_chars: int = 140
-    qwen3_min_seconds_per_word: float = 0.3
+    qwen3_min_seconds_per_word: float = 0.2  # absolute floor; once a voice has a track record its own pace is used
     # How a reference clip conditions the voice. "icl" feeds the clip *and its
     # transcript* to the model (closest voice match, but a long or foreign-language
     # transcript is a common cause of skipped speech); "xvector" uses only a speaker

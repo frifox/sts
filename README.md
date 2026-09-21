@@ -548,6 +548,49 @@ sts-import-voice "Pastor Ivan" pastor_ivan ./checkpoint-epoch-9 \
   --lora-scale 0.3 --voice-library-dir /data/sts-voices
 ```
 
+## Translating a recorded video
+
+`translate.py` translates a whole video (Russian -> English) offline and
+writes a copy with the audio track replaced by an English voice. The video
+stream is copied untouched (no re-encoding), so it's fast and lossless. Needs
+`ffmpeg` (`brew install ffmpeg` / `sudo apt install ffmpeg`).
+
+```bash
+python translate.py --input talk.mp4                  # -> talk-english.mp4, next to the input
+python translate.py --input talk.mkv --output out/english.mkv
+python translate.py --input talk.mov --voice "Pastor Ivan"   # speak with a saved voice
+python translate.py --input talk.mp4 --save-voice "Pastor Ivan"
+                                                      # keep the voice cloned from the video
+python translate.py --input talk.mp4 --keep-original --save-transcript
+                                                      # original audio as a 2nd track + a .json of the text
+```
+
+It uses **Qwen3-TTS by default**, so run it from the environment that has the
+`qwen3` extra (`.venv-qwen`, see Setup); `--tts-backend xtts` uses XTTS instead.
+It accepts the same engine options as `sts` (`--device`, `--whisper-model`,
+`--default-voice`, `--qwen-temperature`, ...); see `python translate.py --help`.
+
+How it works: ffmpeg extracts the audio; Whisper transcribes it with word
+timestamps; the text is split into sentences, translated one sentence at a
+time, and spoken in a cloned voice; each sentence is then placed on the
+timeline where the Russian sentence began.
+
+- **Voice:** by default the speaker is cloned from the cleanest ~10-20 s
+  stretch of the video's own audio. `--voice NAME` uses one from the voice
+  library instead (e.g. trained in the live app), and `--no-clone` uses the
+  built-in default voice. It assumes **one speaker**; with several people the
+  clone is of whoever spoke in that stretch.
+- **Timing:** English often runs longer than the Russian it replaces. A
+  sentence that would run into the next is sped up (at most `--max-speedup`,
+  default 1.3x); if that isn't enough, later sentences start a little late and
+  catch up at the next pause. The summary line reports how many were affected.
+- **Output:** the new audio is AAC and becomes the default track. Subtitles
+  and extra streams from the input aren't copied. Any background music or
+  sound in the original is replaced too, since only the speech is regenerated.
+- **Speed:** on Apple Silicon, expect roughly real time or slower for the
+  speech step, plus transcription time; a one-hour video takes on the order
+  of an hour or more. Progress and a time estimate are printed.
+
 ## Tests
 
 ```bash

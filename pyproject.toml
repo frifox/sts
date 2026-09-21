@@ -33,6 +33,7 @@ qwen3 = [
 [project.scripts]
 sts = "sts.cli:main"
 sts-import-voice = "sts.tts.import_cli:main"
+sts-translate = "sts.offline:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

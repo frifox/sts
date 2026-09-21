@@ -1,6 +1,8 @@
 """Transcribes Russian speech segments with faster-whisper."""
 
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import numpy as np
 from faster_whisper import WhisperModel
@@ -18,6 +20,32 @@ _HALLUCINATION_PATTERNS = re.compile(
     r"thanks for watching|subtitles by|amara\.org",
     re.IGNORECASE,
 )
+
+
+@dataclass
+class TimedSegment:
+    start: float
+    end: float
+    text: str
+    no_speech_prob: float
+    avg_logprob: float
+
+
+def sentences_from_words(words) -> list[tuple[float, float, str]]:
+    """Splits a segment's words (objects with .start/.end/.word) at sentence-ending
+    punctuation, giving each sentence its own start and end time. Whisper can
+    return one segment covering several sentences and pauses; without this the
+    translated sentences would all be placed at the segment's start."""
+    sentences: list[tuple[float, float, str]] = []
+    current: list = []
+    for word in words:
+        current.append(word)
+        if word.word.rstrip().endswith((".", "!", "?", "…")):
+            sentences.append((current[0].start, current[-1].end, "".join(w.word for w in current).strip()))
+            current = []
+    if current:
+        sentences.append((current[0].start, current[-1].end, "".join(w.word for w in current).strip()))
+    return sentences
 
 
 def _words(text: str) -> str:
@@ -70,3 +98,36 @@ class WhisperASR:
                 continue
             kept.append(text)
         return clean_transcript(" ".join(kept))
+
+    def transcribe_segments(
+        self, audio: np.ndarray, on_progress: Callable[[float, float], None] | None = None
+    ) -> list[TimedSegment]:
+        """Transcribes a long recording (whole video) into timestamped segments.
+
+        Unlike the live path, this lets faster-whisper's own voice-activity
+        filter find the speech, since there is no upstream segmenter.
+        `on_progress(seconds_done, total_seconds)` is called as segments arrive.
+        """
+        segments, info = self.model.transcribe(
+            audio,
+            language=self.cfg.source_language,
+            initial_prompt=self.cfg.initial_prompt,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+            condition_on_previous_text=False,
+            word_timestamps=True,
+        )
+        out: list[TimedSegment] = []
+        for segment in segments:
+            text = segment.text.strip()
+            if on_progress:
+                on_progress(segment.end, info.duration)
+            if is_hallucination(text, segment.no_speech_prob, segment.avg_logprob, self.cfg):
+                vlog("asr", f"dropped likely hallucination at {segment.start:.1f}s: {text!r}")
+                continue
+            pieces = sentences_from_words(segment.words) if segment.words else [(segment.start, segment.end, text)]
+            for start, end, sentence in pieces:
+                sentence = clean_transcript(sentence)
+                if sentence:
+                    out.append(TimedSegment(start, end, sentence, segment.no_speech_prob, segment.avg_logprob))
+        return out
