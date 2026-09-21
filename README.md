@@ -35,7 +35,7 @@ sound card -> VAD segmenter -> Whisper ASR (ru) -> NLLB translation (ru->en) -> 
 - **TTS** (`sts.tts`) — two swappable backends, picked via `--tts-backend`:
   - `xtts` (default) — Coqui XTTS v2. Ships natural built-in speakers, plus
     zero-shot cloning from a short reference clip.
-  - `qwen3` — Qwen3-TTS-Base (`pip install -e '.[qwen3]'`), Apache-2.0,
+  - `qwen3` — Qwen3-TTS-Base (`pip install -e '.[qwen3]'`, in its own virtualenv - see Setup), Apache-2.0,
     self-hosted. Also zero-shot cloning, and officially supports
     cross-lingual cloning (Russian reference clip -> English output) with a
     reusable "clone prompt" object built from the clip once. It has no
@@ -244,7 +244,7 @@ but will lag). Supported on Windows, macOS, and Linux.
 ```bash
 git clone https://github.com/frifox/sts.git
 cd sts
-pip install -e .
+pip install -e ".[xtts]"
 ```
 
 If you already have Python, git, and (for `--device cuda`) a working CUDA
@@ -314,9 +314,10 @@ the path a Windows + NVIDIA GPU setup - e.g. a GTX 1080 Ti - would follow):
 
 6. **Install the project:**
    ```
-   pip install -e .
+   pip install -e ".[xtts]"
    ```
-   Add the Qwen3-TTS backend too if you want it (`pip install -e ".[qwen3]"`)
+   The Qwen3-TTS backend needs a separate virtualenv (`pip install -e ".[qwen3]"`; its
+   transformers requirement conflicts with XTTS's)
    — see **Older NVIDIA GPUs (pre-Ampere) and Windows** above for what that
    backend needs on a card like a GTX 1080 Ti specifically.
 
@@ -372,7 +373,7 @@ mps` does and doesn't cover) or Intel Macs with no dev environment yet:
 
 4. **Install the project:**
    ```
-   pip install -e .
+   pip install -e ".[xtts]"
    ```
    `pip install torch` on macOS installs a universal build with Apple
    Silicon (MPS) support already included - no separate CUDA-style index-url
@@ -464,9 +465,10 @@ the Python side is identical everywhere.
 
 5. **Install the project:**
    ```
-   pip install -e .
+   pip install -e ".[xtts]"
    ```
-   Add `pip install -e ".[qwen3]"` for the Qwen3-TTS backend if you want it.
+   The Qwen3-TTS backend needs its own virtualenv (`pip install -e ".[qwen3]"`), because
+   its transformers requirement conflicts with XTTS's.
 
 6. **Run it** - see **First run, on any OS** below. Linux generally has no
    OS-level app-permission prompts for mic/network access

@@ -8,14 +8,19 @@ dependencies = [
     "numpy>=1.26",
     "torch>=2.1",
     "faster-whisper>=1.0",
-    "transformers>=4.40,<4.50",
+    "transformers>=4.40",
     "sentencepiece>=0.2",
-    "TTS>=0.22",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
 ]
 
 [project.optional-dependencies]
+# The two TTS backends need incompatible transformers versions (Coqui TTS
+# breaks on >=4.50, qwen-tts pins ==4.57.3), so install ONE per virtualenv.
+xtts = [
+    "TTS>=0.22",
+    "transformers>=4.40,<4.50",
+]
 dev = [
     "pytest>=8.0",
 ]
