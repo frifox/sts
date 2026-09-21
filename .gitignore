@@ -26,3 +26,6 @@ models/
 # Editors
 .vscode/
 .idea/
+
+# Per-user saved voices (reference clips + metadata)
+voices/
