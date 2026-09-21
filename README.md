@@ -110,6 +110,12 @@ slow translation or TTS call doesn't stall audio capture.
     it. Skip it to keep the voice for this session only. Click Reset before
     the next speaker so their audio doesn't get folded into the previous
     one's training sample.
+  - **Pause slider** (top right, next to the connection indicator) — how long
+    the speaker must pause before a caption ends and a new one starts
+    (200-1500 ms, default 700; `--min-silence-ms` sets the starting value).
+    It takes effect on the very next pause, live, so tune it per speaker: a
+    fast talker who barely pauses wants a lower value (shorter, quicker
+    captions), a slow one a higher value. All open pages stay in sync.
   - **Voice dropdown** — a single list with two groups:
     - **Default** — the built-in (non-trained) voices. XTTS offers 13
       (defaults to Adde Michal; `--default-voice "Craig Gutsy"` or

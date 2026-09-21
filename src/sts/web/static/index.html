@@ -84,6 +84,16 @@
     gap: 1.2em;
   }
 
+  #pause-control {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    cursor: default;
+  }
+
+  #pause-slider { width: 7.5em; accent-color: #7a8aa0; cursor: pointer; }
+  #pause-value { min-width: 4.2em; font-variant-numeric: tabular-nums; }
+
   #status, #stage {
     display: flex;
     align-items: center;
@@ -257,6 +267,11 @@
       <button id="btn-reset">Reset</button>
     </div>
     <div id="indicators">
+      <label id="pause-control" title="How long the speaker must pause before the current caption ends and a new one starts. Lower = shorter, quicker captions; higher = longer ones. Adjust to the speaker.">
+        Pause
+        <input id="pause-slider" type="range" min="200" max="1500" step="50" value="700" />
+        <span id="pause-value">700 ms</span>
+      </label>
       <div id="stage"></div>
       <div id="status" class="disconnected">Not connected</div>
     </div>
@@ -374,6 +389,9 @@
   const trainBtn = document.getElementById('btn-train');
   const resetBtn = document.getElementById('btn-reset');
   const saveBtn = document.getElementById('btn-save-voice');
+  const pauseSlider = document.getElementById('pause-slider');
+  const pauseValue = document.getElementById('pause-value');
+  let draggingPause = false;
   const createBtn = document.getElementById('btn-create-voice');
   const designDialog = document.getElementById('design-dialog');
   const designPrompt = document.getElementById('design-prompt');
@@ -455,6 +473,10 @@
     createBtn.hidden = !status.can_design;
     if (!status.can_save) closeSaveDialog();
 
+    if (status.min_silence_ms != null && !draggingPause) {
+      pauseSlider.value = status.min_silence_ms;
+      pauseValue.textContent = `${status.min_silence_ms} ms`;
+    }
     if (status.voice_groups) defaultVoices = Object.values(status.voice_groups).flat();
     renderVoiceSelect();
   }
@@ -542,6 +564,17 @@
     if (!name) return;
     send('save_voice', { name });
     closeSaveDialog();
+  });
+
+  // Live pause threshold: the label follows the thumb; the value goes to the
+  // backend as it moves, throttled so a fast drag doesn't flood the socket.
+  let pauseTimer = null;
+  pauseSlider.addEventListener('pointerdown', () => { draggingPause = true; });
+  window.addEventListener('pointerup', () => { draggingPause = false; });
+  pauseSlider.addEventListener('input', () => {
+    pauseValue.textContent = `${pauseSlider.value} ms`;
+    clearTimeout(pauseTimer);
+    pauseTimer = setTimeout(() => send('set_min_silence', { ms: Number(pauseSlider.value) }), 80);
   });
 
   function syncDeleteButton() {

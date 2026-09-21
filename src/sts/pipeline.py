@@ -35,6 +35,9 @@ from sts.tts import create_synthesizer
 from sts.tts.voice_library import VoiceLibrary
 from sts.web.server import CaptionBroadcaster
 
+# Bounds for the live pause-threshold slider (milliseconds of silence that end a snippet).
+MIN_SILENCE_RANGE_MS = (200, 1500)
+
 # What the designed voice says when its reference clip is generated. The clip
 # becomes the saved voice's reference, so it should be a natural, moderately
 # long passage (about 8-10 s), and it must match the text passed to the model.
@@ -132,6 +135,14 @@ class Pipeline:
             self.cfg.tts.default_voice = voice
             self.tts.set_default_voice(voice)
             self._select_speaker(None)  # picking a built-in voice drops any cloned/trained one
+        elif action == "set_min_silence":
+            try:
+                ms = int(data.get("ms"))
+            except (TypeError, ValueError):
+                return
+            # Read by the voice detector on every frame, so this applies to the very next pause.
+            self.cfg.vad.min_silence_ms = max(MIN_SILENCE_RANGE_MS[0], min(MIN_SILENCE_RANGE_MS[1], ms))
+            vlog("vad", f"pause threshold set to {self.cfg.vad.min_silence_ms} ms")
         elif action == "delete_voice":
             self._delete_voice(str(data.get("speaker_id") or ""))
         elif action == "select_speaker":
@@ -318,6 +329,7 @@ class Pipeline:
                 training_target_seconds=self.control.target_seconds,
                 cloned=self.tts.cloned_speaker_wav is not None,
                 can_save=self._pending_voice is not None,
+                min_silence_ms=self.cfg.vad.min_silence_ms,
                 can_design=hasattr(self.tts, "design_reference"),
                 default_voice=self.cfg.tts.resolve_voice(self.cfg.tts.default_voice),
                 voice_groups=self.cfg.tts.voice_groups,
