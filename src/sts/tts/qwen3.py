@@ -60,7 +60,7 @@ from qwen_tts import Qwen3TTSModel
 
 from sts.config import TTSConfig
 from sts.devices import supports_bf16_and_flash_attention
-from sts.audioquality import clarity_db
+from sts.audioquality import clarity_db, match_level
 from sts.gpu import gpu_lock
 from sts.log import vlog
 from sts.textclean import split_for_tts
@@ -286,7 +286,10 @@ class Qwen3TTSSynthesizer:
         """Yields (audio, sample_rate) per short piece, so playback can start
         early and each piece can be checked (and regenerated) on its own."""
         for piece in split_for_qwen(text, self.cfg.qwen3_max_chars):
-            yield self._synthesize_checked(piece)
+            audio, sample_rate = self._synthesize_checked(piece)
+            if self.cfg.target_level:
+                audio = match_level(audio, sample_rate, self.cfg.target_level)
+            yield audio, sample_rate
 
     def synthesize(self, text: str, pause_s: float = 0.35) -> tuple[np.ndarray, int]:
         """Whole text as one clip, with `pause_s` of silence between sentences."""

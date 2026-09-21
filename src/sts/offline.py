@@ -291,9 +291,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--speaker-threshold", type=float, default=None,
                         help="How different two voices must be to count as different people when guessing the "
                         "number of speakers (cosine distance; lower = splits more readily; default 0.32)")
-    parser.add_argument("--retakes", type=int, default=2, metavar="N",
+    parser.add_argument("--retakes", type=int, default=0, metavar="N",
                         help="Sentences that sound duller (more muffled/distant) than the rest of that speaker's "
-                        "are re-recorded up to N more times, keeping the clearest (default 2; 0 = off)")
+                        "are re-recorded up to N more times, keeping the clearest (default 0 = off: it didn't fix what listeners noticed)")
     parser.add_argument("--max-speedup", type=float, default=1.3,
                         help="Fastest an English clip may be sped up to fit the time of the Russian it replaces (default 1.3)")
     parser.add_argument("--keep-original", action="store_true", help="Also keep the original audio as a second track")

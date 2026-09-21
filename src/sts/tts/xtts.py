@@ -22,6 +22,7 @@ from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import XttsArgs, XttsAudioConfig
 
 from sts.config import TTSConfig
+from sts.audioquality import match_level
 from sts.gpu import gpu_lock
 from sts.textclean import split_for_tts
 from sts.tts.voice_library import VoiceEntry
@@ -92,11 +93,14 @@ class XTTSSynthesizer:
         """Yields (audio, sample_rate) per chunk as each is synthesized, so
         playback can start before a long sentence has been fully rendered."""
         for chunk in split_for_xtts(text):
-            yield self._synthesize_piece(chunk), SAMPLE_RATE
+            audio = self._synthesize_piece(chunk)
+            if self.cfg.target_level:
+                audio = match_level(audio, SAMPLE_RATE, self.cfg.target_level)
+            yield audio, SAMPLE_RATE
 
     def synthesize(self, text: str, pause_s: float = 0.35) -> tuple[np.ndarray, int]:
         """Whole text as one clip, with `pause_s` of silence between sentences."""
-        pieces = [self._synthesize_piece(chunk) for chunk in split_for_xtts(text)]
+        pieces = [audio for audio, _ in self.synthesize_stream(text)]
         if not pieces:
             return np.zeros(0, dtype=np.float32), SAMPLE_RATE
         gap = np.zeros(int(pause_s * SAMPLE_RATE), dtype=np.float32)

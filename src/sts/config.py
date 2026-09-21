@@ -103,7 +103,7 @@ class TTSConfig:
     # voice (a deep voice measures duller than a bright one) and on the sentence, so a
     # take is only ever compared with that voice's own previous takes, and nothing is
     # judged until it has 3 of them. 0 retries turns this off.
-    qwen3_quality_retries: int = 1  # live use is latency-sensitive: each retry is a full extra generation
+    qwen3_quality_retries: int = 0  # off by default: each retry is a full extra generation, and it did not fix what listeners noticed
     qwen3_clarity_margin_db: float = 4.0
     qwen3_style_instruct: str = (
         "Speak in a calm, warm, measured tone, like a gentle preacher delivering a sermon. "
@@ -132,6 +132,10 @@ class TTSConfig:
     # Saved voice (library id) that is active at start-up and after Reset: the
     # bundled "Default" voice. None starts on the built-in `default_voice` instead.
     startup_voice: str | None = "default"
+    # Speech level every spoken clip is matched to (RMS of its louder frames; 0.10 is about -20 dBFS,
+    # a normal speech level). The models speak short phrases quieter than long sentences, which
+    # sounds distant. None leaves the clips as generated.
+    target_level: float | None = 0.10
     default_voice: str = "Adde Michal"  # an XTTS speaker name from voice_groups (or "male"/"female")
     # Cloned voices inherit the accent of their reference clip (here: a Russian
     # speaker), so English cloned from it comes out accented. XTTS's style/accent
