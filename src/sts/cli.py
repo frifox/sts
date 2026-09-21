@@ -77,6 +77,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="How far a cloned voice's accent is pulled toward the accent voice: 0 disables, 1 fully adopts it, above 1 exaggerates it (can get unstable) (default 0.7)",
     )
     parser.add_argument(
+        "--pause-s",
+        type=float,
+        default=None,
+        help="Minimum silence between consecutive spoken translations (seconds, default 1.0; 0 disables)",
+    )
+    parser.add_argument(
         "--min-silence-ms",
         type=int,
         default=None,
@@ -120,6 +126,8 @@ def main() -> None:
     cfg.asr.model_size = args.whisper_model
     cfg.translation.device = translation_device
     cfg.tts.device = tts_device
+    if args.pause_s is not None:
+        cfg.audio.pause_between_s = args.pause_s
     if args.min_silence_ms is not None:
         cfg.vad.min_silence_ms = args.min_silence_ms
     if args.max_segment_s is not None:

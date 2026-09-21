@@ -376,12 +376,16 @@ class Pipeline:
             try:
                 # Each clip is handed to the playback thread as soon as it is
                 # ready, so the next sentence synthesizes while this one plays.
+                first_piece = True
                 for audio, sample_rate in self._synthesize_pieces(text):
                     if not audio.size:
                         continue
                     vlog("tts", f"synthesized {audio.size / sample_rate:.1f}s of speech in "
                                 f"{time.monotonic() - t0:.2f}s ({self._translations.qsize()} sentences waiting)")
-                    self._audio.put((audio, sample_rate))
+                    # Only the start of a translated text gets the pause; the
+                    # chunks of one long sentence must flow together.
+                    self._audio.put((audio, sample_rate, self.cfg.audio.pause_between_s if first_piece else 0.0))
+                    first_piece = False
                     t0 = time.monotonic()
             except Exception as exc:  # one bad sentence shouldn't kill voicing for the rest of the session
                 print(f"[tts] synthesis failed, skipping this sentence: {exc!r}")
@@ -395,11 +399,11 @@ class Pipeline:
 
     def _playback_loop(self) -> None:
         while not self._stop.is_set():
-            audio, sample_rate = self._audio.get()
+            audio, sample_rate, pause_before = self._audio.get()
             if not self.control.voice_enabled.is_set():
                 continue  # voice was switched off while this was queued
             try:
-                self.playback.play(audio, sample_rate=sample_rate)
+                self.playback.play(audio, sample_rate=sample_rate, pause_before=pause_before)
             except Exception as exc:
                 print(f"[audio] playback failed: {exc!r}")
 

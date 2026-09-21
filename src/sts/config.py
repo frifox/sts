@@ -9,6 +9,9 @@ class AudioConfig:
     output_device: int | None = None
     sample_rate: int = 16_000
     channels: int = 1
+    # Minimum silence between one translated text and the next when they play
+    # back to back (e.g. while playback is catching up).
+    pause_between_s: float = 1.0
     block_ms: int = 32  # frame fed to the VAD; Silero needs exactly 512 samples at 16 kHz (32 ms)
 
 
