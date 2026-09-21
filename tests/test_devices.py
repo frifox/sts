@@ -72,3 +72,39 @@ def test_qwen3_backend_voices():
     xtts = TTSConfig()
     xtts.use_backend_voices()
     assert "Adde Michal" in xtts.all_voices()
+
+
+def test_qwen3_text_splitting_and_plausibility():
+    import importlib.util, sys, types
+
+    # sts.tts.qwen3 imports qwen_tts at module level; load just the pure helpers.
+    stub = types.ModuleType("qwen_tts")
+    stub.Qwen3TTSModel = object
+    sys.modules.setdefault("qwen_tts", stub)
+    from sts.tts.qwen3 import speech_length_plausible, split_for_qwen
+
+    text = "Short one. " + ("This is a long clause that keeps going, " * 8).strip(", ") + "."
+    pieces = split_for_qwen(text, 140)
+    assert all(len(p) <= 140 for p in pieces)
+    assert " ".join(pieces).replace(" ", "") == text.replace(" ", "")  # nothing dropped
+    assert split_for_qwen("  ", 140) == []
+    assert speech_length_plausible("one two three four five six seven eight", 4.0, 0.25, 1.3)
+    assert not speech_length_plausible("one two three four five six seven eight", 1.0, 0.25, 1.3)  # skipped
+    assert not speech_length_plausible("one two three four five six seven eight", 20.0, 0.25, 1.3)  # babble
+    assert speech_length_plausible("Amen.", 0.6, 0.25, 1.3)
+
+
+def test_qwen3_clone_mode_selection():
+    import sys, types
+
+    stub = types.ModuleType("qwen_tts")
+    stub.Qwen3TTSModel = object
+    sys.modules.setdefault("qwen_tts", stub)
+    from sts.tts.qwen3 import transcript_is_english, use_icl_conditioning
+
+    ru, en = "Которые Он сказал во время Его последней беседы", "Brothers and sisters, we gather today."
+    assert not transcript_is_english(ru) and transcript_is_english(en) and not transcript_is_english(None)
+    assert not use_icl_conditioning("auto", ru)   # Russian reference -> embedding only
+    assert use_icl_conditioning("auto", en)       # English (designed voice) -> full conditioning
+    assert use_icl_conditioning("icl", ru) and not use_icl_conditioning("xvector", en)
+    assert not use_icl_conditioning("auto", None)

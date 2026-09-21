@@ -84,6 +84,13 @@ def build_parser() -> argparse.ArgumentParser:
         "higher = more varied (default 0.6; the model's own default is 0.9)",
     )
     parser.add_argument(
+        "--qwen-clone-mode",
+        choices=["auto", "icl", "xvector"],
+        default=None,
+        help="How Qwen3 clones a saved voice: 'icl' = reference clip + transcript (closest match, but can skip "
+        "words), 'xvector' = speaker embedding only (steadier), 'auto' = xvector unless the transcript is English (default)",
+    )
+    parser.add_argument(
         "--pause-s",
         type=float,
         default=None,
@@ -133,6 +140,8 @@ def main() -> None:
     cfg.asr.model_size = args.whisper_model
     cfg.translation.device = translation_device
     cfg.tts.device = tts_device
+    if args.qwen_clone_mode is not None:
+        cfg.tts.qwen3_clone_mode = args.qwen_clone_mode
     if args.qwen_temperature is not None:
         cfg.tts.qwen3_temperature = args.qwen_temperature
     if args.pause_s is not None:

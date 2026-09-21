@@ -71,6 +71,20 @@ class TTSConfig:
     # main generator and the "sub-talker" that shapes fine acoustic detail.
     qwen3_temperature: float = 0.6
     qwen3_top_k: int = 30
+    # Qwen3 sometimes speaks the start and end of a sentence and skips the middle.
+    # Long input makes it likelier, so text is synthesized in pieces of at most
+    # this many characters, and a piece whose audio is implausibly short (or
+    # long) for its word count is regenerated, up to `qwen3_max_retries` times.
+    qwen3_max_chars: int = 140
+    qwen3_min_seconds_per_word: float = 0.3
+    # How a reference clip conditions the voice. "icl" feeds the clip *and its
+    # transcript* to the model (closest voice match, but a long or foreign-language
+    # transcript is a common cause of skipped speech); "xvector" uses only a speaker
+    # embedding (steadier, slightly less faithful). "auto" picks xvector when the
+    # transcript isn't English (e.g. a Russian speaker's clip) and icl otherwise.
+    qwen3_clone_mode: str = "auto"
+    qwen3_max_seconds_per_word: float = 1.3
+    qwen3_max_retries: int = 2
     qwen3_style_instruct: str = (
         "Speak in a calm, warm, measured tone, like a gentle preacher delivering a sermon. "
         "American English accent."

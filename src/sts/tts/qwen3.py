@@ -49,6 +49,7 @@ mps or an older/absent GPU, same reasoning as the Metal case either way.
 """
 
 import gc
+import re
 import threading
 
 import numpy as np
@@ -58,7 +59,54 @@ from qwen_tts import Qwen3TTSModel
 from sts.config import TTSConfig
 from sts.devices import supports_bf16_and_flash_attention
 from sts.gpu import gpu_lock
+from sts.log import vlog
 from sts.tts.voice_library import VoiceEntry
+
+
+def split_for_qwen(text: str, limit: int) -> list[str]:
+    """Sentence-sized pieces of at most ~`limit` characters. Long sentences are
+    cut at commas/semicolons, then at spaces; nothing is dropped."""
+    pieces: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        if not sentence:
+            continue
+        current = ""
+        for clause in re.split(r"(?<=[,;:])\s+", sentence):
+            for word in clause.split():
+                if current and len(current) + 1 + len(word) > limit:
+                    pieces.append(current)
+                    current = word
+                else:
+                    current = f"{current} {word}".strip()
+            if current and len(current) > limit * 0.6 and clause.endswith((",", ";", ":")):
+                pieces.append(current)
+                current = ""
+        if current:
+            pieces.append(current)
+    return pieces
+
+
+def transcript_is_english(text: str | None) -> bool:
+    """True for a Latin-script transcript; False for Cyrillic/other scripts or no transcript."""
+    if not text:
+        return False
+    letters = [c for c in text if c.isalpha()]
+    return bool(letters) and sum(c.isascii() for c in letters) / len(letters) > 0.8
+
+
+def use_icl_conditioning(mode: str, ref_text: str | None) -> bool:
+    if ref_text is None or mode == "xvector":
+        return False
+    return mode == "icl" or transcript_is_english(ref_text)
+
+
+def speech_length_plausible(text: str, seconds: float, min_spw: float, max_spw: float) -> bool:
+    """False when the audio is far shorter (words skipped) or longer (babble)
+    than `text` could plausibly take to say. Very short texts are exempt."""
+    words = len(text.split())
+    if words < 4:
+        return seconds > 0
+    return min_spw * words <= seconds <= max_spw * words
 
 
 def _cuda_supports_bf16_and_flash_attention() -> bool:
@@ -178,8 +226,10 @@ class Qwen3TTSSynthesizer:
             self._prompt = self.model.create_voice_clone_prompt(
                 ref_audio=reference_wav_path,
                 ref_text=ref_text,
-                x_vector_only_mode=ref_text is None,
+                x_vector_only_mode=not use_icl_conditioning(self.cfg.qwen3_clone_mode, ref_text),
             )
+        vlog("tts", "voice conditioning: "
+                    + ("clip + transcript" if use_icl_conditioning(self.cfg.qwen3_clone_mode, ref_text) else "speaker embedding only"))
         self.cloned_speaker_wav = reference_wav_path
         self._active_lora_speaker_id = None
 
@@ -207,10 +257,39 @@ class Qwen3TTSSynthesizer:
         self.cloned_speaker_wav = None
         self._active_lora_speaker_id = None
 
-    def synthesize(self, text: str) -> tuple[np.ndarray, int]:
-        if not text.strip():
-            return np.zeros(0, dtype=np.float32), 24_000
+    def synthesize_stream(self, text: str):
+        """Yields (audio, sample_rate) per short piece, so playback can start
+        early and each piece can be checked (and regenerated) on its own."""
+        for piece in split_for_qwen(text, self.cfg.qwen3_max_chars):
+            yield self._synthesize_checked(piece)
 
+    def synthesize(self, text: str) -> tuple[np.ndarray, int]:
+        pieces = list(self.synthesize_stream(text))
+        if not pieces:
+            return np.zeros(0, dtype=np.float32), 24_000
+        sample_rate = pieces[0][1]
+        gap = np.zeros(int(0.15 * sample_rate), dtype=np.float32)
+        audio = np.concatenate([part for i, (a, _) in enumerate(pieces) for part in ((gap, a) if i else (a,))])
+        return audio, sample_rate
+
+    def _synthesize_checked(self, text: str) -> tuple[np.ndarray, int]:
+        """One piece, regenerated if the result looks like skipped or runaway speech."""
+        best: tuple[np.ndarray, int] | None = None
+        for attempt in range(self.cfg.qwen3_max_retries + 1):
+            audio, sample_rate = self._generate_once(text)
+            seconds = len(audio) / sample_rate
+            if speech_length_plausible(
+                text, seconds, self.cfg.qwen3_min_seconds_per_word, self.cfg.qwen3_max_seconds_per_word
+            ):
+                return audio, sample_rate
+            vlog("tts", f"suspicious speech length ({seconds:.1f}s for {len(text.split())} words), "
+                        f"regenerating (attempt {attempt + 1}): {text[:60]!r}")
+            # Skipped-word failures come out too short, so the longest attempt is the best fallback.
+            if best is None or len(audio) > len(best[0]):
+                best = (audio, sample_rate)
+        return best
+
+    def _generate_once(self, text: str) -> tuple[np.ndarray, int]:
         with self._lock:
             if self._active_lora_speaker_id:
                 lora_model, speaker_name = self._lora_models[self._active_lora_speaker_id]
