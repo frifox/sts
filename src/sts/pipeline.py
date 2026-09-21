@@ -39,15 +39,20 @@ from sts.web.server import CaptionBroadcaster
 class Pipeline:
     def __init__(self, cfg: PipelineConfig, broadcaster: CaptionBroadcaster | None = None):
         self.cfg = cfg
+        self.broadcaster = broadcaster
         self.capture = AudioCapture(cfg.audio)
         self.playback = AudioPlayback(cfg.audio)
+        self._stage("Loading speech detector…")
         self.segmenter = SpeechSegmenter(cfg.audio, cfg.vad)
+        self._stage(f"Loading speech recognition ({cfg.asr.model_size})…")
         self.asr = WhisperASR(cfg.asr)
+        self._stage("Loading translation model…")
         self.translator = Translator(cfg.translation)
+        self._stage(f"Loading voice synthesis ({cfg.tts.backend})…")
         self.tts = create_synthesizer(cfg.tts)
+        self._stage("Loading voice library and Bible data…")
         self.voice_library = VoiceLibrary(cfg.tts.voice_library_dir)
         self.bible_lookup = BibleLookup()
-        self.broadcaster = broadcaster
         self.control = RecognitionControl(cfg.audio.sample_rate)
         self._training_name: str | None = None
         self._active_speaker_id: str | None = None
@@ -57,6 +62,11 @@ class Pipeline:
         self._translations: queue.Queue = queue.Queue()
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
+
+    def _stage(self, text: str, ready: bool = False) -> None:
+        vlog("init", text)
+        if self.broadcaster:
+            self.broadcaster.broadcast_stage(text, ready)
 
     def clone_voice(self, reference_wav_path: str, name: str | None = None) -> None:
         """Zero-shot clones a pre-supplied reference clip (the `--clone` CLI
@@ -73,6 +83,7 @@ class Pipeline:
             self.tts.clone_voice(reference_wav_path)
             return
 
+        self._stage(f"Preparing voice '{name}'…")
         ref_text = self._transcribe_or_none(reference_wav_path)
         self._save_and_activate(name, reference_wav_path, ref_text)
         self._broadcast_status()
@@ -250,6 +261,7 @@ class Pipeline:
 
     def start(self) -> None:
         self.capture.start()
+        self._stage("Listening", ready=True)
         for target in (
             self._segment_loop,
             self._asr_loop,

@@ -36,6 +36,7 @@ class CaptionBroadcaster:
         self.on_control: Callable[[dict], None] | None = None
         self._last_status: dict | None = None
         self._last_library: dict | None = None
+        self._last_stage: dict = {"type": "stage", "text": "Starting…", "ready": False}
         self._history: dict[str, deque[str]] = {
             "original": deque(maxlen=CAPTION_HISTORY_LINES),
             "translated": deque(maxlen=CAPTION_HISTORY_LINES),
@@ -47,6 +48,7 @@ class CaptionBroadcaster:
 
     async def register(self, websocket: WebSocket) -> None:
         self._clients.add(websocket)
+        await websocket.send_text(json.dumps(self._last_stage))
         vlog("web", f"caption page connected ({len(self._clients)} client(s))")
         if self._last_status is not None:
             await websocket.send_text(json.dumps(self._last_status))
@@ -107,6 +109,14 @@ class CaptionBroadcaster:
             "en_text": en_text,
         }
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
+
+    def broadcast_stage(self, text: str, ready: bool = False) -> None:
+        """Startup progress ("Loading Whisper…" -> "Listening"). Remembered so
+        pages that connect mid-startup see the current stage immediately."""
+        self._last_stage = {"type": "stage", "text": text, "ready": ready}
+        if self.loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_to_all(self._last_stage), self.loop)
 
     def broadcast_reset(self) -> None:
         with self._history_lock:

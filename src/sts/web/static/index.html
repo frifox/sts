@@ -69,7 +69,7 @@
     to { opacity: 1; transform: translateY(0); }
   }
 
-  #status {
+  #indicators {
     position: fixed;
     top: 0.6vh;
     right: 1.2vw;
@@ -78,7 +78,30 @@
     z-index: 2;
     display: flex;
     align-items: center;
+    gap: 1.2em;
+  }
+
+  #status, #stage {
+    display: flex;
+    align-items: center;
     gap: 0.45em;
+  }
+
+  #stage:empty { display: none; }
+
+  #stage::before {
+    content: '';
+    width: 0.6em;
+    height: 0.6em;
+    border-radius: 50%;
+    background: #e0b341;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+
+  #stage.ready::before { background: #4cbb6c; animation: none; }
+
+  @keyframes pulse {
+    50% { opacity: 0.3; }
   }
 
   #status::before {
@@ -187,7 +210,10 @@
       <div class="lines" id="translated-lines"></div>
     </div>
   </div>
-  <div id="status" class="disconnected">Not connected</div>
+  <div id="indicators">
+    <div id="stage"></div>
+    <div id="status" class="disconnected">Not connected</div>
+  </div>
 
   <div id="verse-overlay">
     <div class="verse-reference" id="verse-reference"></div>
@@ -311,6 +337,7 @@
 
   function connect() {
     const status = document.getElementById('status');
+    const stage = document.getElementById('stage');
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws`);
 
@@ -325,6 +352,7 @@
     ws.onclose = () => {
       status.textContent = 'Not connected';
       status.className = 'disconnected';
+      stage.textContent = '';
       setTimeout(connect, 1000);
     };
     ws.onmessage = (event) => {
@@ -333,6 +361,10 @@
       else if (msg.type === 'translated') addLine('translated-lines', msg.text);
       else if (msg.type === 'verse') showVerse(msg);
       else if (msg.type === 'reset') clearCaptions();
+      else if (msg.type === 'stage') {
+        stage.textContent = msg.text;
+        stage.className = msg.ready ? 'ready' : '';
+      }
       else if (msg.type === 'status') applyStatus(msg);
       else if (msg.type === 'library') applyLibrary(msg);
     };
