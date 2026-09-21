@@ -63,6 +63,8 @@ def test_split_sentences():
     from sts.translate.translator import split_sentences
 
     assert split_sentences("Иисус говорит. Так и есть. Да.") == ["Иисус говорит.", "Так и есть. Да."]
+    assert split_sentences("Нужно покаяние. Аминь.") == ["Нужно покаяние. Аминь."]
+    assert split_sentences("Одно. Нужно покаяние. Так.") == ["Одно.", "Нужно покаяние. Так."]
     assert split_sentences("Иисус предупреждает нас. Здесь речь не идет о ветвях.") == [
         "Иисус предупреждает нас.",
         "Здесь речь не идет о ветвях.",

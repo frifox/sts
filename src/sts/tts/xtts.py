@@ -22,6 +22,7 @@ from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import XttsArgs, XttsAudioConfig
 
 from sts.config import TTSConfig
+from sts.gpu import gpu_lock
 from sts.tts.voice_library import VoiceEntry
 
 SAMPLE_RATE = 24_000  # XTTS v2 output rate
@@ -145,6 +146,10 @@ class XTTSSynthesizer:
         return self._conditioning_cache[key]
 
     def _synthesize_piece(self, text: str) -> np.ndarray:
+        with gpu_lock(self.cfg.device):
+            return self._synthesize_piece_locked(text)
+
+    def _synthesize_piece_locked(self, text: str) -> np.ndarray:
         if self.cloned_speaker_wav:
             gpt_latent, speaker_embedding = self._clone_conditioning(self.cloned_speaker_wav)
             out = self.tts.synthesizer.tts_model.inference(

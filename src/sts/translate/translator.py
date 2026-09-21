@@ -5,6 +5,7 @@ import re
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from sts.config import TranslationConfig
+from sts.gpu import gpu_lock
 from sts.textclean import collapse_repeats
 from sts.translate import glossary
 
@@ -12,7 +13,7 @@ from sts.translate import glossary
 _DEGENERATE = re.compile(r"Z{6,}|ZZGLOSS|(\b\w+\b)(?:[\s,.]+\1\b){5,}", re.IGNORECASE)
 
 
-def split_sentences(text: str, min_words: int = 3) -> list[str]:
+def split_sentences(text: str, min_words: int = 2) -> list[str]:
     """Splits on sentence-ending punctuation; fragments shorter than
     `min_words` are merged into the previous sentence rather than translated alone."""
     sentences: list[str] = []
@@ -65,14 +66,16 @@ class Translator:
         return collapse_repeats(result)
 
     def _generate(self, source: str) -> str:
-        inputs = self.tokenizer(source, return_tensors="pt").to(self.cfg.device)
+        inputs = self.tokenizer(source, return_tensors="pt")
         input_tokens = inputs["input_ids"].shape[1]
-        generated = self.model.generate(
-            **inputs,
-            forced_bos_token_id=self._target_id,
-            # Translations are about as long as their source; a hard cap
-            # relative to the input stops a runaway loop early.
-            max_new_tokens=min(256, int(input_tokens * 2) + 10),
-            no_repeat_ngram_size=4,
-        )
+        with gpu_lock(self.cfg.device):
+            generated = self.model.generate(
+                **inputs.to(self.cfg.device),
+                forced_bos_token_id=self._target_id,
+                # Translations are about as long as their source; a hard cap
+                # relative to the input stops a runaway loop early.
+                max_new_tokens=min(256, int(input_tokens * 2) + 10),
+                no_repeat_ngram_size=4,
+            )
+            generated = generated.cpu()
         return self.tokenizer.batch_decode(generated, skip_special_tokens=True)[0]

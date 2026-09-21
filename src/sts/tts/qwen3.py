@@ -57,6 +57,7 @@ from qwen_tts import Qwen3TTSModel
 
 from sts.config import TTSConfig
 from sts.devices import supports_bf16_and_flash_attention
+from sts.gpu import gpu_lock
 from sts.tts.voice_library import VoiceEntry
 
 
@@ -99,7 +100,8 @@ class Qwen3TTSSynthesizer:
         self.default_voice = cfg.resolve_voice(cfg.default_voice)
         # MPS/CUDA models aren't safe to run from two threads at once, and the
         # voice-design dialog synthesizes previews while the live pipeline runs.
-        self._lock = threading.Lock()
+        # (On mps this is the process-wide GPU lock shared with translation.)
+        self._lock = gpu_lock(cfg.device) if cfg.device == "mps" else threading.Lock()
         self._design_model = None
         self._design_load_lock = threading.Lock()
         self._prompt = None
@@ -122,12 +124,18 @@ class Qwen3TTSSynthesizer:
         """
         with self._design_load_lock:
             if self._design_model is None:
-                self._design_model = Qwen3TTSModel.from_pretrained(
-                    self.cfg.qwen3_design_model_name,
-                    device_map=self.cfg.device,
-                    dtype=_dtype_for_device(self.cfg.device),
-                    attn_implementation=_attn_impl_for_device(self.cfg.device),
-                )
+                # Download first, outside the GPU lock, so a multi-GB first-time
+                # download doesn't stall live translation/synthesis.
+                from huggingface_hub import snapshot_download
+
+                snapshot_download(self.cfg.qwen3_design_model_name)
+                with self._lock:
+                    self._design_model = Qwen3TTSModel.from_pretrained(
+                        self.cfg.qwen3_design_model_name,
+                        device_map=self.cfg.device,
+                        dtype=_dtype_for_device(self.cfg.device),
+                        attn_implementation=_attn_impl_for_device(self.cfg.device),
+                    )
         with self._lock:
             wavs, sample_rate = self._design_model.generate_voice_design(
                 text=ref_text, instruct=instruct, language="English"
@@ -139,10 +147,11 @@ class Qwen3TTSSynthesizer:
         with self._design_load_lock:
             self._design_model = None
         gc.collect()
-        if self.cfg.device == "mps":
-            torch.mps.empty_cache()
-        elif self.cfg.device == "cuda":
-            torch.cuda.empty_cache()
+        with self._lock:
+            if self.cfg.device == "mps":
+                torch.mps.empty_cache()
+            elif self.cfg.device == "cuda":
+                torch.cuda.empty_cache()
 
     def preview(self, text: str, reference_wav_path: str, ref_text: str) -> tuple[np.ndarray, int]:
         """Speaks `text` in the voice of a reference clip, without changing the active voice."""
