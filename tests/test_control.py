@@ -117,3 +117,83 @@ def test_pause_threshold_changes_live_and_is_clamped():
     assert p.cfg.vad.min_silence_ms == 1500
     p.handle_control({"action": "set_min_silence", "ms": "abc"})  # junk is ignored
     assert p.cfg.vad.min_silence_ms == 1500
+
+
+def _startup_voice_pipeline(tmp_path):
+    """A Pipeline stub with a real library (one shipped voice + one of the user's) and a recording TTS."""
+    import queue
+
+    from sts.config import PipelineConfig
+    from sts.pipeline import Pipeline
+    from sts.tts.voice_library import VoiceLibrary
+
+    bundle = tmp_path / "bundled" / "default"
+    bundle.mkdir(parents=True)
+    (bundle / "reference.wav").write_bytes(b"RIFF")
+    (bundle / "meta.json").write_text('{"kind": "zeroshot", "name": "Default", "ref_text": "Hi.", "created_at": 1.0}')
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"RIFF")
+
+    class Tts:
+        cloned_speaker_wav = None
+        def clone_from_entry(self, entry): self.cloned_speaker_wav = str(entry.wav_path)
+        def reset_voice(self): self.cloned_speaker_wav = None
+        def set_default_voice(self, voice): pass
+
+    class Broadcaster:
+        status = None
+        def broadcast_status(self, **kwargs): Broadcaster.status = kwargs
+        def broadcast_library(self, speakers): Broadcaster.library = speakers
+        def broadcast_reset(self): pass
+
+    class Playback:
+        def stop(self): pass
+
+    p = object.__new__(Pipeline)
+    p.cfg = PipelineConfig()
+    p.broadcaster, p.tts, p.playback = Broadcaster(), Tts(), Playback()
+    p.voice_library = VoiceLibrary(tmp_path / "voices", bundled_dir=tmp_path / "bundled")
+    p.control = RecognitionControl(16000)
+    p._pending_voice = None
+    p._active_speaker_id = None
+    for name in ("_segments", "_transcripts", "_translations", "_audio"):
+        setattr(p, name, queue.Queue())
+    mine = p.voice_library.save("Mine", wav)
+    return p, mine
+
+
+def test_session_starts_on_the_bundled_default_voice_and_reset_returns_to_it(tmp_path):
+    p, mine = _startup_voice_pipeline(tmp_path)
+    p._use_startup_voice()
+    assert p._active_speaker_id == "default" and p.tts.cloned_speaker_wav is not None
+
+    p.handle_control({"action": "select_speaker", "speaker_id": mine.speaker_id})
+    assert p._active_speaker_id == mine.speaker_id
+    p.handle_control({"action": "reset"})
+    assert p._active_speaker_id == "default"                       # Reset goes back to the Default voice
+
+
+def test_startup_voice_can_be_disabled(tmp_path):
+    p, _ = _startup_voice_pipeline(tmp_path)
+    p.cfg.tts.startup_voice = None
+    p._use_startup_voice()
+    assert p._active_speaker_id is None and p.tts.cloned_speaker_wav is None   # plain built-in voice
+
+
+def test_shipped_voice_is_undeletable_and_deleting_the_active_custom_voice_returns_to_default(tmp_path):
+    p, mine = _startup_voice_pipeline(tmp_path)
+    p._use_startup_voice()
+    p.handle_control({"action": "delete_voice", "speaker_id": "default"})
+    assert p.voice_library.get("default") is not None and p._active_speaker_id == "default"
+
+    p.handle_control({"action": "select_speaker", "speaker_id": mine.speaker_id})
+    p.handle_control({"action": "delete_voice", "speaker_id": mine.speaker_id})
+    assert p.voice_library.get(mine.speaker_id) is None
+    assert p._active_speaker_id == "default"
+
+    # deleting an inactive voice while on a built-in voice must not switch voices
+    other = p.voice_library.save("Other", tmp_path / "a.wav")
+    p.handle_control({"action": "default_voice", "voice": "Adde Michal"})
+    assert p._active_speaker_id is None
+    p.handle_control({"action": "delete_voice", "speaker_id": other.speaker_id})
+    assert p._active_speaker_id is None

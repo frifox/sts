@@ -518,8 +518,10 @@
         }
         voiceSelect.appendChild(group);
       };
-      addGroup('Default', defaultVoices.map((name) => ({ value: `default:${name}`, text: name })));
-      const custom = savedVoices.map((voice) => ({ value: `saved:${voice.id}`, text: voice.name }));
+      // Voices shipped with the app (the bundled "Default") lead the Default group; the user's saved ones are Custom.
+      const shipped = savedVoices.filter((voice) => voice.builtin).map((voice) => ({ value: `saved:${voice.id}`, text: voice.name }));
+      addGroup('Default', [...shipped, ...defaultVoices.map((name) => ({ value: `default:${name}`, text: name }))]);
+      const custom = savedVoices.filter((voice) => !voice.builtin).map((voice) => ({ value: `saved:${voice.id}`, text: voice.name }));
       if (unsaved) {
         custom.unshift({ value: 'unsaved', text: lastStatus.can_save ? 'New voice (unsaved)' : 'Cloned voice (this session)' });
       }
@@ -715,8 +717,9 @@
   });
 
   function syncDeleteButton() {
-    // Only offered while a saved (Custom) voice is selected.
-    deleteBtn.hidden = !voiceSelect.value.startsWith('saved:');
+    // Only offered while one of the user's own saved (Custom) voices is selected.
+    const saved = savedVoices.find((voice) => `saved:${voice.id}` === voiceSelect.value);
+    deleteBtn.hidden = !saved || saved.builtin;  // shipped voices can't be deleted
   }
   deleteBtn.addEventListener('click', () => {
     if (!voiceSelect.value.startsWith('saved:')) return;

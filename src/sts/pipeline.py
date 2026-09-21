@@ -32,7 +32,7 @@ from sts.control import RecognitionControl
 from sts.log import vlog
 from sts.translate.translator import Translator
 from sts.tts import create_synthesizer
-from sts.tts.voice_library import VoiceLibrary
+from sts.tts.voice_library import BUNDLED_VOICES_DIR, VoiceLibrary
 from sts.web.server import CaptionBroadcaster
 
 # Bounds for the live pause-threshold slider (milliseconds of silence that end a snippet).
@@ -62,7 +62,7 @@ class Pipeline:
         self._stage(f"Loading voice synthesis ({cfg.tts.backend})…")
         self.tts = create_synthesizer(cfg.tts)
         self._stage("Loading voice library and Bible data…")
-        self.voice_library = VoiceLibrary(cfg.tts.voice_library_dir)
+        self.voice_library = VoiceLibrary(cfg.tts.voice_library_dir, bundled_dir=BUNDLED_VOICES_DIR)
         self.bible_lookup = BibleLookup()
         self.control = RecognitionControl(cfg.audio.sample_rate)
         # A freshly trained voice is active immediately but unsaved until the
@@ -80,6 +80,10 @@ class Pipeline:
         self._audio: queue.Queue = queue.Queue()  # synthesized clips waiting to play
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
+
+        if cfg.tts.startup_voice:
+            self._stage("Preparing the default voice…")
+        self._use_startup_voice()
 
     def _stage(self, text: str, ready: bool = False) -> None:
         vlog("init", text)
@@ -160,8 +164,7 @@ class Pipeline:
         text from the previous one, and forget any cloned voice."""
         if self.control.training.is_set():
             self.control.stop_training(discard=True)
-        self.tts.reset_voice()
-        self._active_speaker_id = None
+        self._use_startup_voice()
         self._pending_voice = None
         self._drain(self._segments)
         self._drain(self._transcripts)
@@ -170,6 +173,12 @@ class Pipeline:
         self.playback.stop()
         if self.broadcaster:
             self.broadcaster.broadcast_reset()
+
+    def _use_startup_voice(self) -> None:
+        """Back to the voice the session starts with: the bundled "Default" voice
+        (or the plain built-in voice if that is disabled or missing)."""
+        wanted = self.cfg.tts.startup_voice
+        self._select_speaker(wanted if wanted and self.voice_library.get(wanted) else None)
 
     def _select_speaker(self, speaker_id: str | None) -> None:
         self._pending_voice = None
@@ -186,13 +195,19 @@ class Pipeline:
         entry = self.voice_library.get(speaker_id)
         if entry is None:
             return
-        if self._active_speaker_id == speaker_id:
-            self._select_speaker(None)  # fall back to the built-in voice before its files go away
+        if entry.builtin:
+            return  # shipped with the app; only a saved copy the user made of it can be deleted
+        was_active = self._active_speaker_id == speaker_id
+        if was_active:
+            self._select_speaker(None)  # step off the voice before its files go away
         forget = getattr(self.tts, "forget_voice", None)
         if forget:
             forget(speaker_id)
         self.voice_library.delete(speaker_id)
+        if was_active:
+            self._use_startup_voice()  # e.g. deleting a saved override brings the shipped voice back
         self._broadcast_library()
+        self._broadcast_status()
         vlog("voice", f"deleted voice {entry.name!r}")
 
     def _finish_training(self, discard: bool = False) -> None:
@@ -392,7 +407,7 @@ class Pipeline:
     def _broadcast_library(self) -> None:
         if self.broadcaster:
             speakers = [
-                {"id": e.speaker_id, "name": e.name} for e in self.voice_library.list()
+                {"id": e.speaker_id, "name": e.name, "builtin": e.builtin} for e in self.voice_library.list()
             ]
             self.broadcaster.broadcast_library(speakers)
 

@@ -24,7 +24,7 @@ import json
 import re
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
@@ -46,12 +46,29 @@ class VoiceEntry:
     adapter_dir: Path | None = None
     speaker_name: str | None = None
     lora_scale: float = 0.3
+    # Shipped with the app (read-only, can't be deleted); a voice of the same id saved by the user wins.
+    builtin: bool = False
+
+
+# Voices that ship with the package (src/sts/bundled_voices/<id>/{reference.wav,meta.json}).
+BUNDLED_VOICES_DIR = Path(__file__).resolve().parent.parent / "bundled_voices"
 
 
 class VoiceLibrary:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, bundled_dir: Path | None = None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        self.bundled_dir = Path(bundled_dir) if bundled_dir else None
+
+    def _bundled(self) -> dict[str, VoiceEntry]:
+        """The shipped voices by id, read-only. Loaded from their metadata like any other entry."""
+        entries: dict[str, VoiceEntry] = {}
+        if self.bundled_dir and self.bundled_dir.is_dir():
+            for entry_dir in sorted(p for p in self.bundled_dir.iterdir() if p.is_dir()):
+                entry = self._load_entry(entry_dir)
+                if entry is not None:
+                    entries[entry.speaker_id] = replace(entry, builtin=True)
+        return entries
 
     def save(self, name: str, wav_path: str | Path, ref_text: str | None = None) -> VoiceEntry:
         """Registers a zero-shot clone entry from a captured reference clip."""
@@ -140,12 +157,15 @@ class VoiceLibrary:
         )
 
     def list(self) -> list[VoiceEntry]:
-        entries = []
+        """Shipped voices first, then the user's by age. A saved voice with a shipped voice's id replaces it."""
+        mine = []
         for entry_dir in sorted(p for p in self.root.iterdir() if p.is_dir()):
             entry = self._load_entry(entry_dir)
             if entry is not None:
-                entries.append(entry)
-        return sorted(entries, key=lambda e: e.created_at)
+                mine.append(entry)
+        taken = {e.speaker_id for e in mine}
+        shipped = [e for e in self._bundled().values() if e.speaker_id not in taken]
+        return shipped + sorted(mine, key=lambda e: e.created_at)
 
     def _entry_dir(self, speaker_id: str) -> Path | None:
         """The entry's directory, only if `speaker_id` is a plain name of a
@@ -160,7 +180,11 @@ class VoiceLibrary:
 
     def get(self, speaker_id: str) -> VoiceEntry | None:
         entry_dir = self._entry_dir(speaker_id)
-        return self._load_entry(entry_dir) if entry_dir else None
+        if entry_dir:
+            entry = self._load_entry(entry_dir)
+            if entry is not None:
+                return entry
+        return self._bundled().get(speaker_id)  # a plain dict lookup: the id never becomes a path
 
     def delete(self, speaker_id: str) -> bool:
         """Removes a voice from disk. Returns False if there was no such voice."""

@@ -274,7 +274,7 @@ def main(argv: list[str] | None = None) -> None:
     from sts.asr.whisper_asr import WhisperASR
     from sts.translate.translator import Translator
     from sts.tts import create_synthesizer
-    from sts.tts.voice_library import VoiceLibrary
+    from sts.tts.voice_library import BUNDLED_VOICES_DIR, VoiceLibrary
 
     started = time.monotonic()
     print(f"Loading models (whisper={cfg.asr.model_size} on {asr_device}, translation on {translation_device}, "
@@ -282,7 +282,7 @@ def main(argv: list[str] | None = None) -> None:
     asr = WhisperASR(cfg.asr)
     translator = Translator(cfg.translation)
     tts = create_synthesizer(cfg.tts)
-    library = VoiceLibrary(cfg.tts.voice_library_dir)
+    library = VoiceLibrary(cfg.tts.voice_library_dir, bundled_dir=BUNDLED_VOICES_DIR)
 
     print(f"Extracting audio from {input_path.name}…", flush=True)
     audio = extract_audio(input_path, args.audio_track)

@@ -41,6 +41,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "sts.web" = ["static/*"]
 "sts.bible.data" = ["*.json.gz"]
+"sts.bundled_voices" = ["*/reference.wav", "*/meta.json"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

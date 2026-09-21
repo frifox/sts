@@ -129,7 +129,14 @@ slow translation or TTS call doesn't stall audio capture.
     fast talker who barely pauses wants a lower value (shorter, quicker
     captions), a slow one a higher value. All open pages stay in sync.
   - **Voice dropdown** — a single list with two groups:
-    - **Default** — the built-in (non-trained) voices. XTTS offers 13
+    - **Default** — starts with the bundled **Default** voice, a calm,
+      natural English preacher voice (designed with Qwen3's Create Voice) that
+      ships inside the repo (`src/sts/bundled_voices/default/`). It is the
+      voice a session starts with and the one Reset returns to. Pass
+      `--default-voice ...` or `--clone ...` to start on something else, or
+      set `TTSConfig.startup_voice = None`. It can't be deleted, but saving
+      your own voice named "Default" replaces it (deleting that copy brings the
+      shipped one back). After it come the built-in (non-trained) voices. XTTS offers 13
       (defaults to Adde Michal; `--default-voice "Craig Gutsy"` or
       `male`/`female` sets the starting choice). Qwen3-TTS offers the preset
       voices Aiden and Ryan, spoken in a calm "preacher" style. The list

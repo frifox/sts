@@ -12,6 +12,8 @@ venv/
 *.wav
 *.mp3
 *.flac
+# ...except the voice bundled with the app
+!src/sts/bundled_voices/**/*.wav
 
 # Downloaded model weights / caches
 .cache/

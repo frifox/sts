@@ -143,3 +143,60 @@ def test_delete_and_get_reject_path_traversal(tmp_path):
         assert library.get(bad) is None
     assert outside.exists()
     assert [e.name for e in library.list()] == ["Voice"]
+
+
+def make_bundle(tmp_path):
+    bundle = tmp_path / "bundled"
+    (bundle / "default").mkdir(parents=True)
+    (bundle / "default" / "reference.wav").write_bytes(b"RIFF")
+    (bundle / "default" / "meta.json").write_text(
+        '{"kind": "zeroshot", "name": "Default", "ref_text": "Hello there.", "created_at": 1.0}'
+    )
+    return bundle
+
+
+def test_bundled_voices_are_listed_first_and_flagged(tmp_path):
+    from sts.tts.voice_library import VoiceLibrary
+
+    library = VoiceLibrary(tmp_path / "voices", bundled_dir=make_bundle(tmp_path))
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"RIFF")
+    library.save("Mine", wav)
+
+    entries = library.list()
+    assert [(e.name, e.builtin) for e in entries] == [("Default", True), ("Mine", False)]
+    assert library.get("default").ref_text == "Hello there."
+    assert library.get("default").wav_path.name == "reference.wav"
+
+
+def test_bundled_voices_cannot_be_deleted_but_can_be_overridden(tmp_path):
+    from sts.tts.voice_library import VoiceLibrary
+
+    library = VoiceLibrary(tmp_path / "voices", bundled_dir=make_bundle(tmp_path))
+    assert library.delete("default") is False                      # shipped: nothing of the user's to delete
+    assert library.get("default") is not None
+
+    wav = tmp_path / "mine.wav"
+    wav.write_bytes(b"RIFF")
+    library.save("Default", wav, "My own words.")                   # same id: the user's copy wins
+    assert [e.name for e in library.list()] == ["Default"]
+    assert library.get("default").ref_text == "My own words." and not library.get("default").builtin
+
+    assert library.delete("default") is True                        # deleting the override...
+    assert library.get("default").ref_text == "Hello there."       # ...brings the shipped voice back
+
+
+def test_bundled_lookup_ignores_path_tricks(tmp_path):
+    from sts.tts.voice_library import VoiceLibrary
+
+    library = VoiceLibrary(tmp_path / "voices", bundled_dir=make_bundle(tmp_path))
+    for bad in ("../bundled/default", "default/..", ".."):
+        assert library.get(bad) is None
+
+
+def test_the_real_bundle_ships_the_default_voice():
+    from sts.tts.voice_library import BUNDLED_VOICES_DIR, VoiceLibrary
+
+    entry = VoiceLibrary(BUNDLED_VOICES_DIR / "_nothing_", bundled_dir=BUNDLED_VOICES_DIR).get("default")
+    assert entry is not None and entry.name == "Default" and entry.builtin
+    assert entry.wav_path.stat().st_size > 10_000 and entry.ref_text

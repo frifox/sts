@@ -69,6 +69,8 @@ def main() -> None:
 
     cfg, (asr_device, translation_device, tts_device) = build_engine_config(args)
     cfg.audio.input_device = args.input_device
+    if args.default_voice or args.clone:
+        cfg.tts.startup_voice = None  # an explicit voice choice on the command line wins over the bundled Default
     cfg.audio.output_device = args.output_device
     if args.pause_s is not None:
         cfg.audio.pause_between_s = args.pause_s

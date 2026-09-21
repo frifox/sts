@@ -119,6 +119,9 @@ class TTSConfig:
     voice_aliases: dict[str, str] = field(
         default_factory=lambda: {"male": "Adde Michal", "female": "Ana Florence"}
     )
+    # Saved voice (library id) that is active at start-up and after Reset: the
+    # bundled "Default" voice. None starts on the built-in `default_voice` instead.
+    startup_voice: str | None = "default"
     default_voice: str = "Adde Michal"  # an XTTS speaker name from voice_groups (or "male"/"female")
     # Cloned voices inherit the accent of their reference clip (here: a Russian
     # speaker), so English cloned from it comes out accented. XTTS's style/accent
