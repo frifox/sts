@@ -10,6 +10,8 @@ there's no flash-attention/bfloat16 choice baked into this backend to worry
 about per device.
 """
 
+import re
+
 import numpy as np
 import soundfile as sf
 import torch
@@ -29,6 +31,46 @@ SAMPLE_RATE = 24_000  # XTTS v2 output rate
 # fails to load unless they're allowlisted.
 if hasattr(torch.serialization, "add_safe_globals"):
     torch.serialization.add_safe_globals([XttsConfig, XttsAudioConfig, BaseDatasetConfig, XttsArgs])
+
+
+# XTTS asserts on more than 400 tokens per sentence and warns past 250 characters
+# for English, so long unpunctuated sentences are cut at clause boundaries first.
+MAX_CHARS_PER_CHUNK = 220
+
+
+def split_for_xtts(text: str, limit: int = MAX_CHARS_PER_CHUNK) -> list[str]:
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    # Prefer sentence ends, then commas/semicolons, then plain spaces.
+    for part in re.split(r"(?<=[.!?])\s+|(?<=[,;:])\s+", text):
+        for word_run in _hard_wrap(part, limit):
+            if current and len(current) + 1 + len(word_run) > limit:
+                chunks.append(current)
+                current = word_run
+            else:
+                current = f"{current} {word_run}".strip()
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _hard_wrap(text: str, limit: int) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        if current and len(current) + 1 + len(word) > limit:
+            lines.append(current)
+            current = word
+        else:
+            current = f"{current} {word}".strip()
+    if current:
+        lines.append(current)
+    return lines
 
 
 def _load_with_soundfile(path, *args, **kwargs):
@@ -73,9 +115,12 @@ class XTTSSynthesizer:
         self.cloned_speaker_wav = None
 
     def synthesize(self, text: str) -> tuple[np.ndarray, int]:
-        if not text.strip():
+        pieces = [self._synthesize_piece(chunk) for chunk in split_for_xtts(text)]
+        if not pieces:
             return np.zeros(0, dtype=np.float32), SAMPLE_RATE
+        return np.concatenate(pieces), SAMPLE_RATE
 
+    def _synthesize_piece(self, text: str) -> np.ndarray:
         if self.cloned_speaker_wav:
             wav = self.tts.tts(
                 text=text, speaker_wav=self.cloned_speaker_wav, language=self.cfg.language
@@ -84,4 +129,4 @@ class XTTSSynthesizer:
             wav = self.tts.tts(
                 text=text, speaker=self.cfg.builtin_voices[self.default_voice], language=self.cfg.language
             )
-        return np.asarray(wav, dtype=np.float32), SAMPLE_RATE
+        return np.asarray(wav, dtype=np.float32)

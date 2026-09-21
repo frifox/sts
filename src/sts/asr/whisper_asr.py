@@ -7,6 +7,7 @@ from faster_whisper import WhisperModel
 
 from sts.config import ASRConfig
 from sts.log import vlog
+from sts.textclean import clean_transcript
 
 # Whisper was trained on lots of subtitled video, so on silence/music/noise it
 # sometimes emits subtitle credits nobody spoke. These are stock phrases from
@@ -19,8 +20,16 @@ _HALLUCINATION_PATTERNS = re.compile(
 )
 
 
+def _words(text: str) -> str:
+    return " ".join(re.findall(r"\w+", text.lower()))
+
+
 def is_hallucination(text: str, no_speech_prob: float, avg_logprob: float, cfg: ASRConfig) -> bool:
     if _HALLUCINATION_PATTERNS.search(text):
+        return True
+    # On noise Whisper sometimes just echoes the vocabulary hint it was given.
+    words = _words(text).split()
+    if len(words) >= 3 and cfg.initial_prompt and set(words) <= set(_words(cfg.initial_prompt).split()):
         return True
     # Whisper's own "this probably isn't speech" signal, only trusted when the
     # decoder was also unsure of what it wrote.
@@ -60,4 +69,4 @@ class WhisperASR:
                             f"(no_speech={segment.no_speech_prob:.2f}, logprob={segment.avg_logprob:.2f})")
                 continue
             kept.append(text)
-        return " ".join(kept).strip()
+        return clean_transcript(" ".join(kept))
