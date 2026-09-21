@@ -65,6 +65,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Built-in (non-cloned) voice used when no trained/cloned voice is active (xtts backend)",
     )
     parser.add_argument(
+        "--accent-voice",
+        default=None,
+        choices=["male", "female"],
+        help="Built-in voice whose accent cloned voices are steered toward (default: the selected --default-voice)",
+    )
+    parser.add_argument(
+        "--accent-strength",
+        type=float,
+        default=0.7,
+        help="0-1: how far a cloned voice's accent is pulled toward the accent voice; 0 disables (default 0.7)",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -99,6 +111,8 @@ def main() -> None:
     cfg.tts.backend = args.tts_backend
     cfg.tts.voice_library_dir = args.voice_library_dir
     cfg.tts.default_voice = args.default_voice
+    cfg.tts.accent_voice = args.accent_voice
+    cfg.tts.accent_strength = args.accent_strength
 
     broadcaster = None
     if args.web:

@@ -94,6 +94,7 @@ class XTTSSynthesizer:
         self.tts = TTS(cfg.model_name).to(cfg.device)
         self.cloned_speaker_wav: str | None = cfg.speaker_wav
         self.default_voice = cfg.default_voice
+        self._conditioning_cache: dict = {}
 
     def set_default_voice(self, voice: str) -> None:
         """Picks which built-in voice ("male"/"female") is used when no cloned voice is active."""
@@ -114,17 +115,42 @@ class XTTSSynthesizer:
     def reset_voice(self) -> None:
         self.cloned_speaker_wav = None
 
+    def synthesize_stream(self, text: str):
+        """Yields (audio, sample_rate) per chunk as each is synthesized, so
+        playback can start before a long sentence has been fully rendered."""
+        for chunk in split_for_xtts(text):
+            yield self._synthesize_piece(chunk), SAMPLE_RATE
+
     def synthesize(self, text: str) -> tuple[np.ndarray, int]:
         pieces = [self._synthesize_piece(chunk) for chunk in split_for_xtts(text)]
         if not pieces:
             return np.zeros(0, dtype=np.float32), SAMPLE_RATE
         return np.concatenate(pieces), SAMPLE_RATE
 
+    def _clone_conditioning(self, wav_path: str):
+        """(gpt_cond_latent, speaker_embedding) for the active clone, with its
+        style latent blended toward the accent voice's. Cached per (clip, accent)."""
+        accent_key = self.cfg.accent_voice or self.default_voice
+        accent_speaker = self.cfg.builtin_voices[accent_key]
+        strength = self.cfg.accent_strength
+        key = (wav_path, accent_speaker, strength)
+        if key not in self._conditioning_cache:
+            model = self.tts.synthesizer.tts_model
+            gpt_latent, speaker_embedding = model.get_conditioning_latents([wav_path])
+            if strength > 0:
+                accent_latent = model.speaker_manager.speakers[accent_speaker]["gpt_cond_latent"]
+                accent_latent = accent_latent.to(gpt_latent.device, gpt_latent.dtype)
+                gpt_latent = strength * accent_latent + (1 - strength) * gpt_latent
+            self._conditioning_cache[key] = (gpt_latent, speaker_embedding)
+        return self._conditioning_cache[key]
+
     def _synthesize_piece(self, text: str) -> np.ndarray:
         if self.cloned_speaker_wav:
-            wav = self.tts.tts(
-                text=text, speaker_wav=self.cloned_speaker_wav, language=self.cfg.language
+            gpt_latent, speaker_embedding = self._clone_conditioning(self.cloned_speaker_wav)
+            out = self.tts.synthesizer.tts_model.inference(
+                text, self.cfg.language, gpt_latent, speaker_embedding
             )
+            wav = out["wav"]
         else:
             wav = self.tts.tts(
                 text=text, speaker=self.cfg.builtin_voices[self.default_voice], language=self.cfg.language

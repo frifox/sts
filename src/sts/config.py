@@ -63,6 +63,13 @@ class TTSConfig:
         default_factory=lambda: {"male": "Damien Black", "female": "Claribel Dervla"}
     )
     default_voice: str = "male"  # key into builtin_voices
+    # Cloned voices inherit the accent of their reference clip (here: a Russian
+    # speaker), so English cloned from it comes out accented. XTTS's style/accent
+    # conditioning is separate from timbre, so the clone's style is blended
+    # toward a built-in voice's. `accent_voice` is a key into builtin_voices, or
+    # None to follow the selected default voice. Strength 0 disables the blend.
+    accent_voice: str | None = None
+    accent_strength: float = 0.7
     # When set, clone this reference speaker instead (stretch goal).
     speaker_wav: str | None = None
     # Where per-speaker reference clips are saved for reuse across sessions.

@@ -60,6 +60,7 @@ class Pipeline:
         self._segments: queue.Queue = queue.Queue()
         self._transcripts: queue.Queue = queue.Queue()
         self._translations: queue.Queue = queue.Queue()
+        self._audio: queue.Queue = queue.Queue()  # synthesized clips waiting to play
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
 
@@ -131,6 +132,8 @@ class Pipeline:
         self._drain(self._segments)
         self._drain(self._transcripts)
         self._drain(self._translations)
+        self._drain(self._audio)
+        self.playback.stop()
         if self.broadcaster:
             self.broadcaster.broadcast_reset()
 
@@ -263,13 +266,34 @@ class Pipeline:
                 continue
             t0 = time.monotonic()
             try:
-                audio, sample_rate = self.tts.synthesize(text)
+                # Each clip is handed to the playback thread as soon as it is
+                # ready, so the next sentence synthesizes while this one plays.
+                for audio, sample_rate in self._synthesize_pieces(text):
+                    if not audio.size:
+                        continue
+                    vlog("tts", f"synthesized {audio.size / sample_rate:.1f}s of speech in "
+                                f"{time.monotonic() - t0:.2f}s ({self._translations.qsize()} sentences waiting)")
+                    self._audio.put((audio, sample_rate))
+                    t0 = time.monotonic()
             except Exception as exc:  # one bad sentence shouldn't kill voicing for the rest of the session
                 print(f"[tts] synthesis failed, skipping this sentence: {exc!r}")
-                continue
-            vlog("tts", f"synthesized {audio.size / sample_rate:.1f}s of speech in {time.monotonic() - t0:.2f}s")
-            if audio.size:
-                self.playback.play(audio, sample_rate=sample_rate, blocking=True)
+
+    def _synthesize_pieces(self, text: str):
+        stream = getattr(self.tts, "synthesize_stream", None)
+        if stream is not None:
+            yield from stream(text)
+        else:
+            yield self.tts.synthesize(text)
+
+    def _playback_loop(self) -> None:
+        while not self._stop.is_set():
+            audio, sample_rate = self._audio.get()
+            if not self.control.voice_enabled.is_set():
+                continue  # voice was switched off while this was queued
+            try:
+                self.playback.play(audio, sample_rate=sample_rate)
+            except Exception as exc:
+                print(f"[audio] playback failed: {exc!r}")
 
     def start(self) -> None:
         self.capture.start()
@@ -279,6 +303,7 @@ class Pipeline:
             self._asr_loop,
             self._translate_loop,
             self._tts_loop,
+            self._playback_loop,
         ):
             thread = threading.Thread(target=target, daemon=True)
             thread.start()
@@ -289,3 +314,4 @@ class Pipeline:
     def stop(self) -> None:
         self._stop.set()
         self.capture.stop()
+        self.playback.stop()
