@@ -95,6 +95,16 @@ class TTSConfig:
     # transcript isn't English (e.g. a Russian speaker's clip) and icl otherwise.
     qwen3_clone_mode: str = "auto"
     qwen3_max_retries: int = 2
+    # Voice cloning also copies a reference's recording conditions, and even a good
+    # reference sometimes yields a dull, distant-sounding take. A take whose clarity
+    # (see sts.audioquality) is more than `qwen3_clarity_margin_db` below that voice's
+    # own typical take is regenerated (up to `qwen3_quality_retries` times) and the
+    # clearest take kept. There is deliberately no absolute floor: clarity depends on the
+    # voice (a deep voice measures duller than a bright one) and on the sentence, so a
+    # take is only ever compared with that voice's own previous takes, and nothing is
+    # judged until it has 3 of them. 0 retries turns this off.
+    qwen3_quality_retries: int = 1  # live use is latency-sensitive: each retry is a full extra generation
+    qwen3_clarity_margin_db: float = 4.0
     qwen3_style_instruct: str = (
         "Speak in a calm, warm, measured tone, like a gentle preacher delivering a sermon. "
         "American English accent."

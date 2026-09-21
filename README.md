@@ -573,6 +573,17 @@ sts-import-voice "Pastor Ivan" pastor_ivan ./checkpoint-epoch-9 \
   --lora-scale 0.3 --voice-library-dir /data/sts-voices
 ```
 
+## Sound quality of cloned voices (Qwen3)
+
+Voice cloning reproduces the recording conditions of the reference (a distant,
+compressed recording gives a muffled, distant voice), and some takes come out
+duller than others. With the Qwen3 backend, `sts` compares each spoken sentence
+with that voice's own recent takes and regenerates one that is clearly duller
+(`--qwen-quality-retries N`, default 1; 0 turns it off). Each retry is a full extra
+generation, so it costs latency; nothing is judged until a voice has 3 takes, and
+it's only ever compared with that same voice, never against a fixed bar. For the
+best results, train voices from a close, clean recording.
+
 ## Translating a recorded video
 
 `translate.py` translates a whole video (Russian -> English) offline and
@@ -619,6 +630,17 @@ timeline where the Russian sentence began.
   library instead (e.g. trained in the live app), and `--no-clone` uses the
   built-in default voice. It assumes **one speaker**; with several people the
   clone is of whoever spoke in that stretch.
+- **Sound quality:** a cloned voice copies the recording conditions of the
+  sample it's cloned from, so a video recorded from a distance or heavily
+  compressed can give a muffled, "far away" English voice, and even from a good
+  sample some takes come out duller than others. The script therefore (1) builds
+  each speaker's reference from their *clearest* sentences, avoiding very long
+  blurry ones, and (2) after speaking everything, re-records any sentence that is
+  clearly duller than that speaker's own median (`--retakes N`, default 2 tries;
+  0 turns it off), keeping the clearest take. That needs at least 3 sentences per
+  voice to compare, so with `--multiple` and only a sentence or two per speaker
+  nothing is retaken. It can't fix a recording that is muffled to begin with:
+  every take will be muffled too, and the log says nothing was improved.
 - **Timing:** English often runs longer than the Russian it replaces. A
   sentence that would run into the next is sped up (at most `--max-speedup`,
   default 1.3x); if that isn't enough, later sentences start a little late and

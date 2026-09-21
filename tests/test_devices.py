@@ -128,3 +128,16 @@ def test_tts_backend_is_inferred_from_the_environment(monkeypatch):
     assert engine_args.default_tts_backend() == "xtts"
     installed()
     assert engine_args.default_tts_backend() == "xtts"            # neither: falls through to the install hint
+
+
+def test_clarity_bar_follows_the_voice():
+    import sys, types
+
+    stub = types.ModuleType("qwen_tts")
+    stub.Qwen3TTSModel = object
+    sys.modules.setdefault("qwen_tts", stub)
+    from sts.tts.qwen3 import clarity_bar
+
+    assert clarity_bar([], 4.0) is None and clarity_bar([-14.0, -14.0], 4.0) is None   # nothing judged without a track record
+    assert clarity_bar([-14.0, -13.5, -14.5], 4.0) == -18.0                            # a clear voice: 4 dB below its own median
+    assert clarity_bar([-22.0, -21.0, -23.0], 4.0) == -26.0                            # a muffled voice isn't retried forever

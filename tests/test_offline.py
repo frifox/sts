@@ -113,17 +113,44 @@ def test_measured_sentences_are_not_flagged_but_a_skip_is():
     assert not speech_length_plausible("x" * 100, 6.4 * 0.64, bar, 0.16)
 
 
-def test_speaker_reference_takes_the_clearest_sentences_in_time_order():
-    units = [Unit(0, 5, "a", -0.2), Unit(10, 20, "b", -1.5),        # b is a poor transcription
-             Unit(30, 40, "c", -0.3), Unit(50, 53, "d", -0.1), Unit(60, 70, "e", -0.2)]
-    picked = pick_reference_units(units, [0, 1, 2, 3, 4], max_seconds=18)
-    assert 1 not in picked                                           # skipped: low confidence
-    assert picked == sorted(picked)                                  # returned in time order
-    total = sum(units[i].end - units[i].start for i in picked)
-    assert 15 <= total <= 18 * 1.15 + 1                              # about the requested amount of speech
+def test_speaker_reference_prefers_clear_short_sentences_and_avoids_blurry_long_ones():
+    units = [
+        Unit(0, 5, "muffled", -0.2, clarity=-28.0),
+        Unit(10, 20, "poor transcription", -1.5, clarity=-10.0),
+        Unit(30, 55, "one 25 s blur", -0.2, clarity=-12.0),          # far too long to be one person's sentence
+        Unit(60, 66, "clear", -0.2, clarity=-14.0),
+        Unit(70, 78, "also clear", -0.2, clarity=-15.0),
+    ]
+    picked = pick_reference_units(units, [0, 1, 2, 3, 4])
+    assert picked == [3, 4]                                          # the clear ones, in time order; 14 s is enough
+    assert 1 not in picked and 2 not in picked                       # low confidence / blurry long unit left out
 
 
-def test_speaker_reference_uses_everything_when_there_is_little():
+def test_speaker_reference_falls_back_gracefully():
     units = [Unit(0, 2, "a", -0.2), Unit(5, 6, "b", -0.9)]
-    assert pick_reference_units(units, [0, 1]) == [0, 1]
+    assert pick_reference_units(units, [0, 1]) == [0, 1]            # little speech: use all of it
     assert pick_reference_units(units, []) == []
+    long_only = [Unit(0, 25, "long", -0.2, clarity=-15.0)]
+    assert pick_reference_units(long_only, [0]) == [0]              # a long unit beats having no reference
+
+
+def test_dull_takes_are_judged_against_the_voices_own_median():
+    from sts.offline import find_dull_takes
+
+    clear_voice = {0: -14.0, 1: -13.5, 2: -14.5, 3: -21.0, 4: -14.2}          # one take is muffled
+    bar, dull = find_dull_takes(clear_voice)
+    assert dull == [3] and abs(bar - (-18.2)) < 1e-9
+
+    muffled_voice = {0: -22.0, 1: -21.5, 2: -22.5, 3: -21.8}                   # muffled every time: nothing to retake
+    assert find_dull_takes(muffled_voice)[1] == []
+
+    assert find_dull_takes({0: -14.0, 1: -25.0})[1] == []                      # too few takes to judge
+    even = {0: -10.0, 1: -12.0, 2: -14.0, 3: -30.0}                            # even count: median is the middle pair's mean
+    assert find_dull_takes(even)[0] == -13.0 - 4.0 and find_dull_takes(even)[1] == [3]
+    assert find_dull_takes({0: -30.0, 1: -25.0, 2: -14.0, 3: -13.0, 4: -14.0}, margin_db=4.0)[1] == [0, 1]   # worst first
+
+
+def test_single_speaker_reference_prefers_the_clearer_stretch():
+    units = [Unit(0, 6, "a", -0.2, clarity=-27.0), Unit(6.5, 13, "b", -0.2, clarity=-27.0),      # muffled, 13 s
+             Unit(40, 47, "c", -0.2, clarity=-13.0), Unit(47.5, 54, "d", -0.2, clarity=-13.0)]   # clear, 14 s
+    assert pick_reference_window(units) == (2, 3)

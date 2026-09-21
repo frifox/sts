@@ -16,6 +16,7 @@ placement) lives at the top so it can be tested without any model or ffmpeg.
 import argparse
 import json
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -46,6 +47,7 @@ class Unit:
     avg_logprob: float
     translation: str = ""
     speaker: int = 0  # who says it (0 unless --multiple identified several speakers)
+    clarity: float | None = None  # how clear the original recording of it is (sts.audioquality), if measured
 
 
 def default_output_path(input_path: Path) -> Path:
@@ -90,7 +92,7 @@ def pick_reference_window(
     speaker's voice from. Units more than `max_gap` seconds apart aren't joined
     (the clip would contain silence or someone else). Returns the longest
     available run even if it is short; None when no unit is usable."""
-    best: tuple[float, float, int, int] | None = None
+    best: tuple[tuple, int, int] | None = None
     for i, first in enumerate(units):
         if first.avg_logprob < min_logprob:
             continue
@@ -101,36 +103,61 @@ def pick_reference_window(
                 break
             if j > i and unit.start - units[j - 1].end > max_gap:
                 break
-            score = (span, sum(u.avg_logprob for u in units[i : j + 1]) / (j - i + 1))
-            if best is None or score > (best[0], best[1]):
-                best = (span, score[1], i, j)
+            run = units[i : j + 1]
+            clarity = sum(u.clarity if u.clarity is not None else 0.0 for u in run) / len(run)
+            # Long enough (10 s) is what matters; among runs that long, the clearest recording wins
+            # (a cloned voice copies a muffled recording's muffled sound), then the best transcribed.
+            score = (min(span, 10.0), clarity, sum(u.avg_logprob for u in run) / len(run), span)
+            if best is None or score > best[0]:
+                best = (score, i, j)
     if best is None:
         return None
-    return best[2], best[3]
+    return best[1], best[2]
 
 
 def pick_reference_units(
-    units: list[Unit], indices: list[int], max_seconds: float = 18.0, min_logprob: float = -0.6
+    units: list[Unit], indices: list[int], target_seconds: float = 14.0, max_seconds: float = 20.0,
+    min_logprob: float = -0.6, max_unit_seconds: float = 12.0,
 ) -> list[int]:
     """Which of one speaker's sentences (`indices` into `units`) to build their
-    voice-cloning reference from: the most confidently transcribed ones, until
-    about `max_seconds` of speech is collected, returned in time order. A
+    voice-cloning reference from, returned in time order.
+
+    The cloned voice copies the recording conditions of its reference (a muffled,
+    distant recording gives a muffled, distant voice), so this prefers the
+    clearest recordings among the confidently transcribed ones. Very long units
+    come last: a 25 s "sentence" is usually several lines, maybe several people,
+    and gives a blurry voiceprint. Collection stops at `target_seconds`. A
     speaker's sentences are rarely back to back, so unlike the single-speaker
     case this can join sentences from different places in the video."""
-    candidates = sorted(
-        indices, key=lambda i: (units[i].avg_logprob >= min_logprob, units[i].end - units[i].start), reverse=True
-    )
+    def rank(i: int):
+        length = units[i].end - units[i].start
+        clarity = units[i].clarity if units[i].clarity is not None else -99.0
+        return (units[i].avg_logprob >= min_logprob, length <= max_unit_seconds, clarity, length)
+
     chosen: list[int] = []
     total = 0.0
-    for i in candidates:
+    for i in sorted(indices, key=rank, reverse=True):
         length = units[i].end - units[i].start
-        if chosen and total + length > max_seconds * 1.15:
-            continue  # this one would overshoot; a shorter one may still fit
+        if chosen and total + length > max_seconds:
+            continue  # would overshoot; a shorter one may still fit
         chosen.append(i)
         total += length
-        if total >= max_seconds:
+        if total >= target_seconds:
             break
     return sorted(chosen)
+
+
+def find_dull_takes(clarities: dict[int, float], margin_db: float = 4.0, min_takes: int = 3) -> tuple[float, list[int]]:
+    """(bar, indices of the takes clearly duller than the rest), worst first.
+
+    `clarities` maps a sentence index to the clarity (dB) of its synthesized clip,
+    for one voice. Judged only against that voice's own median: clarity depends on
+    the voice and on the sentence, so there is no absolute bar, and with fewer
+    than `min_takes` takes there is nothing to compare against."""
+    if len(clarities) < min_takes:
+        return float("-inf"), []
+    bar = statistics.median(clarities.values()) - margin_db
+    return bar, sorted((i for i, c in clarities.items() if c < bar), key=lambda i: clarities[i])
 
 
 @dataclass
@@ -264,6 +291,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--speaker-threshold", type=float, default=None,
                         help="How different two voices must be to count as different people when guessing the "
                         "number of speakers (cosine distance; lower = splits more readily; default 0.32)")
+    parser.add_argument("--retakes", type=int, default=2, metavar="N",
+                        help="Sentences that sound duller (more muffled/distant) than the rest of that speaker's "
+                        "are re-recorded up to N more times, keeping the clearest (default 2; 0 = off)")
     parser.add_argument("--max-speedup", type=float, default=1.3,
                         help="Fastest an English clip may be sped up to fit the time of the Russian it replaces (default 1.3)")
     parser.add_argument("--keep-original", action="store_true", help="Also keep the original audio as a second track")
@@ -308,6 +338,11 @@ def main(argv: list[str] | None = None) -> None:
             f"  {available}this from the environment that has it (pip install -e '.[{cfg.tts.backend}]')."
         )
 
+    # Dull takes are handled by the retake pass below (it can compare a sentence with all of that
+    # speaker's others, including ones spoken later); the synthesizer's own in-line retries stay as configured.
+    if args.qwen_quality_retries is None:
+        cfg.tts.qwen3_quality_retries = 0
+
     # The preset-voice model is only needed when no voice is being cloned.
     cfg.tts.qwen3_preload_presets = bool(args.no_clone and not args.voice)
 
@@ -344,6 +379,10 @@ def main(argv: list[str] | None = None) -> None:
     if not units:
         raise SystemExit("No speech was found in the audio track")
     print(f"Found {len(units)} sentences of speech.", flush=True)
+    from sts.audioquality import clarity_db
+
+    for unit in units:
+        unit.clarity = clarity_db(audio[int(unit.start * ASR_SAMPLE_RATE): int(unit.end * ASR_SAMPLE_RATE)], ASR_SAMPLE_RATE)
 
     # -- voice ----------------------------------------------------------
     speaker_voices: dict[int, tuple[Path, str] | None] = {}  # speaker -> (reference wav, its text); None = built-in voice
@@ -434,15 +473,20 @@ def main(argv: list[str] | None = None) -> None:
     # One speaker at a time, so each voice is set up once; the timeline below doesn't care about the order.
     order = sorted(range(len(units)), key=lambda i: (units[i].speaker, i))
     active_speaker = None
-    for done, i in enumerate(order, start=1):
-        unit = units[i]
-        if multiple and unit.speaker != active_speaker:
-            active_speaker = unit.speaker
-            voice = speaker_voices.get(unit.speaker)
+
+    def use_voice_of(speaker: int) -> None:
+        nonlocal active_speaker
+        if multiple and speaker != active_speaker:
+            active_speaker = speaker
+            voice = speaker_voices.get(speaker)
             if voice is None:
                 tts.reset_voice()
             else:
                 tts.clone_voice(str(voice[0]), voice[1])
+
+    for done, i in enumerate(order, start=1):
+        unit = units[i]
+        use_voice_of(unit.speaker)
         try:
             clip, rate = tts.synthesize(unit.translation, pause_s=cfg.audio.pause_within_s)
             if sample_rate is None:
@@ -458,6 +502,39 @@ def main(argv: list[str] | None = None) -> None:
             print(f"  spoken {done}/{len(order)}  (about {_fmt(eta)} left)", flush=True)
     if sample_rate is None:
         raise SystemExit("Speech synthesis produced no audio")
+
+    # -- retake sentences that sound duller than the rest ----------------------
+    # A cloned voice copies its reference's recording conditions, and some takes come out muffled
+    # or distant-sounding. Compare each sentence with that speaker's own median and re-record the outliers.
+    if args.retakes > 0:
+        from sts.audioquality import clarity_db
+
+        retaken = improved = 0
+        for speaker in sorted({u.speaker for u in units}):
+            mine = [i for i in range(len(units)) if units[i].speaker == speaker and clips[i] is not None
+                    and len(clips[i]) > sample_rate]  # over a second: shorter clips can't be judged
+            clarity = {i: clarity_db(clips[i], sample_rate) for i in mine}
+            bar, dull = find_dull_takes(clarity)
+            if not dull:
+                continue
+            use_voice_of(speaker)
+            for i in dull:
+                best, best_clarity, previous = clips[i], clarity[i], None
+                for _ in range(args.retakes):
+                    clip, rate = tts.synthesize(units[i].translation, pause_s=cfg.audio.pause_within_s)
+                    if rate != sample_rate:
+                        clip = librosa.resample(clip, orig_sr=rate, target_sr=sample_rate)
+                    took = clarity_db(clip, sample_rate)
+                    if took > best_clarity:
+                        best, best_clarity = clip, took
+                    if best_clarity >= bar or (previous is not None and abs(took - previous) < 1.5):
+                        break  # clear enough now, or retakes come out equally dull: more tries won't help
+                    previous = took
+                retaken += 1
+                improved += best_clarity > clarity[i]
+                clips[i] = best
+        if retaken:
+            print(f"Re-recorded {retaken} sentence(s) that sounded duller than the rest; {improved} came out clearer.", flush=True)
 
     # -- assemble the timeline ------------------------------------------
     usable = [(u, c) for u, c in zip(units, clips) if c is not None and c.size]

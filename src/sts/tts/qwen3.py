@@ -60,6 +60,7 @@ from qwen_tts import Qwen3TTSModel
 
 from sts.config import TTSConfig
 from sts.devices import supports_bf16_and_flash_attention
+from sts.audioquality import clarity_db
 from sts.gpu import gpu_lock
 from sts.log import vlog
 from sts.textclean import split_for_tts
@@ -94,6 +95,16 @@ def min_plausible_seconds_per_char(pace_history, floor: float) -> float:
     if len(pace_history) < 5:
         return floor
     return max(floor, 0.75 * statistics.median(pace_history))
+
+
+def clarity_bar(history, margin_db: float) -> float | None:
+    """The clarity a take must reach to be kept: this voice's own median minus a
+    margin, or None (no judgement) until it has a few takes of its own. A voice
+    cloned from a muffled recording is muffled every time and mustn't be regenerated
+    forever, and clarity varies by voice and sentence, so there is no absolute bar."""
+    if len(history) < 3:
+        return None
+    return statistics.median(history) - margin_db
 
 
 def speech_length_plausible(text: str, seconds: float, min_spc: float, max_spc: float) -> bool:
@@ -141,7 +152,8 @@ class Qwen3TTSSynthesizer:
         # voice-design dialog synthesizes previews while the live pipeline runs.
         # (On mps this is the process-wide GPU lock shared with translation.)
         self._lock = gpu_lock(cfg.device) if cfg.device == "mps" else threading.Lock()
-        self._pace_history: deque = deque(maxlen=20)  # seconds/word of recently accepted sentences
+        self._pace_history: deque = deque(maxlen=20)  # seconds/character of recently accepted sentences
+        self._clarity_history: deque = deque(maxlen=20)  # clarity (dB) of recently accepted takes
         self._design_model = None
         self._design_load_lock = threading.Lock()
         self._prompt = None
@@ -215,6 +227,7 @@ class Qwen3TTSSynthesizer:
 
     def clone_voice(self, reference_wav_path: str, ref_text: str | None = None) -> None:
         self._pace_history.clear()
+        self._clarity_history.clear()
         with self._lock:
             self._prompt = self.model.create_voice_clone_prompt(
                 ref_audio=reference_wav_path,
@@ -234,6 +247,7 @@ class Qwen3TTSSynthesizer:
 
     def _activate_lora(self, entry: VoiceEntry) -> None:
         self._pace_history.clear()
+        self._clarity_history.clear()
         if entry.speaker_id not in self._lora_models:
             self._lora_models[entry.speaker_id] = _load_lora_model(self.cfg, entry)
         self._active_lora_speaker_id = entry.speaker_id
@@ -245,6 +259,7 @@ class Qwen3TTSSynthesizer:
         if voice not in self.cfg.all_voices():
             raise ValueError(f"unknown preset voice {voice!r}; choose from {self.cfg.all_voices()}")
         self._pace_history.clear()
+        self._clarity_history.clear()
         self.default_voice = voice
 
     def forget_voice(self, speaker_id: str) -> None:
@@ -254,6 +269,7 @@ class Qwen3TTSSynthesizer:
 
     def reset_voice(self) -> None:
         self._pace_history.clear()
+        self._clarity_history.clear()
         self._prompt = None
         self.cloned_speaker_wav = None
         self._active_lora_speaker_id = None
@@ -283,10 +299,13 @@ class Qwen3TTSSynthesizer:
         return audio, sample_rate
 
     def _synthesize_checked(self, text: str) -> tuple[np.ndarray, int]:
-        """One piece, regenerated if the result looks like skipped or runaway speech."""
+        """One piece, regenerated if the take looks like skipped or runaway speech,
+        or is noticeably duller than this voice normally sounds. Keeps the best take."""
         chars = len(text.strip())
-        best: tuple[np.ndarray, int] | None = None
+        # (audio, sample_rate, length_was_believable, clarity in dB or None if too short to judge)
+        takes: list[tuple[np.ndarray, int, bool, float | None]] = []
         previous_seconds: float | None = None
+        previous_clarity: float | None = None
         for attempt in range(self.cfg.qwen3_max_retries + 1):
             audio, sample_rate = self._generate_once(text)
             seconds = len(audio) / sample_rate
@@ -296,17 +315,35 @@ class Qwen3TTSSynthesizer:
             # each time. The same length twice running means the model is consistently
             # reading the whole text (just at this pace); retrying again would only delay audio.
             repeated = previous_seconds is not None and abs(seconds - previous_seconds) <= 0.1 * previous_seconds
-            if plausible or repeated:
-                if plausible and chars >= MIN_CHARS_TO_JUDGE:
-                    self._pace_history.append(seconds / chars)
-                return audio, sample_rate
-            vlog("tts", f"suspicious speech length ({seconds:.1f}s for {chars} characters, "
-                        f"expected at least {min_spc * chars:.1f}s), regenerating (attempt {attempt + 1}): {text[:60]!r}")
+            if not plausible and not repeated:
+                vlog("tts", f"suspicious speech length ({seconds:.1f}s for {chars} characters, "
+                            f"expected at least {min_spc * chars:.1f}s), regenerating (attempt {attempt + 1}): {text[:60]!r}")
+                previous_seconds = seconds
+                takes.append((audio, sample_rate, False, None))
+                continue
+
+            clarity = clarity_db(audio, sample_rate) if chars >= MIN_CHARS_TO_JUDGE else None
+            takes.append((audio, sample_rate, True, clarity))
+            bar = clarity_bar(self._clarity_history, self.cfg.qwen3_clarity_margin_db)
+            if clarity is None or bar is None or clarity >= bar or attempt >= self.cfg.qwen3_quality_retries:
+                break
+            if previous_clarity is not None and abs(clarity - previous_clarity) < 1.5:
+                break  # about as dull as the last take: this voice/sentence is just like that, more tries won't help
+            previous_clarity = clarity
+            vlog("tts", f"dull take ({clarity:.1f} dB; this voice's bar is {bar:.1f} dB), "
+                        f"regenerating (attempt {attempt + 1}): {text[:60]!r}")
             previous_seconds = seconds
-            # Skipped-word failures come out too short, so the longest attempt is the best fallback.
-            if best is None or len(audio) > len(best[0]):
-                best = (audio, sample_rate)
-        return best
+
+        believable = [t for t in takes if t[2]]
+        if not believable:
+            # Every take skipped words (they come out too short), so the longest is the best fallback.
+            audio, sample_rate, _, _ = max(takes, key=lambda t: len(t[0]))
+            return audio, sample_rate
+        audio, sample_rate, _, clarity = max(believable, key=lambda t: t[3] if t[3] is not None else 0.0)
+        if clarity is not None:
+            self._clarity_history.append(clarity)
+            self._pace_history.append(len(audio) / sample_rate / chars)
+        return audio, sample_rate
 
     def _generate_once(self, text: str) -> tuple[np.ndarray, int]:
         with self._lock:
