@@ -19,6 +19,17 @@ def supports_bf16_and_flash_attention(compute_capability_major: int) -> bool:
     return compute_capability_major >= MIN_COMPUTE_CAPABILITY_FOR_BF16_AND_FLASH_ATTENTION
 
 
+def detect_device() -> str:
+    """Best available torch device: cuda, then mps, else cpu."""
+    import torch
+
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def resolve_devices(device: str, asr_device_override: str | None) -> tuple[str, str, str]:
     """Returns (asr_device, translation_device, tts_device).
 

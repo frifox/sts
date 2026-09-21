@@ -6,7 +6,7 @@ import time
 
 from sts.audio.capture import list_devices
 from sts.config import PipelineConfig
-from sts.devices import resolve_devices
+from sts.devices import detect_device, resolve_devices
 from sts.pipeline import Pipeline
 from sts.web.server import CaptionBroadcaster, run_server
 
@@ -18,10 +18,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-device", type=int, default=None, help="Output device index")
     parser.add_argument(
         "--device",
-        default="cuda",
+        default=None,
         choices=["cuda", "cpu", "mps"],
         help="Compute device for translation/TTS, and ASR unless --asr-device overrides it "
-        "('mps' targets Apple Silicon GPUs)",
+        "('mps' targets Apple Silicon GPUs). Default: auto-detect (cuda, then mps, then cpu)",
     )
     parser.add_argument(
         "--asr-device",
@@ -72,7 +72,7 @@ def main() -> None:
         print(list_devices())
         return
 
-    asr_device, translation_device, tts_device = resolve_devices(args.device, args.asr_device)
+    asr_device, translation_device, tts_device = resolve_devices(args.device or detect_device(), args.asr_device)
 
     cfg = PipelineConfig()
     cfg.audio.input_device = args.input_device
