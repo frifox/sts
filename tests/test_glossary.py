@@ -35,3 +35,12 @@ def test_no_terms_present_is_a_noop():
     masked, translations = glossary.mask(text)
     assert masked == text
     assert translations == []
+
+
+def test_all_placeholders_present():
+    from sts.translate.glossary import all_placeholders_present, mask
+
+    masked, values = mask("Библия, церковь, молитва.")
+    assert all_placeholders_present(masked, values)
+    assert not all_placeholders_present("The following is a list of things:", values)
+    assert all_placeholders_present("plain text", [])

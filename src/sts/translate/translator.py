@@ -54,10 +54,12 @@ class Translator:
         if self.cfg.apply_glossary:
             source, placeholder_values = glossary.mask(text)
             result = self._generate(source)
-            if placeholder_values and not _DEGENERATE.search(result):
+            if _DEGENERATE.search(result) or not glossary.all_placeholders_present(result, placeholder_values):
+                # The model garbled or dropped a placeholder (typical when a
+                # sentence is mostly glossary terms); retry on the plain text.
+                result = ""
+            elif placeholder_values:
                 result = glossary.unmask(result, placeholder_values)
-            elif _DEGENERATE.search(result):
-                result = ""  # the placeholders confused the model; retry on the plain text
         if not result:
             result = self._generate(text)
         return collapse_repeats(result)

@@ -87,3 +87,9 @@ def unmask(text: str, translations: list[str]) -> str:
         return translations[int(m.group(1))]
 
     return _PLACEHOLDER_RE.sub(_replace, text)
+
+
+def all_placeholders_present(text: str, translations: list[str]) -> bool:
+    """True when every placeholder handed to the model came back exactly once."""
+    found = sorted(int(i) for i in _PLACEHOLDER_RE.findall(text))
+    return found == list(range(len(translations)))
