@@ -62,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--default-voice",
         default=None,
         help="Built-in (non-cloned) voice used when no trained/cloned voice is active (xtts backend): "
-        "an XTTS speaker name from the page's dropdown, e.g. 'Craig Gutsy', or male/female (default: Damien Black)",
+        "an XTTS speaker name from the page's dropdown, e.g. 'Craig Gutsy', or male/female (default: Adde Michal)",
     )
     parser.add_argument(
         "--accent-voice",
