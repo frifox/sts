@@ -70,12 +70,9 @@
   }
 
   #indicators {
-    position: fixed;
-    top: 0.6vh;
-    right: 1.2vw;
+    flex: 0 0 auto;
     font-size: 0.75rem;
-    color: #777;
-    z-index: 2;
+    color: #888;
     display: flex;
     align-items: center;
     gap: 1.2em;
@@ -116,7 +113,7 @@
 
   #verse-overlay {
     position: fixed;
-    top: 0;
+    top: var(--header-h, 0px);
     left: 50%;
     z-index: 3;
     width: min(90vw, 60rem);
@@ -151,22 +148,27 @@
   #verse-ru { color: #9cdcfe; }
   #verse-en { color: #e8c07d; }
 
-  #controls {
-    position: fixed;
-    bottom: 1.2vh;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 4;
+  /* Permanent header: part of the page layout (the caption panels take the
+     remaining height), always fully visible, sitting above the verse overlay. */
+  #header {
+    flex: 0 0 auto;
+    position: relative;
+    z-index: 5;
     display: flex;
-    gap: 0.6em;
-    padding: 0.5em;
-    background: rgba(0, 0, 0, 0.5);
-    border-radius: 10px;
-    opacity: 0.35;
-    transition: opacity 0.2s ease;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1em;
+    padding: 0.5em 1.2vw;
+    background: #111116;
+    border-bottom: 1px solid #2a2a30;
   }
 
-  #controls:hover, #controls:focus-within { opacity: 1; }
+  #controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6em;
+  }
 
   #controls button {
     font: inherit;
@@ -236,6 +238,24 @@
 </head>
 <body>
   <div id="app">
+  <div id="header">
+    <div id="controls">
+      <button id="btn-toggle">Stop</button>
+      <button id="btn-voice">🔇 Voice off</button>
+      <select id="default-voice" title="Built-in voice (used when no trained voice is selected)"></select>
+      <button id="btn-create-voice" hidden title="Design a new voice from a text description (Qwen3 backend)">Create Voice</button>
+      <button id="btn-train">Train voice</button>
+      <button id="btn-save-voice" disabled title="Save the trained voice to the library">Save Voice</button>
+      <select id="speaker-select">
+        <option value="">— no cloned voice —</option>
+      </select>
+      <button id="btn-reset">Reset</button>
+    </div>
+    <div id="indicators">
+      <div id="stage"></div>
+      <div id="status" class="disconnected">Not connected</div>
+    </div>
+  </div>
     <div class="panel" id="original-panel">
       <span class="label">Original</span>
       <div class="lines" id="original-lines"></div>
@@ -245,10 +265,6 @@
       <div class="lines" id="translated-lines"></div>
     </div>
   </div>
-  <div id="indicators">
-    <div id="stage"></div>
-    <div id="status" class="disconnected">Not connected</div>
-  </div>
 
   <div id="verse-overlay">
     <div class="verse-reference" id="verse-reference"></div>
@@ -256,18 +272,6 @@
     <div class="verse-text" id="verse-en"></div>
   </div>
 
-  <div id="controls">
-    <button id="btn-toggle">Stop</button>
-    <button id="btn-voice">🔇 Voice off</button>
-    <select id="default-voice" title="Built-in voice (used when no trained voice is selected)"></select>
-    <button id="btn-create-voice" hidden title="Design a new voice from a text description (Qwen3 backend)">Create Voice</button>
-    <button id="btn-train">Train voice</button>
-    <button id="btn-save-voice" disabled title="Save the trained voice to the library">Save Voice</button>
-    <select id="speaker-select">
-      <option value="">— no cloned voice —</option>
-    </select>
-    <button id="btn-reset">Reset</button>
-  </div>
 
 <div id="design-dialog">
     <div class="card">
@@ -318,6 +322,14 @@
       container.removeChild(container.firstChild);
     }
   }
+
+  // The verse overlay hangs from just below the header, whatever its height
+  // (it wraps to more rows on narrow screens).
+  const headerEl = document.getElementById('header');
+  const syncHeaderHeight = () =>
+    document.documentElement.style.setProperty('--header-h', `${headerEl.offsetHeight}px`);
+  new ResizeObserver(syncHeaderHeight).observe(headerEl);
+  syncHeaderHeight();
 
   const VERSE_DISPLAY_MS = 25000;
   let verseHideTimer = null;
