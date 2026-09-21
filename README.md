@@ -32,7 +32,10 @@ sound card -> VAD segmenter -> Whisper ASR (ru) -> NLLB translation (ru->en) -> 
   glossary (`sts.translate.glossary`) force-substitutes known Baptist/Christian
   terms (grace, repentance, communion, sanctification, ...) so the model
   can't mistranslate them, matching inflected Russian forms via stemming.
-- **TTS** (`sts.tts`) — two swappable backends, picked via `--tts-backend`:
+- **TTS** (`sts.tts`) — two swappable backends. `--tts-backend` picks one; by
+  default it's whichever is installed in the Python environment you run from
+  (they live in separate virtualenvs), so `.venv/bin/sts` uses XTTS and
+  `.venv-qwen/bin/sts` uses Qwen3-TTS:
   - `xtts` (default) — Coqui XTTS v2. Ships natural built-in speakers, plus
     zero-shot cloning from a short reference clip.
   - `qwen3` — Qwen3-TTS-Base (`pip install -e '.[qwen3]'`, in its own virtualenv - see Setup), Apache-2.0,
@@ -236,7 +239,7 @@ throughput, not whether the models fit.
 
 ```bash
 sts --web --device mps                          # XTTS backend
-sts --web --device mps --tts-backend qwen3       # Qwen3-TTS backend
+sts --web --device mps --tts-backend qwen3       # Qwen3-TTS backend (or just run it from .venv-qwen)
 ```
 
 ## Older NVIDIA GPUs (pre-Ampere) and Windows
@@ -554,9 +557,8 @@ sts --clone reference.wav --clone-name "Pastor Ivan"
 sts --web --web-port 8765          # also serve live captions at :8765
                                     # (open it full-screen / kiosk mode on a
                                     # second monitor or projector)
-sts --web --tts-backend qwen3 --voice-library-dir /data/sts-voices
-                                    # Qwen3-TTS backend + a custom voice
-                                    # library location
+sts --web --voice-library-dir /data/sts-voices
+                                    # a custom voice library location
 
 # import a LoRA adapter trained via training/qwen3_lora/ (see its README):
 sts-import-voice "Pastor Ivan" pastor_ivan ./checkpoint-epoch-9 \
@@ -580,8 +582,9 @@ python translate.py --input talk.mp4 --keep-original --save-transcript
                                                       # original audio as a 2nd track + a .json of the text
 ```
 
-It uses **Qwen3-TTS by default**, so run it from the environment that has the
-`qwen3` extra (`.venv-qwen`, see Setup); `--tts-backend xtts` uses XTTS instead.
+It uses whichever TTS backend is installed in the environment you run it from:
+run it from `.venv-qwen` for **Qwen3-TTS** (preferred if both are somehow
+installed), or from `.venv` for XTTS. `--tts-backend` overrides the choice.
 It accepts the same engine options as `sts` (`--device`, `--whisper-model`,
 `--default-voice`, `--qwen-temperature`, ...); see `python translate.py --help`.
 

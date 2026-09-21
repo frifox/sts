@@ -3,6 +3,7 @@
 the TTS voice behaves."""
 
 import argparse
+import importlib.util
 
 from sts.config import PipelineConfig
 from sts.devices import detect_device, resolve_devices
@@ -26,9 +27,11 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--whisper-model", default="large-v3", help="faster-whisper model size/name")
     parser.add_argument(
         "--tts-backend",
-        default="xtts",
+        default=None,
         choices=["xtts", "qwen3"],
-        help="Voice cloning/synthesis backend (qwen3 needs the 'qwen3' extra: pip install -e '.[qwen3]')",
+        help="Voice cloning/synthesis backend. Default: whichever is installed in the current Python "
+        "environment (xtts needs the 'xtts' extra, qwen3 the 'qwen3' extra; they conflict, so each "
+        "lives in its own virtualenv)",
     )
     parser.add_argument(
         "--default-voice",
@@ -82,7 +85,24 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def build_engine_config(args: argparse.Namespace) -> tuple[PipelineConfig, tuple[str, str, str]]:
+# The Python module each backend's extra installs.
+_BACKEND_MODULES = {"xtts": "TTS", "qwen3": "qwen_tts"}
+
+
+def installed_backends() -> list[str]:
+    return [name for name, module in _BACKEND_MODULES.items() if importlib.util.find_spec(module) is not None]
+
+
+def default_tts_backend(prefer: str = "xtts") -> str:
+    """The TTS backend to use when --tts-backend isn't given: the one installed in
+    this environment. If both are (unusual: their transformers requirements
+    conflict) or neither is, `prefer` decides (the latter then fails with an
+    install hint when the backend loads)."""
+    installed = installed_backends()
+    return installed[0] if len(installed) == 1 else prefer
+
+
+def build_engine_config(args: argparse.Namespace, prefer_backend: str = "xtts") -> tuple[PipelineConfig, tuple[str, str, str]]:
     """Applies the shared options to a fresh PipelineConfig. Returns it together
     with the resolved (asr, translation, tts) devices."""
     set_verbose(args.verbose)
@@ -95,7 +115,9 @@ def build_engine_config(args: argparse.Namespace) -> tuple[PipelineConfig, tuple
     cfg.asr.model_size = args.whisper_model
     cfg.translation.device = translation_device
     cfg.tts.device = tts_device
-    cfg.tts.backend = args.tts_backend
+    cfg.tts.backend = args.tts_backend or default_tts_backend(prefer_backend)
+    if not args.tts_backend:
+        print(f"[tts] using the {cfg.tts.backend} backend (the one installed in this environment)", flush=True)
     cfg.tts.use_backend_voices()
     cfg.tts.voice_library_dir = args.voice_library_dir
     if args.qwen_clone_mode is not None:

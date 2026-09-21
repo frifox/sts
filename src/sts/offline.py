@@ -26,7 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sts.engine_args import add_engine_arguments, build_engine_config
+from sts.engine_args import add_engine_arguments, build_engine_config, installed_backends
 from sts.log import vlog
 
 ASR_SAMPLE_RATE = 16_000
@@ -214,9 +214,6 @@ def build_parser() -> argparse.ArgumentParser:
         "English voice (video stream is copied untouched)."
     )
     add_engine_arguments(parser)
-    # Video translation uses Qwen3-TTS by default (run it from the environment
-    # that has the 'qwen3' extra); --tts-backend xtts still works.
-    parser.set_defaults(tts_backend="qwen3")
     parser.add_argument("--input", required=True, type=Path, help="Video to translate (mp4, mkv, mov, ...)")
     parser.add_argument("--output", type=Path, default=None, help="Where to write the result (default: <input>-english.<ext>)")
     parser.add_argument(
@@ -258,19 +255,16 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"--audio-track {args.audio_track} out of range: the file has {len(audio_streams)} audio track(s)")
     video_seconds = float(info["format"].get("duration") or 0)
 
-    cfg, (asr_device, translation_device, tts_device) = build_engine_config(args)
+    cfg, (asr_device, translation_device, tts_device) = build_engine_config(args, prefer_backend="qwen3")
 
     # Fail before loading any model if the chosen TTS backend isn't installed here
     # (the xtts and qwen3 extras live in separate virtualenvs).
-    import importlib.util
-
-    backend_module = {"xtts": "TTS", "qwen3": "qwen_tts"}[cfg.tts.backend]
-    if importlib.util.find_spec(backend_module) is None:
-        other = "xtts" if cfg.tts.backend == "qwen3" else "qwen3"
+    installed = installed_backends()
+    if cfg.tts.backend not in installed:
+        available = f"This environment has the {installed[0]} backend, so use --tts-backend {installed[0]}, or run " if installed else "Run "
         raise SystemExit(
             f"The '{cfg.tts.backend}' TTS backend isn't installed in this Python environment.\n"
-            f"  Run this from the environment that has it (for qwen3, e.g. .venv-qwen: "
-            f"pip install -e '.[qwen3]'), or pass --tts-backend {other}."
+            f"  {available}this from the environment that has it (pip install -e '.[{cfg.tts.backend}]')."
         )
 
     # The preset-voice model is only needed when no voice is being cloned.

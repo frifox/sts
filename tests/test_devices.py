@@ -109,3 +109,22 @@ def test_qwen3_clone_mode_selection():
     assert use_icl_conditioning("auto", en)       # English (designed voice) -> full conditioning
     assert use_icl_conditioning("icl", ru) and not use_icl_conditioning("xvector", en)
     assert not use_icl_conditioning("auto", None)
+
+
+def test_tts_backend_is_inferred_from_the_environment(monkeypatch):
+    import importlib.util
+
+    from sts import engine_args
+
+    def installed(*modules):
+        monkeypatch.setattr(importlib.util, "find_spec", lambda name: object() if name in modules else None)
+
+    installed("qwen_tts")
+    assert engine_args.default_tts_backend() == "qwen3"           # only Qwen3 here -> Qwen3, even for live use
+    installed("TTS")
+    assert engine_args.default_tts_backend(prefer="qwen3") == "xtts"
+    installed("TTS", "qwen_tts")
+    assert engine_args.default_tts_backend(prefer="qwen3") == "qwen3"   # both: the caller's preference
+    assert engine_args.default_tts_backend() == "xtts"
+    installed()
+    assert engine_args.default_tts_backend() == "xtts"            # neither: falls through to the install hint
