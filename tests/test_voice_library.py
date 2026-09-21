@@ -109,3 +109,37 @@ def _make_adapter_dir(tmp_path):
     (src / "adapter_config.json").write_text("fake adapter config")
     (src / "adapter_model.safetensors").write_bytes(b"fake-weights")
     return src
+
+
+def test_delete_removes_only_that_voice(tmp_path):
+    from sts.tts.voice_library import VoiceLibrary
+
+    library = VoiceLibrary(tmp_path / "voices")
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"RIFF")
+    keep = library.save("Keep me", wav)
+    gone = library.save("Delete me", wav)
+
+    assert library.delete(gone.speaker_id) is True
+    assert [e.name for e in library.list()] == ["Keep me"]
+    assert library.get(gone.speaker_id) is None
+    assert library.delete(gone.speaker_id) is False  # already gone
+    assert library.get(keep.speaker_id) is not None
+
+
+def test_delete_and_get_reject_path_traversal(tmp_path):
+    from sts.tts.voice_library import VoiceLibrary
+
+    library = VoiceLibrary(tmp_path / "voices")
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"RIFF")
+    library.save("Voice", wav)
+    outside = tmp_path / "precious"
+    outside.mkdir()
+    (outside / "meta.json").write_text("{}")
+
+    for bad in ("../precious", "..", ".", "", "/tmp", str(outside), "voice/../../precious"):
+        assert library.delete(bad) is False
+        assert library.get(bad) is None
+    assert outside.exists()
+    assert [e.name for e in library.list()] == ["Voice"]

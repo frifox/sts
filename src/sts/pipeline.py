@@ -132,6 +132,8 @@ class Pipeline:
             self.cfg.tts.default_voice = voice
             self.tts.set_default_voice(voice)
             self._select_speaker(None)  # picking a built-in voice drops any cloned/trained one
+        elif action == "delete_voice":
+            self._delete_voice(str(data.get("speaker_id") or ""))
         elif action == "select_speaker":
             self._select_speaker(data.get("speaker_id"))
         else:
@@ -164,6 +166,19 @@ class Pipeline:
         if entry is not None:
             self.tts.clone_from_entry(entry)
             self._active_speaker_id = speaker_id
+
+    def _delete_voice(self, speaker_id: str) -> None:
+        entry = self.voice_library.get(speaker_id)
+        if entry is None:
+            return
+        if self._active_speaker_id == speaker_id:
+            self._select_speaker(None)  # fall back to the built-in voice before its files go away
+        forget = getattr(self.tts, "forget_voice", None)
+        if forget:
+            forget(speaker_id)
+        self.voice_library.delete(speaker_id)
+        self._broadcast_library()
+        vlog("voice", f"deleted voice {entry.name!r}")
 
     def _finish_training(self, discard: bool = False) -> None:
         audio = self.control.stop_training(discard=discard)

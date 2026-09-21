@@ -233,7 +233,8 @@
   #btn-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   #btn-voice.is-active { background: #1f3d4d; border-color: #3a90c9; color: #d7f3ff; }
   #btn-train.is-active { background: #4d3a1f; border-color: #c9a24b; color: #ffe9bf; }
-  #btn-reset { color: #e08a8a; }
+  #btn-reset, #btn-delete-voice { color: #e08a8a; }
+  #btn-delete-voice[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -249,6 +250,7 @@
       <select id="speaker-select">
         <option value="">— no cloned voice —</option>
       </select>
+      <button id="btn-delete-voice" hidden title="Delete the selected saved voice">Delete</button>
       <button id="btn-reset">Reset</button>
     </div>
     <div id="indicators">
@@ -372,6 +374,7 @@
   const saveNote = document.getElementById('save-note');
   let libraryNames = [];
   const speakerSelect = document.getElementById('speaker-select');
+  const deleteBtn = document.getElementById('btn-delete-voice');
   const defaultVoiceSelect = document.getElementById('default-voice');
   let lastStatus = {
     active: true, voice_enabled: false, training: false,
@@ -418,6 +421,7 @@
     if (status.voice_groups) buildVoiceOptions(status.voice_groups);
     if (status.default_voice) defaultVoiceSelect.value = status.default_voice;
     speakerSelect.value = status.active_speaker_id || '';
+    syncDeleteButton();
   }
 
   function applyLibrary(msg) {
@@ -435,6 +439,7 @@
       speakerSelect.appendChild(opt);
     }
     speakerSelect.value = lastStatus.active_speaker_id || current || '';
+    syncDeleteButton();
   }
 
   let ws = null;
@@ -517,7 +522,20 @@
     closeSaveDialog();
   });
 
-  speakerSelect.addEventListener('change', () => send('select_speaker', { speaker_id: speakerSelect.value }));
+  function syncDeleteButton() {
+    // Only offered while a saved voice (not "no cloned voice") is selected.
+    deleteBtn.hidden = !speakerSelect.value;
+  }
+  deleteBtn.addEventListener('click', () => {
+    const id = speakerSelect.value;
+    if (!id) return;
+    const name = speakerSelect.options[speakerSelect.selectedIndex].textContent;
+    if (confirm(`Delete the voice "${name}"? This can't be undone.`)) send('delete_voice', { speaker_id: id });
+  });
+  speakerSelect.addEventListener('change', () => {
+    syncDeleteButton();
+    send('select_speaker', { speaker_id: speakerSelect.value });
+  });
 
   function connect() {
     const status = document.getElementById('status');

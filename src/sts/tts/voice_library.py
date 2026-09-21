@@ -147,13 +147,25 @@ class VoiceLibrary:
                 entries.append(entry)
         return sorted(entries, key=lambda e: e.created_at)
 
-    def get(self, speaker_id: str) -> VoiceEntry | None:
-        entry_dir = self.root / speaker_id
-        if not entry_dir.exists():
+    def _entry_dir(self, speaker_id: str) -> Path | None:
+        """The entry's directory, only if `speaker_id` is a plain name of a
+        direct child of the library root. Ids arrive from the browser, so
+        anything like "../x" or an absolute path must never resolve."""
+        if not speaker_id or Path(speaker_id).name != speaker_id or speaker_id in (".", ".."):
             return None
-        return self._load_entry(entry_dir)
-
-    def delete(self, speaker_id: str) -> None:
         entry_dir = self.root / speaker_id
-        if entry_dir.exists():
-            shutil.rmtree(entry_dir)
+        if entry_dir.is_symlink() or entry_dir.resolve().parent != self.root.resolve():
+            return None
+        return entry_dir if entry_dir.is_dir() else None
+
+    def get(self, speaker_id: str) -> VoiceEntry | None:
+        entry_dir = self._entry_dir(speaker_id)
+        return self._load_entry(entry_dir) if entry_dir else None
+
+    def delete(self, speaker_id: str) -> bool:
+        """Removes a voice from disk. Returns False if there was no such voice."""
+        entry_dir = self._entry_dir(speaker_id)
+        if entry_dir is None:
+            return False
+        shutil.rmtree(entry_dir)
+        return True

@@ -252,6 +252,11 @@ class Qwen3TTSSynthesizer:
             raise ValueError(f"unknown preset voice {voice!r}; choose from {self.cfg.all_voices()}")
         self.default_voice = voice
 
+    def forget_voice(self, speaker_id: str) -> None:
+        """Drops a deleted voice's cached LoRA model (a multi-GB model load)."""
+        if self._lora_models.pop(speaker_id, None) is not None:
+            gc.collect()
+
     def reset_voice(self) -> None:
         self._prompt = None
         self.cloned_speaker_wav = None

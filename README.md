@@ -110,6 +110,10 @@ slow translation or TTS call doesn't stall audio capture.
     it. Skip it to keep the voice for this session only. Click Reset before
     the next speaker so their audio doesn't get folded into the previous
     one's training sample.
+  - **Delete** — appears to the right of the speaker dropdown while a saved
+    voice is selected. Asks for confirmation, then removes that voice from
+    the library on disk (its folder under `--voice-library-dir`). If it was
+    the active voice, the built-in voice takes over.
   - **Built-in voice dropdown** — picks one of 13 built-in (non-trained)
     voices (6 male, 7 female, grouped in the list) used whenever no
     trained/cloned voice is active; defaults to Adde Michal
