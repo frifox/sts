@@ -262,7 +262,11 @@ class Pipeline:
                 vlog("tts", "voice is off, skipping synthesis")
                 continue
             t0 = time.monotonic()
-            audio, sample_rate = self.tts.synthesize(text)
+            try:
+                audio, sample_rate = self.tts.synthesize(text)
+            except Exception as exc:  # one bad sentence shouldn't kill voicing for the rest of the session
+                print(f"[tts] synthesis failed, skipping this sentence: {exc!r}")
+                continue
             vlog("tts", f"synthesized {audio.size / sample_rate:.1f}s of speech in {time.monotonic() - t0:.2f}s")
             if audio.size:
                 self.playback.play(audio, sample_rate=sample_rate, blocking=True)

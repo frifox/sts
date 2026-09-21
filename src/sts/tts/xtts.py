@@ -11,7 +11,9 @@ about per device.
 """
 
 import numpy as np
+import soundfile as sf
 import torch
+import torchaudio
 from TTS.api import TTS
 from TTS.config.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.xtts_config import XttsConfig
@@ -27,6 +29,21 @@ SAMPLE_RATE = 24_000  # XTTS v2 output rate
 # fails to load unless they're allowlisted.
 if hasattr(torch.serialization, "add_safe_globals"):
     torch.serialization.add_safe_globals([XttsConfig, XttsAudioConfig, BaseDatasetConfig, XttsArgs])
+
+
+def _load_with_soundfile(path, *args, **kwargs):
+    """Drop-in for `torchaudio.load` returning (channels x frames float32 tensor, sample rate).
+
+    torchaudio 2.9+ dropped its own decoders and now requires torchcodec (and
+    ffmpeg) for `load`. Coqui XTTS calls `torchaudio.load` to read the
+    reference clip for cloning, and our reference clips are plain wav files
+    that soundfile (already a dependency) reads fine.
+    """
+    data, sample_rate = sf.read(str(path), dtype="float32", always_2d=True)
+    return torch.from_numpy(data.T.copy()), sample_rate
+
+
+torchaudio.load = _load_with_soundfile
 
 
 class XTTSSynthesizer:
