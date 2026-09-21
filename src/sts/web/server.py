@@ -11,6 +11,8 @@ registered as `on_control`.
 
 import asyncio
 import json
+import threading
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,6 +22,10 @@ from fastapi.responses import FileResponse
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
+# Recent caption lines (per kind) replayed to newly connected pages, so a
+# refresh doesn't come back blank.
+CAPTION_HISTORY_LINES = 4
+
 
 class CaptionBroadcaster:
     def __init__(self) -> None:
@@ -28,6 +34,11 @@ class CaptionBroadcaster:
         self.on_control: Callable[[dict], None] | None = None
         self._last_status: dict | None = None
         self._last_library: dict | None = None
+        self._history: dict[str, deque[str]] = {
+            "original": deque(maxlen=CAPTION_HISTORY_LINES),
+            "translated": deque(maxlen=CAPTION_HISTORY_LINES),
+        }
+        self._history_lock = threading.Lock()
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
@@ -38,6 +49,11 @@ class CaptionBroadcaster:
             await websocket.send_text(json.dumps(self._last_status))
         if self._last_library is not None:
             await websocket.send_text(json.dumps(self._last_library))
+        with self._history_lock:
+            history = {kind: list(lines) for kind, lines in self._history.items()}
+        for kind, lines in history.items():
+            for text in lines:
+                await websocket.send_text(json.dumps({"type": kind, "text": text}))
 
     async def unregister(self, websocket: WebSocket) -> None:
         self._clients.discard(websocket)
@@ -54,7 +70,11 @@ class CaptionBroadcaster:
             self._clients.discard(client)
 
     def _broadcast(self, kind: str, text: str) -> None:
-        if self.loop is None or not text:
+        if not text:
+            return
+        with self._history_lock:
+            self._history[kind].append(text)
+        if self.loop is None:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all({"type": kind, "text": text}), self.loop)
 
@@ -85,6 +105,9 @@ class CaptionBroadcaster:
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
     def broadcast_reset(self) -> None:
+        with self._history_lock:
+            for lines in self._history.values():
+                lines.clear()
         if self.loop is None:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all({"type": "reset"}), self.loop)
