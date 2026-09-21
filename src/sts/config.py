@@ -65,6 +65,12 @@ class TTSConfig:
     # VoiceDesign variant: invents a voice from a text description (the "Create
     # Voice" dialog). Loaded only while that dialog is in use.
     qwen3_design_model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+    # Qwen3-TTS samples its output randomly (model default temperature 0.9), so
+    # intonation differs from one sentence to the next. Lower = steadier, more
+    # uniform delivery; too low can sound flat or loop. Applies to both the
+    # main generator and the "sub-talker" that shapes fine acoustic detail.
+    qwen3_temperature: float = 0.6
+    qwen3_top_k: int = 30
     qwen3_style_instruct: str = (
         "Speak in a calm, warm, measured tone, like a gentle preacher delivering a sermon. "
         "American English accent."

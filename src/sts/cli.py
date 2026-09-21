@@ -77,6 +77,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="How far a cloned voice's accent is pulled toward the accent voice: 0 disables, 1 fully adopts it, above 1 exaggerates it (can get unstable) (default 0.7)",
     )
     parser.add_argument(
+        "--qwen-temperature",
+        type=float,
+        default=None,
+        help="Qwen3-TTS sampling temperature: lower = more consistent intonation between sentences, "
+        "higher = more varied (default 0.6; the model's own default is 0.9)",
+    )
+    parser.add_argument(
         "--pause-s",
         type=float,
         default=None,
@@ -126,6 +133,8 @@ def main() -> None:
     cfg.asr.model_size = args.whisper_model
     cfg.translation.device = translation_device
     cfg.tts.device = tts_device
+    if args.qwen_temperature is not None:
+        cfg.tts.qwen3_temperature = args.qwen_temperature
     if args.pause_s is not None:
         cfg.audio.pause_between_s = args.pause_s
     if args.min_silence_ms is not None:

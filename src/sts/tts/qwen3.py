@@ -109,6 +109,15 @@ class Qwen3TTSSynthesizer:
         self._lora_models: dict[str, tuple[Qwen3TTSModel, str]] = {}  # speaker_id -> (model, speaker_name)
         self._active_lora_speaker_id: str | None = None
 
+    def _sampling(self) -> dict:
+        """Sampling settings that keep delivery consistent between sentences."""
+        return dict(
+            temperature=self.cfg.qwen3_temperature,
+            subtalker_temperature=self.cfg.qwen3_temperature,
+            top_k=self.cfg.qwen3_top_k,
+            subtalker_top_k=self.cfg.qwen3_top_k,
+        )
+
     # -- voice design ("Create Voice" dialog) --------------------------------
 
     @property
@@ -160,7 +169,7 @@ class Qwen3TTSSynthesizer:
                 ref_audio=reference_wav_path, ref_text=ref_text, x_vector_only_mode=False
             )
             wavs, sample_rate = self.model.generate_voice_clone(
-                text=text, language="English", voice_clone_prompt=prompt
+                text=text, language="English", voice_clone_prompt=prompt, **self._sampling()
             )
         return np.asarray(wavs[0], dtype=np.float32), sample_rate
 
@@ -206,11 +215,11 @@ class Qwen3TTSSynthesizer:
             if self._active_lora_speaker_id:
                 lora_model, speaker_name = self._lora_models[self._active_lora_speaker_id]
                 wavs, sample_rate = lora_model.generate_custom_voice(
-                    text=text, speaker=speaker_name, language="English"
+                    text=text, speaker=speaker_name, language="English", **self._sampling()
                 )
             elif self._prompt is not None:
                 wavs, sample_rate = self.model.generate_voice_clone(
-                    text=text, language="English", voice_clone_prompt=self._prompt
+                    text=text, language="English", voice_clone_prompt=self._prompt, **self._sampling()
                 )
             else:
                 wavs, sample_rate = self._custom_model.generate_custom_voice(
@@ -218,6 +227,7 @@ class Qwen3TTSSynthesizer:
                     speaker=self.default_voice.lower(),
                     language="English",
                     instruct=self.cfg.qwen3_style_instruct or None,
+                    **self._sampling(),
                 )
         return np.asarray(wavs[0], dtype=np.float32), sample_rate
 
