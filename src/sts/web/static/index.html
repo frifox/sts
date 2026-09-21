@@ -243,13 +243,10 @@
     <div id="controls">
       <button id="btn-toggle">Stop</button>
       <button id="btn-voice">🔇 Voice off</button>
-      <select id="default-voice" title="Built-in voice (used when no trained voice is selected)"></select>
+      <select id="voice-select" title="Voice: built-in (Default) or a saved trained voice (Custom)"></select>
       <button id="btn-create-voice" hidden title="Design a new voice from a text description (Qwen3 backend)">Create Voice</button>
       <button id="btn-train">Train voice</button>
       <button id="btn-save-voice" disabled title="Save the trained voice to the library">Save Voice</button>
-      <select id="speaker-select">
-        <option value="">— no cloned voice —</option>
-      </select>
       <button id="btn-delete-voice" hidden title="Delete the selected saved voice">Delete</button>
       <button id="btn-reset">Reset</button>
     </div>
@@ -373,30 +370,53 @@
   const saveName = document.getElementById('save-name');
   const saveNote = document.getElementById('save-note');
   let libraryNames = [];
-  const speakerSelect = document.getElementById('speaker-select');
+  const voiceSelect = document.getElementById('voice-select');
   const deleteBtn = document.getElementById('btn-delete-voice');
-  const defaultVoiceSelect = document.getElementById('default-voice');
+  let defaultVoices = [];   // built-in voice names (the "Default" group)
+  let savedVoices = [];     // [{id, name}] from the voice library (the "Custom" group)
   let lastStatus = {
     active: true, voice_enabled: false, training: false,
     training_seconds: 0, training_target_seconds: 0, cloned: false, active_speaker_id: null,
   };
 
-  function buildVoiceOptions(groups) {
-    const signature = JSON.stringify(groups);
-    if (defaultVoiceSelect.dataset.signature === signature) return;
-    defaultVoiceSelect.dataset.signature = signature;
-    defaultVoiceSelect.innerHTML = '';
-    for (const [label, names] of Object.entries(groups)) {
-      const group = document.createElement('optgroup');
-      group.label = label;
-      for (const name of names) {
-        const option = document.createElement('option');
-        option.value = name;
-        option.textContent = name;
-        group.appendChild(option);
+  // One dropdown, two groups. Option values are tagged so the two kinds can't
+  // collide: "default:<name>", "saved:<id>", or "unsaved" for a just-trained
+  // voice that isn't in the library yet.
+  function currentVoiceValue() {
+    if (lastStatus.active_speaker_id) return `saved:${lastStatus.active_speaker_id}`;
+    if (lastStatus.cloned) return 'unsaved';
+    return lastStatus.default_voice ? `default:${lastStatus.default_voice}` : '';
+  }
+
+  function renderVoiceSelect() {
+    const unsaved = !lastStatus.active_speaker_id && lastStatus.cloned;
+    // Rebuild only when the list itself changes, so a status update (they arrive
+    // constantly during training) can't snap an open dropdown shut.
+    const signature = JSON.stringify([defaultVoices, savedVoices, unsaved ? lastStatus.can_save : null]);
+    if (voiceSelect.dataset.signature !== signature) {
+      voiceSelect.dataset.signature = signature;
+      voiceSelect.innerHTML = '';
+      const addGroup = (label, options) => {
+        if (!options.length) return;
+        const group = document.createElement('optgroup');
+        group.label = label;
+        for (const { value, text } of options) {
+          const option = document.createElement('option');
+          option.value = value;
+          option.textContent = text;
+          group.appendChild(option);
+        }
+        voiceSelect.appendChild(group);
+      };
+      addGroup('Default', defaultVoices.map((name) => ({ value: `default:${name}`, text: name })));
+      const custom = savedVoices.map((voice) => ({ value: `saved:${voice.id}`, text: voice.name }));
+      if (unsaved) {
+        custom.unshift({ value: 'unsaved', text: lastStatus.can_save ? 'New voice (unsaved)' : 'Cloned voice (this session)' });
       }
-      defaultVoiceSelect.appendChild(group);
+      addGroup('Custom', custom);
     }
+    voiceSelect.value = currentVoiceValue();
+    syncDeleteButton();
   }
 
   function applyStatus(status) {
@@ -418,28 +438,14 @@
     createBtn.hidden = !status.can_design;
     if (!status.can_save) closeSaveDialog();
 
-    if (status.voice_groups) buildVoiceOptions(status.voice_groups);
-    if (status.default_voice) defaultVoiceSelect.value = status.default_voice;
-    speakerSelect.value = status.active_speaker_id || '';
-    syncDeleteButton();
+    if (status.voice_groups) defaultVoices = Object.values(status.voice_groups).flat();
+    renderVoiceSelect();
   }
 
   function applyLibrary(msg) {
-    const current = speakerSelect.value;
     libraryNames = msg.speakers.map((speaker) => speaker.name);
-    speakerSelect.innerHTML = '';
-    const noneOpt = document.createElement('option');
-    noneOpt.value = '';
-    noneOpt.textContent = '— no cloned voice —';
-    speakerSelect.appendChild(noneOpt);
-    for (const speaker of msg.speakers) {
-      const opt = document.createElement('option');
-      opt.value = speaker.id;
-      opt.textContent = speaker.name;
-      speakerSelect.appendChild(opt);
-    }
-    speakerSelect.value = lastStatus.active_speaker_id || current || '';
-    syncDeleteButton();
+    savedVoices = msg.speakers;
+    renderVoiceSelect();
   }
 
   let ws = null;
@@ -459,7 +465,6 @@
     }
   });
   resetBtn.addEventListener('click', () => send('reset'));
-  defaultVoiceSelect.addEventListener('change', () => send('default_voice', { voice: defaultVoiceSelect.value }));
   // -- Create Voice (Qwen3 voice design) ------------------------------------
   function applyDesign(msg) {
     const busy = msg.state === 'busy';
@@ -523,18 +528,21 @@
   });
 
   function syncDeleteButton() {
-    // Only offered while a saved voice (not "no cloned voice") is selected.
-    deleteBtn.hidden = !speakerSelect.value;
+    // Only offered while a saved (Custom) voice is selected.
+    deleteBtn.hidden = !voiceSelect.value.startsWith('saved:');
   }
   deleteBtn.addEventListener('click', () => {
-    const id = speakerSelect.value;
-    if (!id) return;
-    const name = speakerSelect.options[speakerSelect.selectedIndex].textContent;
+    if (!voiceSelect.value.startsWith('saved:')) return;
+    const id = voiceSelect.value.slice('saved:'.length);
+    const name = voiceSelect.options[voiceSelect.selectedIndex].textContent;
     if (confirm(`Delete the voice "${name}"? This can't be undone.`)) send('delete_voice', { speaker_id: id });
   });
-  speakerSelect.addEventListener('change', () => {
+  voiceSelect.addEventListener('change', () => {
+    const value = voiceSelect.value;
+    if (value.startsWith('default:')) send('default_voice', { voice: value.slice('default:'.length) });
+    else if (value.startsWith('saved:')) send('select_speaker', { speaker_id: value.slice('saved:'.length) });
+    else renderVoiceSelect();  // "unsaved" is already active; nothing to switch to
     syncDeleteButton();
-    send('select_speaker', { speaker_id: speakerSelect.value });
   });
 
   function connect() {

@@ -102,29 +102,31 @@ slow translation or TTS call doesn't stall audio capture.
     and Generate again - each generation is a *different* voice, so keep
     regenerating until one fits. When it does, name it and **Save**: it's
     stored in the voice library like a trained voice and appears in the
-    speaker dropdown. Uses the Qwen3-TTS VoiceDesign model, which is loaded
+    voice dropdown (Custom group). Uses the Qwen3-TTS VoiceDesign model, which is loaded
     only while the dialog is open (first use downloads it).
   - **Save Voice** — enabled once a trained voice is active. Asks for a name
     and, on Save, stores it in the voice library so it's reusable from the
-    **speaker dropdown** in later sessions. Naming an existing voice replaces
+    **voice dropdown** (Custom group) in later sessions. Naming an existing voice replaces
     it. Skip it to keep the voice for this session only. Click Reset before
     the next speaker so their audio doesn't get folded into the previous
     one's training sample.
-  - **Delete** — appears to the right of the speaker dropdown while a saved
+  - **Voice dropdown** — a single list with two groups:
+    - **Default** — the built-in (non-trained) voices. XTTS offers 13
+      (defaults to Adde Michal; `--default-voice "Craig Gutsy"` or
+      `male`/`female` sets the starting choice). Qwen3-TTS offers the preset
+      voices Aiden and Ryan, spoken in a calm "preacher" style. The list
+      lives in `TTSConfig.voice_groups` (`sts/config.py`); any of XTTS's 58
+      speakers can be added there.
+    - **Custom** — voices you trained or designed and saved, reusable across
+      sessions. A just-trained voice that isn't saved yet shows up here as
+      "New voice (unsaved)".
+
+    Picking any voice switches to it immediately; picking a Default voice
+    drops any cloned/trained one.
+  - **Delete** — appears to the right of the voice dropdown while a Custom
     voice is selected. Asks for confirmation, then removes that voice from
     the library on disk (its folder under `--voice-library-dir`). If it was
-    the active voice, the built-in voice takes over.
-  - **Built-in voice dropdown** — picks one of 13 built-in (non-trained)
-    voices (6 male, 7 female, grouped in the list) used whenever no
-    trained/cloned voice is active; defaults to Adde Michal
-    (`--default-voice "Craig Gutsy"` or `male`/`female` sets the starting
-    choice). Picking one also drops any cloned/trained voice. XTTS backend
-    only - Qwen3-TTS has no built-in voices. The list lives in
-    `TTSConfig.voice_groups` (`sts/config.py`); any of XTTS's 58 speakers can
-    be added there.
-  - **Speaker dropdown** — picks a previously trained/saved voice from the
-    library (or "— no cloned voice —" to fall back to the default) without
-    retraining.
+    the active voice, the default voice takes over.
 
   All of this is relayed over the same websocket the captions arrive on
   (`{"action": "start"}`, `{"action": "voice_on"}`,
