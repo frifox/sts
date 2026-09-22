@@ -1,3 +1,5 @@
+import pytest
+
 from sts.benchmark import (
     StageResult,
     coqui_model_cache_dir,
@@ -75,17 +77,20 @@ def test_is_not_installed_false_for_a_successful_stage():
 
 
 def test_coqui_model_cache_dir_replaces_slashes(monkeypatch, tmp_path):
+    pytest.importorskip("TTS")  # coqui_model_cache_dir calls into Coqui's own path logic
     monkeypatch.setenv("TTS_HOME", str(tmp_path))
     d = coqui_model_cache_dir("tts_models/multilingual/multi-dataset/xtts_v2")
     assert d == tmp_path / "tts" / "tts_models--multilingual--multi-dataset--xtts_v2"
 
 
 def test_coqui_model_is_cached_false_when_dir_missing(monkeypatch, tmp_path):
+    pytest.importorskip("TTS")
     monkeypatch.setenv("TTS_HOME", str(tmp_path))
     assert not coqui_model_is_cached("tts_models/multilingual/multi-dataset/xtts_v2")
 
 
 def test_coqui_model_is_cached_false_when_dir_empty(monkeypatch, tmp_path):
+    pytest.importorskip("TTS")
     monkeypatch.setenv("TTS_HOME", str(tmp_path))
     d = coqui_model_cache_dir("tts_models/multilingual/multi-dataset/xtts_v2")
     d.mkdir(parents=True)
@@ -93,6 +98,7 @@ def test_coqui_model_is_cached_false_when_dir_empty(monkeypatch, tmp_path):
 
 
 def test_coqui_model_is_cached_true_once_populated(monkeypatch, tmp_path):
+    pytest.importorskip("TTS")
     monkeypatch.setenv("TTS_HOME", str(tmp_path))
     d = coqui_model_cache_dir("tts_models/multilingual/multi-dataset/xtts_v2")
     d.mkdir(parents=True)

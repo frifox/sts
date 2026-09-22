@@ -24,10 +24,10 @@ import argparse
 import contextlib
 import io
 import json
-import os
 import platform
 import statistics
 import time
+import warnings
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -96,12 +96,16 @@ def wav_duration_s(path: Path) -> float:
 
 
 def coqui_model_cache_dir(model_name: str) -> Path:
-    """Where Coqui TTS's ModelManager stores a downloaded model, mirroring
-    its own get_user_data_dir()/download_model() naming - not imported from
-    TTS directly since this needs to work even when xtts isn't installed."""
-    base = os.environ.get("TTS_HOME") or os.environ.get("XDG_DATA_HOME")
-    root = Path(base).expanduser() if base else Path.home() / ".local" / "share"
-    return root / "tts" / model_name.replace("/", "--")
+    """Where Coqui TTS's ModelManager stores a downloaded model. Calls
+    Coqui's own get_user_data_dir() (only reachable once TTS is already
+    importable, i.e. from benchmark_tts) rather than re-deriving the path,
+    since that function is platform-specific in a way easy to get wrong
+    (macOS: ~/Library/Application Support/tts, not the Linux XDG default -
+    a previous version of this helper hardcoded the Linux path and silently
+    under-detected an already-cached model on macOS as a result)."""
+    from TTS.utils.generic_utils import get_user_data_dir
+
+    return get_user_data_dir("tts") / model_name.replace("/", "--")
 
 
 def coqui_model_is_cached(model_name: str) -> bool:
@@ -229,6 +233,18 @@ def benchmark_tts(backend: str, device: str, repeats: int) -> StageResult:
     # only suppress stdout here once the model is already cached, so a real
     # first-time prompt is never silently hidden behind a blocked input().
     quiet = backend == "xtts" and coqui_model_is_cached(cfg.model_name)
+    # torch.jit.script's deprecation FutureWarning (Coqui's XTTS still uses
+    # it internally) goes through Python's warnings module, which writes to
+    # stderr by default - separate from, and not caught by, the stdout
+    # redirect above. It's a framework-level notice unrelated to the license
+    # prompt, so unlike the stdout redirect this is always safe to suppress.
+    warnings.filterwarnings("ignore", category=FutureWarning, module=r"torch\.jit\._script")
+
+    def run_once() -> tuple[float, float]:
+        t0 = time.perf_counter()
+        audio, sample_rate = synth.synthesize(TTS_TEXT)
+        elapsed = time.perf_counter() - t0
+        return elapsed, len(audio) / sample_rate
 
     t0 = time.perf_counter()
     try:
@@ -246,12 +262,6 @@ def benchmark_tts(backend: str, device: str, repeats: int) -> StageResult:
     except Exception as exc:
         return StageResult(f"tts:{backend}", device, False, detail=repr(exc))
     model_load_s = time.perf_counter() - t0
-
-    def run_once() -> tuple[float, float]:
-        t0 = time.perf_counter()
-        audio, sample_rate = synth.synthesize(TTS_TEXT)
-        elapsed = time.perf_counter() - t0
-        return elapsed, len(audio) / sample_rate
 
     warmup_s, _ = run_once()
 
