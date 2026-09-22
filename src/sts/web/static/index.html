@@ -259,7 +259,7 @@
   }
   .engine-dropdown .stream-row input { cursor: pointer; }
   /* Dark styling for the modal dialogs' own buttons and fields (the header's are styled via #controls). */
-  #config-dialog button, #design-dialog button, #save-dialog button {
+  #design-dialog button, #save-dialog button {
     font: inherit;
     font-size: 0.9rem;
     padding: 0.5em 1em;
@@ -269,46 +269,14 @@
     color: #ccc;
     cursor: pointer;
   }
-  #config-dialog button:hover:not(:disabled), #design-dialog button:hover:not(:disabled),
-  #save-dialog button:hover:not(:disabled) { border-color: #777; }
-  #config-dialog select, #design-dialog textarea, #design-dialog input[type=text], #save-dialog input {
+  #design-dialog button:hover:not(:disabled), #save-dialog button:hover:not(:disabled) { border-color: #777; }
+  #design-dialog textarea, #design-dialog input[type=text], #save-dialog input {
     border-radius: 6px;
     border: 1px solid #444;
     background: #111;
     color: #ddd;
   }
 
-  #btn-config {
-    font: inherit;
-    font-size: 1.15rem;
-    line-height: 1;
-    padding: 0.3em 0.45em;
-    border-radius: 6px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: #9a9aa5;
-    cursor: pointer;
-  }
-  #btn-config:hover { color: #ddd; border-color: #444; }
-
-  #config-dialog {
-    position: fixed; inset: 0; z-index: 10; display: none;
-    align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.6);
-  }
-  #config-dialog.show { display: flex; }
-  #config-dialog .card {
-    background: #16161c; border: 1px solid #333; border-radius: 10px;
-    padding: 1.2rem 1.4rem; width: min(30rem, 92vw); max-height: 92vh; overflow-y: auto;
-    color: #ddd; font-size: 0.95rem;
-  }
-  #config-dialog h3 { margin: 0 0 0.2rem; font-size: 1.05rem; }
-  #config-dialog h4 { margin: 1.1rem 0 0.2rem; font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase; color: #777; }
-  #config-dialog label { display: block; margin: 0.8rem 0 0.3rem; font-size: 0.85rem; color: #9a9aa5; }
-  #config-dialog select { width: 100%; box-sizing: border-box; padding: 0.5rem; font: inherit; }
-  #config-note { min-height: 1.3em; margin-top: 0.9rem; font-size: 0.85rem; color: #e0b341; }
-  #config-note.error { color: #e08a8a; }
-  #config-dialog .footer { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.9rem; }
-  #config-dialog button:disabled { opacity: 0.4; cursor: default; }
   #design-dialog {
     position: fixed; inset: 0; z-index: 10; display: none;
     align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.6);
@@ -366,6 +334,8 @@
             <input id="pause-slider" type="range" min="200" max="1500" step="50" value="700" />
             <span id="pause-value">700 ms</span>
           </label>
+          <label for="cfg-input">Input device (microphone / line in)</label>
+          <select id="cfg-input"></select>
         </div>
       </div>
       <div class="engine" id="engine-translate">
@@ -394,6 +364,8 @@
             <button id="btn-save-voice" disabled title="Save the trained voice to the library">Save Voice</button>
             <button id="btn-delete-voice" hidden title="Delete the selected saved voice">Delete</button>
           </div>
+          <label for="cfg-output">Output device (where the translated voice plays)</label>
+          <select id="cfg-output"></select>
           <label class="stream-row" title="Play the synthesized voice in this browser too">
             <input type="checkbox" id="stream-toggle" />
             Stream voice to this browser
@@ -405,7 +377,6 @@
     <div id="indicators">
       <div id="stage"></div>
       <div id="status" class="disconnected">Not connected</div>
-      <button id="btn-config" title="Configuration" aria-label="Configuration">⚙</button>
     </div>
   </div>
     <div class="panel" id="original-panel">
@@ -424,22 +395,6 @@
     <div class="verse-text" id="verse-en"></div>
   </div>
 
-
-<div id="config-dialog">
-    <div class="card">
-      <h3>Configuration</h3>
-      <h4>Audio</h4>
-      <label for="cfg-input">Input device (microphone / line in)</label>
-      <select id="cfg-input"></select>
-      <label for="cfg-output">Output device (where the translated voice plays)</label>
-      <select id="cfg-output"></select>
-      <div id="config-note"></div>
-      <div class="footer">
-        <button type="button" id="cfg-cancel">Close</button>
-        <button type="button" id="cfg-apply" disabled>Apply</button>
-      </div>
-    </div>
-  </div>
 
   <div id="design-dialog">
     <div class="card">
@@ -538,12 +493,8 @@
   const trainBtn = document.getElementById('btn-train');
   const resetBtn = document.getElementById('btn-reset');
   const saveBtn = document.getElementById('btn-save-voice');
-  const configBtn = document.getElementById('btn-config');
-  const configDialog = document.getElementById('config-dialog');
   const cfgInput = document.getElementById('cfg-input');
   const cfgOutput = document.getElementById('cfg-output');
-  const cfgApply = document.getElementById('cfg-apply');
-  const configNote = document.getElementById('config-note');
   let lastDevices = null;
   const pauseSlider = document.getElementById('pause-slider');
   const pauseValue = document.getElementById('pause-value');
@@ -670,6 +621,7 @@
     caret.addEventListener('mouseenter', () => {
       closeDropdowns(dropdown);
       dropdown.classList.add('show');
+      send('refresh_devices');  // pick up devices plugged in since the page loaded
     });
     // Leaving the whole group (not just the caret) closes it, so moving the
     // mouse down into the open dropdown doesn't immediately hide it again.
@@ -769,7 +721,7 @@
     pauseTimer = setTimeout(() => send('set_min_silence', { ms: Number(pauseSlider.value) }), 80);
   });
 
-  // -- Configuration: audio devices -------------------------------------------
+  // -- Audio devices (input in the Caption dropdown, output in the Voice one) --
   const deviceValue = (index) => (index == null ? '' : String(index));
 
   function fillDeviceSelect(select, devices, selected, defaultIndex) {
@@ -786,50 +738,27 @@
       select.appendChild(option);
     }
     select.value = deviceValue(selected);
-    select.dataset.applied = select.value;  // what the backend is using right now
-  }
-
-  function updateApplyState() {
-    cfgApply.disabled = !lastDevices ||
-      (cfgInput.value === cfgInput.dataset.applied && cfgOutput.value === cfgOutput.dataset.applied);
   }
 
   function applyDevices(msg) {
     lastDevices = msg;
-    // Don't rebuild the lists under the user's cursor while they're choosing.
+    // Don't rebuild the lists under the user's cursor while they're choosing,
+    // and never while a change of theirs is what's actually being applied.
     if (document.activeElement !== cfgInput && document.activeElement !== cfgOutput) {
       fillDeviceSelect(cfgInput, msg.inputs, msg.input, msg.default_input);
       fillDeviceSelect(cfgOutput, msg.outputs, msg.output, msg.default_output);
     }
     if (msg.error) {
-      configNote.textContent = msg.error;
-      configNote.classList.add('error');
+      console.warn(`[audio] ${msg.error}`);
       fillDeviceSelect(cfgInput, msg.inputs, msg.input, msg.default_input);   // show what is really in use
       fillDeviceSelect(cfgOutput, msg.outputs, msg.output, msg.default_output);
-    } else if (msg.applied) {
-      configNote.textContent = 'Applied.';
-      configNote.classList.remove('error');
     }
-    updateApplyState();
   }
 
-  configBtn.addEventListener('click', () => {
-    configNote.textContent = '';
-    configNote.classList.remove('error');
-    configDialog.classList.add('show');
-    send('refresh_devices');  // pick up devices plugged in since the page loaded
-  });
-  document.getElementById('cfg-cancel').addEventListener('click', () => configDialog.classList.remove('show'));
-  configDialog.addEventListener('click', (event) => { if (event.target === configDialog) configDialog.classList.remove('show'); });
-  window.addEventListener('keydown', (event) => { if (event.key === 'Escape') configDialog.classList.remove('show'); });
-  cfgInput.addEventListener('change', updateApplyState);
-  cfgOutput.addEventListener('change', updateApplyState);
-  cfgApply.addEventListener('click', () => {
-    configNote.textContent = 'Applying…';
-    configNote.classList.remove('error');
-    cfgApply.disabled = true;
-    send('set_audio_devices', { input: cfgInput.value, output: cfgOutput.value });
-  });
+  // Each select applies on its own, immediately, carrying the other's current
+  // value along (the backend action always takes both together).
+  cfgInput.addEventListener('change', () => send('set_audio_devices', { input: cfgInput.value, output: cfgOutput.value }));
+  cfgOutput.addEventListener('change', () => send('set_audio_devices', { input: cfgInput.value, output: cfgOutput.value }));
 
   function syncDeleteButton() {
     // Only offered while one of the user's own saved (Custom) voices is selected.
