@@ -44,6 +44,7 @@ class CaptionBroadcaster:
         self._last_status: dict | None = None
         self._last_library: dict | None = None
         self._last_devices: dict | None = None
+        self._last_engines: dict | None = None
         self._last_design: dict = {"type": "design", "state": "idle", "message": "", "has_voice": False}
         self._last_stage: dict = {"type": "stage", "text": "Starting…", "ready": False}
         self._history: dict[str, deque[str]] = {
@@ -66,6 +67,8 @@ class CaptionBroadcaster:
         await websocket.send_text(json.dumps(self._last_design))
         if self._last_devices is not None:
             await websocket.send_text(json.dumps(self._last_devices))
+        if self._last_engines is not None:
+            await websocket.send_text(json.dumps(self._last_engines))
         with self._history_lock:
             history = {kind: list(lines) for kind, lines in self._history.items()}
         for kind, lines in history.items():
@@ -174,9 +177,17 @@ class CaptionBroadcaster:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all({"type": "reset"}), self.loop)
 
+    def broadcast_engines(self, message: dict) -> None:
+        """Static ASR/translation/TTS model + device info for the header dropdowns."""
+        self._last_engines = {"type": "engines", **message}
+        if self.loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_to_all(self._last_engines), self.loop)
+
     def broadcast_status(
         self,
         active: bool,
+        translation_enabled: bool,
         voice_enabled: bool,
         training: bool,
         training_seconds: float,
@@ -192,6 +203,7 @@ class CaptionBroadcaster:
         message = {
             "type": "status",
             "active": active,
+            "translation_enabled": translation_enabled,
             "voice_enabled": voice_enabled,
             "training": training,
             "training_seconds": round(training_seconds, 1),

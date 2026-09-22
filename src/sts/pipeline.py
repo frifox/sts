@@ -2,15 +2,18 @@
 streaming pipeline, each stage on its own thread connected by queues so a
 slow stage (translation, TTS) doesn't stall audio capture.
 
-Recognition/translation/captions run by default (`self.control.active` set);
-an operator can still pause them (e.g. during a long musical number) via
-Start/Stop. TTS *voicing* is separate and starts **off**
+Recognition/captions run by default (`self.control.active` set); an operator
+can still pause them (e.g. during a long musical number) via Start/Stop.
+Translation is a separate switch (`self.control.translation_enabled`, on by
+default): turning it off leaves the original-language captions running but
+skips translation (and, as a consequence, TTS, since there is no translated
+text to speak). TTS *voicing* is its own switch and starts **off**
 (`self.control.voice_enabled` unset) - captions are silent and harmless to
 leave running, but audio spoken over the speakers during music or an
 announcement would not be, so that's opt-in via its own button. Capture and
-VAD segmentation always run regardless of either switch, both because
+VAD segmentation always run regardless of any of these switches, both because
 they're cheap and because voice-clone training needs segmented audio
-independently of whether recognition/voicing is on.
+independently of whether recognition/translation/voicing is on.
 """
 
 import queue
@@ -123,6 +126,10 @@ class Pipeline:
             self.control.enable_voice()
         elif action == "voice_off":
             self.control.disable_voice()
+        elif action == "translate_on":
+            self.control.enable_translation()
+        elif action == "translate_off":
+            self.control.disable_translation()
         elif action == "reset":
             self._reset()
         elif action == "train_start":
@@ -391,6 +398,7 @@ class Pipeline:
         if self.broadcaster:
             self.broadcaster.broadcast_status(
                 active=self.control.active.is_set(),
+                translation_enabled=self.control.translation_enabled.is_set(),
                 voice_enabled=self.control.voice_enabled.is_set(),
                 training=self.control.training.is_set(),
                 training_seconds=self.control.training_seconds,
@@ -410,6 +418,22 @@ class Pipeline:
                 {"id": e.speaker_id, "name": e.name, "builtin": e.builtin} for e in self.voice_library.list()
             ]
             self.broadcaster.broadcast_library(speakers)
+
+    def _broadcast_engines(self) -> None:
+        """Model/device info for the header dropdowns. Fixed for the life of
+        the process (set from CLI flags at startup), so this is only ever
+        sent once per connection rather than tracked as live status."""
+        if self.broadcaster:
+            tts_model = (
+                self.cfg.tts.qwen3_model_name if self.cfg.tts.backend == "qwen3" else self.cfg.tts.model_name
+            )
+            self.broadcaster.broadcast_engines(
+                {
+                    "asr": {"model": self.cfg.asr.model_size, "device": self.cfg.asr.device},
+                    "translation": {"model": self.cfg.translation.model_name, "device": self.cfg.translation.device},
+                    "tts": {"model": tts_model, "device": self.cfg.tts.device},
+                }
+            )
 
     # -- pipeline stages -----------------------------------------------
 
@@ -452,6 +476,9 @@ class Pipeline:
     def _translate_loop(self) -> None:
         while not self._stop.is_set():
             text = self._transcripts.get()
+            if not self.control.translation_enabled.is_set():
+                vlog("translate", "translation is off, skipping")
+                continue
             t0 = time.monotonic()
             translated = self.translator.translate(text)
             vlog("translate", f"translated in {time.monotonic() - t0:.2f}s")
@@ -521,6 +548,7 @@ class Pipeline:
         self._broadcast_status()
         self._broadcast_library()
         self._broadcast_devices()
+        self._broadcast_engines()
 
     def stop(self) -> None:
         self._stop.set()

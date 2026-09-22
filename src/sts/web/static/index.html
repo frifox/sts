@@ -211,6 +211,46 @@
 
   #btn-save-voice:disabled { opacity: 0.4; cursor: default; }
   #btn-create-voice[hidden] { display: none; }
+
+  .engine { position: relative; display: flex; }
+  .engine-toggle { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none; }
+  .engine-caret {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 0.5em 0.7em;
+    border-radius: 0 6px 6px 0;
+    border: 1px solid #444;
+    background: #1a1a1e;
+    color: #ccc;
+    cursor: pointer;
+  }
+  .engine-caret:hover { border-color: #777; }
+  .engine-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
+  .engine-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 0.4em;
+    min-width: 17rem;
+    background: #16161c;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 0.9rem 1rem;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+    z-index: 20;
+    font-size: 0.85rem;
+  }
+  .engine-dropdown.show { display: block; }
+  .engine-info { color: #9a9aa5; margin-bottom: 0.7rem; display: flex; flex-direction: column; gap: 0.25rem; }
+  .engine-info b { color: #ddd; font-weight: 600; }
+  .engine-dropdown label { display: block; margin: 0.6rem 0 0.3rem; color: #9a9aa5; }
+  .engine-dropdown select { width: 100%; box-sizing: border-box; padding: 0.5rem; font: inherit; }
+  .engine-dropdown .dropdown-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
+  .engine-dropdown .stream-row {
+    display: flex; align-items: center; gap: 0.5em; margin-top: 0.9rem; color: #9a9aa5; cursor: pointer;
+  }
+  .engine-dropdown .stream-row input { cursor: pointer; }
   /* Dark styling for the modal dialogs' own buttons and fields (the header's are styled via #controls). */
   #config-dialog button, #design-dialog button, #save-dialog button {
     font: inherit;
@@ -231,7 +271,7 @@
     color: #ddd;
   }
 
-  #btn-config, #btn-stream {
+  #btn-config {
     font: inherit;
     font-size: 1.15rem;
     line-height: 1;
@@ -242,8 +282,7 @@
     color: #9a9aa5;
     cursor: pointer;
   }
-  #btn-config:hover, #btn-stream:hover { color: #ddd; border-color: #444; }
-  #btn-stream.is-active { color: #7fd0ff; border-color: #3a90c9; background: #1a2a33; }
+  #btn-config:hover { color: #ddd; border-color: #444; }
 
   #config-dialog {
     position: fixed; inset: 0; z-index: 10; display: none;
@@ -298,8 +337,6 @@
   #save-dialog .note { min-height: 1.2em; margin: 0.5rem 0; color: #e0b341; font-size: 0.8rem; }
   #save-dialog .actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.4rem; }
 
-  #btn-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
-  #btn-voice.is-active { background: #1f3d4d; border-color: #3a90c9; color: #d7f3ff; }
   #btn-train.is-active { background: #4d3a1f; border-color: #c9a24b; color: #ffe9bf; }
   #btn-reset, #btn-delete-voice { color: #e08a8a; }
   #btn-delete-voice[hidden] { display: none; }
@@ -309,24 +346,58 @@
   <div id="app">
   <div id="header">
     <div id="controls">
-      <button id="btn-toggle">Stop</button>
-      <button id="btn-voice">🔇 Voice off</button>
-      <select id="voice-select" title="Voice: built-in (Default) or a saved trained voice (Custom)"></select>
-      <button id="btn-create-voice" hidden title="Design a new voice from a text description (Qwen3 backend)">Create Voice</button>
-      <button id="btn-train">Train voice</button>
-      <button id="btn-save-voice" disabled title="Save the trained voice to the library">Save Voice</button>
-      <button id="btn-delete-voice" hidden title="Delete the selected saved voice">Delete</button>
+      <div class="engine" id="engine-asr">
+        <button class="engine-toggle" id="btn-asr-toggle">ASR</button>
+        <button class="engine-caret" id="caret-asr" aria-label="ASR settings">▾</button>
+        <div class="engine-dropdown" id="dropdown-asr">
+          <div class="engine-info">
+            <div>Model: <b id="asr-info-model">–</b></div>
+            <div>Device: <b id="asr-info-device">–</b></div>
+          </div>
+          <label id="pause-control" title="How long the speaker must pause before the current caption ends and a new one starts. Lower = shorter, quicker captions; higher = longer ones. Adjust to the speaker.">
+            Pause
+            <input id="pause-slider" type="range" min="200" max="1500" step="50" value="700" />
+            <span id="pause-value">700 ms</span>
+          </label>
+        </div>
+      </div>
+      <div class="engine" id="engine-translate">
+        <button class="engine-toggle" id="btn-translate-toggle">Translate</button>
+        <button class="engine-caret" id="caret-translate" aria-label="Translate settings">▾</button>
+        <div class="engine-dropdown" id="dropdown-translate">
+          <div class="engine-info">
+            <div>Model: <b id="translate-info-model">–</b></div>
+            <div>Device: <b id="translate-info-device">–</b></div>
+          </div>
+        </div>
+      </div>
+      <div class="engine" id="engine-tts">
+        <button class="engine-toggle" id="btn-tts-toggle">TTS</button>
+        <button class="engine-caret" id="caret-tts" aria-label="TTS settings">▾</button>
+        <div class="engine-dropdown" id="dropdown-tts">
+          <div class="engine-info">
+            <div>Model: <b id="tts-info-model">–</b></div>
+            <div>Device: <b id="tts-info-device">–</b></div>
+          </div>
+          <label for="voice-select">Voice</label>
+          <select id="voice-select" title="Voice: built-in (Default) or a saved trained voice (Custom)"></select>
+          <div class="dropdown-actions">
+            <button id="btn-create-voice" hidden title="Design a new voice from a text description (Qwen3 backend)">Create Voice</button>
+            <button id="btn-train">Train voice</button>
+            <button id="btn-save-voice" disabled title="Save the trained voice to the library">Save Voice</button>
+            <button id="btn-delete-voice" hidden title="Delete the selected saved voice">Delete</button>
+          </div>
+          <label class="stream-row" title="Play the synthesized voice in this browser too">
+            <input type="checkbox" id="stream-toggle" />
+            Stream voice to this browser
+          </label>
+        </div>
+      </div>
       <button id="btn-reset">Reset</button>
     </div>
     <div id="indicators">
-      <label id="pause-control" title="How long the speaker must pause before the current caption ends and a new one starts. Lower = shorter, quicker captions; higher = longer ones. Adjust to the speaker.">
-        Pause
-        <input id="pause-slider" type="range" min="200" max="1500" step="50" value="700" />
-        <span id="pause-value">700 ms</span>
-      </label>
       <div id="stage"></div>
       <div id="status" class="disconnected">Not connected</div>
-      <button id="btn-stream" title="Stream translated audio to this browser" aria-label="Stream audio">🔇</button>
       <button id="btn-config" title="Configuration" aria-label="Configuration">⚙</button>
     </div>
   </div>
@@ -454,8 +525,9 @@
     clearTimeout(verseHideTimer);
   }
 
-  const toggleBtn = document.getElementById('btn-toggle');
-  const voiceBtn = document.getElementById('btn-voice');
+  const asrToggleBtn = document.getElementById('btn-asr-toggle');
+  const translateToggleBtn = document.getElementById('btn-translate-toggle');
+  const ttsToggleBtn = document.getElementById('btn-tts-toggle');
   const trainBtn = document.getElementById('btn-train');
   const resetBtn = document.getElementById('btn-reset');
   const saveBtn = document.getElementById('btn-save-voice');
@@ -487,7 +559,7 @@
   let defaultVoices = [];   // built-in voice names (the "Default" group)
   let savedVoices = [];     // [{id, name}] from the voice library (the "Custom" group)
   let lastStatus = {
-    active: true, voice_enabled: false, training: false,
+    active: true, translation_enabled: true, voice_enabled: false, training: false,
     training_seconds: 0, training_target_seconds: 0, cloned: false, active_speaker_id: null,
   };
 
@@ -536,11 +608,14 @@
   function applyStatus(status) {
     lastStatus = status;
 
-    toggleBtn.textContent = status.active ? 'Stop' : 'Start';
-    toggleBtn.classList.toggle('is-active', status.active);
+    asrToggleBtn.textContent = (status.active ? '● ' : '○ ') + 'ASR';
+    asrToggleBtn.classList.toggle('is-active', status.active);
 
-    voiceBtn.textContent = status.voice_enabled ? '🔊 Voice on' : '🔇 Voice off';
-    voiceBtn.classList.toggle('is-active', status.voice_enabled);
+    translateToggleBtn.textContent = (status.translation_enabled ? '● ' : '○ ') + 'Translate';
+    translateToggleBtn.classList.toggle('is-active', status.translation_enabled);
+
+    ttsToggleBtn.textContent = (status.voice_enabled ? '● ' : '○ ') + 'TTS';
+    ttsToggleBtn.classList.toggle('is-active', status.voice_enabled);
 
     if (status.training) {
       trainBtn.textContent = `Stop training (${status.training_seconds}s / ${status.training_target_seconds}s)`;
@@ -573,8 +648,37 @@
     }
   }
 
-  toggleBtn.addEventListener('click', () => send(lastStatus.active ? 'stop' : 'start'));
-  voiceBtn.addEventListener('click', () => send(lastStatus.voice_enabled ? 'voice_off' : 'voice_on'));
+  asrToggleBtn.addEventListener('click', () => send(lastStatus.active ? 'stop' : 'start'));
+  translateToggleBtn.addEventListener('click', () => send(lastStatus.translation_enabled ? 'translate_off' : 'translate_on'));
+  ttsToggleBtn.addEventListener('click', () => send(lastStatus.voice_enabled ? 'voice_off' : 'voice_on'));
+
+  // -- Engine dropdowns (caret opens the ASR/Translate/TTS settings panel) ----
+  const engineDropdowns = document.querySelectorAll('.engine-dropdown');
+  function closeDropdowns() {
+    engineDropdowns.forEach((d) => d.classList.remove('show'));
+  }
+  document.querySelectorAll('.engine-caret').forEach((caret) => {
+    caret.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const dropdown = caret.closest('.engine').querySelector('.engine-dropdown');
+      const willShow = !dropdown.classList.contains('show');
+      closeDropdowns();
+      if (willShow) dropdown.classList.add('show');
+    });
+  });
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('.engine-dropdown') && !event.target.closest('.engine-caret')) closeDropdowns();
+  });
+
+  function applyEngines(msg) {
+    document.getElementById('asr-info-model').textContent = msg.asr?.model || '–';
+    document.getElementById('asr-info-device').textContent = msg.asr?.device || '–';
+    document.getElementById('translate-info-model').textContent = msg.translation?.model || '–';
+    document.getElementById('translate-info-device').textContent = msg.translation?.device || '–';
+    document.getElementById('tts-info-model').textContent = msg.tts?.model || '–';
+    document.getElementById('tts-info-device').textContent = msg.tts?.device || '–';
+  }
+
   trainBtn.addEventListener('click', () => {
     if (lastStatus.training) {
       send('train_stop');
@@ -737,11 +841,11 @@
     syncDeleteButton();
   });
 
-  // -- Audio streaming (speaker icon) ------------------------------------------
+  // -- Audio streaming (TTS dropdown checkbox) --------------------------------
   // Off by default each visit (remembered locally so a reload keeps the choice);
   // gated purely client-side since the server already only produces clips when
   // TTS voicing is on, so there is nothing extra to ask it to skip.
-  const streamBtn = document.getElementById('btn-stream');
+  const streamToggle = document.getElementById('stream-toggle');
   let streamEnabled = false;
   try { streamEnabled = localStorage.getItem('sts-stream-audio') === '1'; } catch {}
   let audioCtx = null;
@@ -758,21 +862,15 @@
     return audioCtx;
   }
 
-  function renderStreamButton() {
-    streamBtn.textContent = streamEnabled ? '🔊' : '🔇';
-    streamBtn.classList.toggle('is-active', streamEnabled);
-    streamBtn.title = streamEnabled ? 'Stop streaming audio to this browser' : 'Stream translated audio to this browser';
-  }
-  renderStreamButton();
+  streamToggle.checked = streamEnabled;
 
-  streamBtn.addEventListener('click', () => {
-    streamEnabled = !streamEnabled;
+  streamToggle.addEventListener('change', () => {
+    streamEnabled = streamToggle.checked;
     try { localStorage.setItem('sts-stream-audio', streamEnabled ? '1' : '0'); } catch {}
     if (streamEnabled) {
       // Start fresh from "now" rather than dumping whatever arrived while off.
       nextStartTime = ensureAudioContext().currentTime;
     }
-    renderStreamButton();
   });
 
   // Each binary frame: 4-byte LE sample rate header + raw float32 LE mono PCM
@@ -831,6 +929,7 @@
       else if (msg.type === 'library') applyLibrary(msg);
       else if (msg.type === 'design') applyDesign(msg);
       else if (msg.type === 'devices') applyDevices(msg);
+      else if (msg.type === 'engines') applyEngines(msg);
     };
   }
 
