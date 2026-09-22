@@ -233,9 +233,12 @@
   .engine-dropdown {
     display: none;
     position: absolute;
+    /* Flush against the button row (no margin-top gap): a gap there isn't
+       covered by .engine's hover box, so crossing it on the way down from
+       the caret briefly leaves .engine and fires mouseleave early, closing
+       the dropdown before the pointer arrives. */
     top: 100%;
     left: 0;
-    margin-top: 0.4em;
     min-width: 17rem;
     background: #16161c;
     border: 1px solid #333;
