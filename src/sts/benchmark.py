@@ -232,7 +232,15 @@ def benchmark_tts(backend: str, device: str, repeats: int) -> StageResult:
     # on a genuinely fresh download, an interactive CPML license prompt -
     # only suppress stdout here once the model is already cached, so a real
     # first-time prompt is never silently hidden behind a blocked input().
-    quiet = backend == "xtts" and coqui_model_is_cached(cfg.model_name)
+    # coqui_model_is_cached() itself imports TTS, which raises
+    # ModuleNotFoundError in a venv without the xtts extra - exactly the
+    # case the try/except below exists to report cleanly as "not installed",
+    # so that has to be caught here too rather than left to crash the whole
+    # script before ever reaching that handler.
+    try:
+        quiet = backend == "xtts" and coqui_model_is_cached(cfg.model_name)
+    except ModuleNotFoundError:
+        quiet = False
     # torch.jit.script's deprecation FutureWarning (Coqui's XTTS still uses
     # it internally) goes through Python's warnings module, which writes to
     # stderr by default - separate from, and not caught by, the stdout
