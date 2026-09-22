@@ -213,8 +213,11 @@
   #btn-create-voice[hidden] { display: none; }
 
   .engine { position: relative; display: flex; }
-  .engine-toggle { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none; }
-  .engine-caret {
+  /* These need to out-specificity the `#controls button` base rule (an ID
+     selector), so they're qualified with `#controls` too - a bare class
+     selector loses that fight and the corners/border silently stay rounded. */
+  #controls .engine-toggle { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none; }
+  #controls .engine-caret {
     font: inherit;
     font-size: 0.75rem;
     padding: 0.5em 0.7em;
@@ -224,8 +227,8 @@
     color: #ccc;
     cursor: pointer;
   }
-  .engine-caret:hover { border-color: #777; }
-  .engine-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
+  #controls .engine-caret:hover { border-color: #777; }
+  #controls .engine-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   .engine-dropdown {
     display: none;
     position: absolute;
