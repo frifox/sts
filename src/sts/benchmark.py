@@ -228,19 +228,27 @@ def benchmark_tts(backend: str, device: str, repeats: int) -> StageResult:
     # was added to sts itself to avoid.
     cfg.qwen3_preload_presets = False
 
-    # Coqui TTS prints its own status lines directly (no verbosity flag) and,
-    # on a genuinely fresh download, an interactive CPML license prompt -
-    # only suppress stdout here once the model is already cached, so a real
-    # first-time prompt is never silently hidden behind a blocked input().
-    # coqui_model_is_cached() itself imports TTS, which raises
-    # ModuleNotFoundError in a venv without the xtts extra - exactly the
-    # case the try/except below exists to report cleanly as "not installed",
-    # so that has to be caught here too rather than left to crash the whole
-    # script before ever reaching that handler.
-    try:
-        quiet = backend == "xtts" and coqui_model_is_cached(cfg.model_name)
-    except ModuleNotFoundError:
-        quiet = False
+    if backend == "xtts":
+        # Coqui TTS prints its own status lines directly (no verbosity flag)
+        # and, on a genuinely fresh download, an interactive CPML license
+        # prompt - only suppress stdout once the model is already cached, so
+        # a real first-time prompt is never silently hidden behind a blocked
+        # input(). coqui_model_is_cached() itself imports TTS, which raises
+        # ModuleNotFoundError in a venv without the xtts extra - exactly the
+        # case the try/except below exists to report cleanly as "not
+        # installed", so that has to be caught here too rather than left to
+        # crash the whole script before ever reaching that handler.
+        try:
+            quiet = coqui_model_is_cached(cfg.model_name)
+        except ModuleNotFoundError:
+            quiet = False
+    else:
+        # qwen_tts prints its own flash-attn-missing notice directly (no
+        # verbosity flag), and Hugging Face Hub downloads have no
+        # interactive-prompt equivalent to Coqui's CPML gate (a gated HF
+        # model fails with an auth error instead of blocking on input()), so
+        # this is safe to suppress unconditionally.
+        quiet = True
     # torch.jit.script's deprecation FutureWarning (Coqui's XTTS still uses
     # it internally) goes through Python's warnings module, which writes to
     # stderr by default - separate from, and not caught by, the stdout
@@ -390,6 +398,17 @@ def main() -> None:
         import transformers
 
         transformers.utils.logging.set_verbosity_error()
+    except ImportError:
+        pass
+
+    # huggingface_hub prints a "Fetching N files" tqdm bar for every model's
+    # supplementary files (Qwen3-TTS's tokenizer/vocoder assets, etc.) - its
+    # own documented off switch, not a stream-redirection hack, and safe
+    # unconditionally since it's just a download progress display.
+    try:
+        import huggingface_hub
+
+        huggingface_hub.utils.disable_progress_bars()
     except ImportError:
         pass
 
