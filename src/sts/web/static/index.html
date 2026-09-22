@@ -229,6 +229,7 @@
   }
   #controls .engine-caret:hover { border-color: #777; }
   #controls .engine-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
+  #controls .engine-toggle.is-active + .engine-caret { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   .engine-dropdown {
     display: none;
     position: absolute;
@@ -350,8 +351,8 @@
   <div id="header">
     <div id="controls">
       <div class="engine" id="engine-asr">
-        <button class="engine-toggle" id="btn-asr-toggle">ASR</button>
-        <button class="engine-caret" id="caret-asr" aria-label="ASR settings">▾</button>
+        <button class="engine-toggle" id="btn-asr-toggle">Caption</button>
+        <button class="engine-caret" id="caret-asr" aria-label="Caption settings">▾</button>
         <div class="engine-dropdown" id="dropdown-asr">
           <div class="engine-info">
             <div>Model: <b id="asr-info-model">–</b></div>
@@ -375,8 +376,8 @@
         </div>
       </div>
       <div class="engine" id="engine-tts">
-        <button class="engine-toggle" id="btn-tts-toggle">TTS</button>
-        <button class="engine-caret" id="caret-tts" aria-label="TTS settings">▾</button>
+        <button class="engine-toggle" id="btn-tts-toggle">Voice</button>
+        <button class="engine-caret" id="caret-tts" aria-label="Voice settings">▾</button>
         <div class="engine-dropdown" id="dropdown-tts">
           <div class="engine-info">
             <div>Model: <b id="tts-info-model">–</b></div>
@@ -611,13 +612,13 @@
   function applyStatus(status) {
     lastStatus = status;
 
-    asrToggleBtn.textContent = (status.active ? '● ' : '○ ') + 'ASR';
+    asrToggleBtn.textContent = (status.active ? '● ' : '○ ') + 'Caption';
     asrToggleBtn.classList.toggle('is-active', status.active);
 
     translateToggleBtn.textContent = (status.translation_enabled ? '● ' : '○ ') + 'Translate';
     translateToggleBtn.classList.toggle('is-active', status.translation_enabled);
 
-    ttsToggleBtn.textContent = (status.voice_enabled ? '● ' : '○ ') + 'TTS';
+    ttsToggleBtn.textContent = (status.voice_enabled ? '● ' : '○ ') + 'Voice';
     ttsToggleBtn.classList.toggle('is-active', status.voice_enabled);
 
     if (status.training) {
@@ -655,19 +656,21 @@
   translateToggleBtn.addEventListener('click', () => send(lastStatus.translation_enabled ? 'translate_off' : 'translate_on'));
   ttsToggleBtn.addEventListener('click', () => send(lastStatus.voice_enabled ? 'voice_off' : 'voice_on'));
 
-  // -- Engine dropdowns (caret opens the ASR/Translate/TTS settings panel) ----
+  // -- Engine dropdowns (hovering the caret opens the Caption/Translate/Voice settings panel) --
   const engineDropdowns = document.querySelectorAll('.engine-dropdown');
-  function closeDropdowns() {
-    engineDropdowns.forEach((d) => d.classList.remove('show'));
+  function closeDropdowns(except) {
+    engineDropdowns.forEach((d) => { if (d !== except) d.classList.remove('show'); });
   }
   document.querySelectorAll('.engine-caret').forEach((caret) => {
-    caret.addEventListener('click', (event) => {
-      event.stopPropagation();
-      const dropdown = caret.closest('.engine').querySelector('.engine-dropdown');
-      const willShow = !dropdown.classList.contains('show');
-      closeDropdowns();
-      if (willShow) dropdown.classList.add('show');
+    const engine = caret.closest('.engine');
+    const dropdown = engine.querySelector('.engine-dropdown');
+    caret.addEventListener('mouseenter', () => {
+      closeDropdowns(dropdown);
+      dropdown.classList.add('show');
     });
+    // Leaving the whole group (not just the caret) closes it, so moving the
+    // mouse down into the open dropdown doesn't immediately hide it again.
+    engine.addEventListener('mouseleave', () => dropdown.classList.remove('show'));
   });
   document.addEventListener('click', (event) => {
     if (!event.target.closest('.engine-dropdown') && !event.target.closest('.engine-caret')) closeDropdowns();
