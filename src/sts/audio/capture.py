@@ -35,6 +35,11 @@ class AudioCapture:
         self.frames.put(indata[:, 0].copy())
 
     def start(self) -> None:
+        """Opens the configured source. A no-op for `source == "browser"`:
+        frames arrive via `push_browser_frame` instead of a local stream."""
+        if self.cfg.source == "browser":
+            vlog("audio", "waiting for browser microphone frames")
+            return
         block_size = int(self.cfg.sample_rate * self.cfg.block_ms / 1000)
         self._stream = sd.InputStream(
             device=self.cfg.input_device,
@@ -49,21 +54,46 @@ class AudioCapture:
         vlog("audio", f"listening on input [{info['index']}] {info['name']} "
                       f"({self.cfg.sample_rate} Hz, {self.cfg.block_ms} ms frames)")
 
-    def switch_device(self, device: int | None) -> None:
-        """Moves capture to another input device while running. If the new
-        device won't open, capture goes back to the old one and the error is raised."""
-        previous = self.cfg.input_device
+    def switch_to_alsa(self, device: int | None = None) -> None:
+        """Moves capture to a local ALSA input device, switching away from the
+        browser-mic source if that was active. `device=None` keeps whatever
+        device was already configured - used when only the source itself
+        needs to change back, not the device index. If the device won't
+        open, capture goes back to the previous source/device and the error
+        is raised."""
+        previous_device = self.cfg.input_device
+        previous_source = self.cfg.source
         self.stop()
-        self.cfg.input_device = device
+        self.cfg.source = "alsa"
+        if device is not None:
+            self.cfg.input_device = device
         try:
             self.start()
         except Exception:
-            self.cfg.input_device = previous
+            self.cfg.input_device = previous_device
+            self.cfg.source = previous_source
             self.start()
             raise
         finally:
             with self.frames.mutex:
-                self.frames.queue.clear()  # audio queued from the old device isn't part of the new stream
+                self.frames.queue.clear()  # audio queued from the old source isn't part of the new one
+
+    def switch_to_browser(self) -> None:
+        """Moves capture to accepting frames pushed from a connected
+        browser's microphone (see `push_browser_frame`) instead of a local
+        ALSA device."""
+        self.stop()
+        self.cfg.source = "browser"
+        with self.frames.mutex:
+            self.frames.queue.clear()
+
+    def push_browser_frame(self, frame: np.ndarray) -> None:
+        """Feeds one block_ms frame captured by a connected browser's
+        microphone. Ignored unless "browser" is the currently selected
+        source (e.g. a frame that was already in flight when the operator
+        switched back to ALSA)."""
+        if self.cfg.source == "browser":
+            self.frames.put(frame)
 
     def stop(self) -> None:
         self._stop.set()

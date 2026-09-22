@@ -30,6 +30,20 @@
 
   #original-panel { background: #0b0b0f; border-bottom: 2px solid #222; }
   #translated-panel { background: #000; }
+  #original-panel[hidden], #translated-panel[hidden] { display: none; }
+
+  #idle-message {
+    display: none;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+    color: #3a3a40;
+    font-size: clamp(1.4rem, 4vw, 2.6rem);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+  #idle-message.show { display: flex; }
 
   .label {
     position: absolute;
@@ -258,6 +272,11 @@
     display: flex; align-items: center; gap: 0.5em; margin-top: 0.9rem; color: #9a9aa5; cursor: pointer;
   }
   .engine-dropdown .stream-row input { cursor: pointer; }
+  .engine-dropdown .mic-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.7rem; }
+  .engine-dropdown .mic-row button { flex: 0 0 auto; }
+  #mic-status { font-size: 0.78rem; color: #9a9aa5; }
+  #mic-status.error { color: #e08a8a; }
+  #btn-browser-mic.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   /* Dark styling for the modal dialogs' own buttons and fields (the header's are styled via #controls). */
   #design-dialog button, #save-dialog button {
     font: inherit;
@@ -328,6 +347,7 @@
           <div class="engine-info">
             <div>Model: <b id="asr-info-model">–</b></div>
             <div>Device: <b id="asr-info-device">–</b></div>
+            <div>Input: <b id="asr-info-source">–</b></div>
           </div>
           <label id="pause-control" title="How long the speaker must pause before the current caption ends and a new one starts. Lower = shorter, quicker captions; higher = longer ones. Adjust to the speaker.">
             Pause
@@ -336,6 +356,10 @@
           </label>
           <label for="cfg-input">Input device (microphone / line in)</label>
           <select id="cfg-input"></select>
+          <div class="mic-row">
+            <button type="button" id="btn-browser-mic" title="Stream this browser's own microphone in as the input, instead of the server's sound card">🎤 Use this browser's mic</button>
+          </div>
+          <div id="mic-status"></div>
         </div>
       </div>
       <div class="engine" id="engine-translate">
@@ -387,6 +411,7 @@
       <span class="label">Translated</span>
       <div class="lines" id="translated-lines"></div>
     </div>
+    <div id="idle-message">System Idle</div>
   </div>
 
   <div id="verse-overlay">
@@ -519,7 +544,20 @@
   let lastStatus = {
     active: true, translation_enabled: true, voice_enabled: false, training: false,
     training_seconds: 0, training_target_seconds: 0, cloned: false, active_speaker_id: null,
+    audio_source: 'alsa',
   };
+
+  // -- Caption/Translated panels: hidden while their engine is off, "System
+  // Idle" shown once neither has anything left to display. --------------------
+  const originalPanel = document.getElementById('original-panel');
+  const translatedPanel = document.getElementById('translated-panel');
+  const idleMessage = document.getElementById('idle-message');
+
+  function updatePanelVisibility() {
+    originalPanel.hidden = !lastStatus.active;
+    translatedPanel.hidden = !lastStatus.translation_enabled;
+    idleMessage.classList.toggle('show', !lastStatus.active && !lastStatus.translation_enabled);
+  }
 
   // One dropdown, two groups. Option values are tagged so the two kinds can't
   // collide: "default:<name>", "saved:<id>", or "unsaved" for a just-trained
@@ -591,6 +629,16 @@
     }
     if (status.voice_groups) defaultVoices = Object.values(status.voice_groups).flat();
     renderVoiceSelect();
+
+    updatePanelVisibility();
+
+    document.getElementById('asr-info-source').textContent =
+      status.audio_source === 'browser' ? "This browser's mic" : 'ALSA (local device)';
+    // The server may have switched us back to ALSA on its own (e.g. another
+    // tab picked a device, or this tab's mic connection dropped) - stop the
+    // local capture without sending a redundant mic_stop back.
+    if (status.audio_source !== 'browser' && micActive) stopBrowserMic(false);
+    updateMicButton();
   }
 
   function applyLibrary(msg) {
@@ -759,6 +807,112 @@
   // value along (the backend action always takes both together).
   cfgInput.addEventListener('change', () => send('set_audio_devices', { input: cfgInput.value, output: cfgOutput.value }));
   cfgOutput.addEventListener('change', () => send('set_audio_devices', { input: cfgInput.value, output: cfgOutput.value }));
+
+  // -- Browser microphone as an alternate ASR input ----------------------------
+  // Mirrors the outgoing TTS-audio format (broadcast_audio/playAudioChunk):
+  // a 4-byte LE sample-rate header followed by raw float32 LE mono PCM, just
+  // flowing the other way. The server needs each frame to be exactly one
+  // block_ms (32ms @ 16kHz = 512 samples) worth of audio for the VAD, so the
+  // AudioContext is forced to 16kHz (the browser resamples the mic's native
+  // rate into it automatically) and a small worklet batches its 128-sample
+  // render quantums into exact 512-sample frames before they're sent.
+  const MIC_SAMPLE_RATE = 16000;
+  const MIC_BLOCK_SAMPLES = 512;
+  const MIC_WORKLET_SRC = `
+    class MicFramer extends AudioWorkletProcessor {
+      constructor() {
+        super();
+        this._buffer = new Float32Array(${MIC_BLOCK_SAMPLES});
+        this._filled = 0;
+      }
+      process(inputs) {
+        const input = inputs[0][0];
+        if (input) {
+          let offset = 0;
+          while (offset < input.length) {
+            const take = Math.min(input.length - offset, this._buffer.length - this._filled);
+            this._buffer.set(input.subarray(offset, offset + take), this._filled);
+            this._filled += take;
+            offset += take;
+            if (this._filled === this._buffer.length) {
+              this.port.postMessage(this._buffer.slice());
+              this._filled = 0;
+            }
+          }
+        }
+        return true;
+      }
+    }
+    registerProcessor('mic-framer', MicFramer);
+  `;
+
+  const micBtn = document.getElementById('btn-browser-mic');
+  const micStatusEl = document.getElementById('mic-status');
+  let micActive = false;
+  let micStream = null;
+  let micAudioCtx = null;
+  let micSourceNode = null;
+  let micWorkletNode = null;
+
+  function updateMicButton() {
+    micBtn.textContent = micActive ? '⏹ Stop browser mic' : "🎤 Use this browser's mic";
+    micBtn.classList.toggle('is-active', micActive);
+  }
+
+  async function startBrowserMic() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      micStatusEl.textContent = 'Microphone access needs HTTPS (or localhost) - this page is served over plain HTTP.';
+      micStatusEl.classList.add('error');
+      return;
+    }
+    micStatusEl.textContent = '';
+    micStatusEl.classList.remove('error');
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      micAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: MIC_SAMPLE_RATE });
+      if (micAudioCtx.sampleRate !== MIC_SAMPLE_RATE) {
+        throw new Error(`this browser would not honor a ${MIC_SAMPLE_RATE} Hz AudioContext (got ${micAudioCtx.sampleRate} Hz)`);
+      }
+      const moduleUrl = URL.createObjectURL(new Blob([MIC_WORKLET_SRC], { type: 'application/javascript' }));
+      await micAudioCtx.audioWorklet.addModule(moduleUrl);
+      micSourceNode = micAudioCtx.createMediaStreamSource(micStream);
+      micWorkletNode = new AudioWorkletNode(micAudioCtx, 'mic-framer');
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, MIC_SAMPLE_RATE, true);
+      micWorkletNode.port.onmessage = (event) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const frame = event.data;  // Float32Array, exactly MIC_BLOCK_SAMPLES samples
+        const payload = new Uint8Array(header.length + frame.byteLength);
+        payload.set(header, 0);
+        payload.set(new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength), header.length);
+        ws.send(payload);
+      };
+      micSourceNode.connect(micWorkletNode);
+      micActive = true;
+      send('mic_start');
+    } catch (err) {
+      micStatusEl.textContent = `Couldn't use this browser's mic: ${err.message || err}`;
+      micStatusEl.classList.add('error');
+      stopBrowserMic(false);
+    }
+    updateMicButton();
+  }
+
+  function stopBrowserMic(notifyServer = true) {
+    if (micWorkletNode) { micWorkletNode.port.onmessage = null; micWorkletNode.disconnect(); micWorkletNode = null; }
+    if (micSourceNode) { micSourceNode.disconnect(); micSourceNode = null; }
+    if (micAudioCtx) { micAudioCtx.close(); micAudioCtx = null; }
+    if (micStream) { micStream.getTracks().forEach((track) => track.stop()); micStream = null; }
+    const wasActive = micActive;
+    micActive = false;
+    if (notifyServer && wasActive) send('mic_stop');
+    updateMicButton();
+  }
+
+  micBtn.addEventListener('click', () => (micActive ? stopBrowserMic() : startBrowserMic()));
+  window.addEventListener('beforeunload', () => stopBrowserMic(false));  // release the mic indicator promptly
 
   function syncDeleteButton() {
     // Only offered while one of the user's own saved (Custom) voices is selected.

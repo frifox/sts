@@ -41,6 +41,10 @@ class CaptionBroadcaster:
         self.loop: asyncio.AbstractEventLoop | None = None
         self._clients: set[WebSocket] = set()
         self.on_control: Callable[[dict], None] | None = None
+        self.on_mic_frame: Callable[[bytes], None] | None = None
+        # The one connection currently allowed to feed browser-mic audio, so
+        # frames from a stale/other tab can't get mixed into the stream.
+        self._mic_source: WebSocket | None = None
         self._last_status: dict | None = None
         self._last_library: dict | None = None
         self._last_devices: dict | None = None
@@ -77,6 +81,12 @@ class CaptionBroadcaster:
 
     async def unregister(self, websocket: WebSocket) -> None:
         self._clients.discard(websocket)
+        if websocket is self._mic_source:
+            # This tab was streaming its mic in; falling back to ALSA beats
+            # silently losing all audio input because a browser tab closed.
+            self._mic_source = None
+            if self.on_control:
+                self.on_control({"action": "mic_stop"})
         vlog("web", f"caption page disconnected ({len(self._clients)} client(s))")
 
     async def _send_to_all(self, message: dict) -> None:
@@ -196,6 +206,7 @@ class CaptionBroadcaster:
         active_speaker_id: str | None = None,
         can_save: bool = False,
         min_silence_ms: int | None = None,
+        audio_source: str = "alsa",
         can_design: bool = False,
         default_voice: str | None = None,
         voice_groups: dict[str, list[str]] | None = None,
@@ -212,6 +223,7 @@ class CaptionBroadcaster:
             "active_speaker_id": active_speaker_id,
             "can_save": can_save,
             "min_silence_ms": min_silence_ms,
+            "audio_source": audio_source,
             "can_design": can_design,
             "default_voice": default_voice,
             "voice_groups": voice_groups,
@@ -228,13 +240,28 @@ class CaptionBroadcaster:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
-    def _handle_incoming(self, raw: str) -> None:
+    def _handle_incoming(self, websocket: WebSocket, raw: str) -> None:
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             return
-        if isinstance(data, dict) and data.get("action") and self.on_control:
+        if not isinstance(data, dict) or not data.get("action"):
+            return
+        action = data["action"]
+        if action == "mic_start":
+            self._mic_source = websocket  # displaces any other tab that was streaming
+        elif action == "mic_stop" and self._mic_source is websocket:
+            self._mic_source = None
+        if self.on_control:
             self.on_control(data)
+
+    def _handle_incoming_bytes(self, websocket: WebSocket, data: bytes) -> None:
+        """Binary frames are only ever browser-mic audio (the one binary
+        payload a client sends us; TTS audio flows the other way). Frames
+        from any connection other than the current mic source are dropped -
+        a stale/leftover stream from a tab that isn't in control right now."""
+        if websocket is self._mic_source and self.on_mic_frame:
+            self.on_mic_frame(data)
 
 
 def create_app(broadcaster: CaptionBroadcaster) -> FastAPI:
@@ -254,8 +281,18 @@ def create_app(broadcaster: CaptionBroadcaster) -> FastAPI:
         await broadcaster.register(websocket)
         try:
             while True:
-                raw = await websocket.receive_text()
-                broadcaster._handle_incoming(raw)
+                # The generic receive() (rather than receive_text()) is needed
+                # because this socket now carries both directions: JSON control
+                # messages, and - only when this tab is the mic source -
+                # binary microphone frames going the opposite way from the
+                # binary TTS audio the server sends out.
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    break
+                if (text := message.get("text")) is not None:
+                    broadcaster._handle_incoming(websocket, text)
+                elif (data := message.get("bytes")) is not None:
+                    broadcaster._handle_incoming_bytes(websocket, data)
         except WebSocketDisconnect:
             pass
         finally:

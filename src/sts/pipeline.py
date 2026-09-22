@@ -17,6 +17,7 @@ independently of whether recognition/translation/voicing is on.
 """
 
 import queue
+import struct
 import tempfile
 import threading
 import time
@@ -40,6 +41,12 @@ from sts.web.server import CaptionBroadcaster
 
 # Bounds for the live pause-threshold slider (milliseconds of silence that end a snippet).
 MIN_SILENCE_RANGE_MS = (200, 1500)
+
+# One binary mic frame from a browser: a 4-byte LE sample-rate header (mirrors
+# the outgoing TTS format in CaptionBroadcaster.broadcast_audio) followed by
+# raw float32 LE mono PCM - one block_ms worth of samples, matching what the
+# VAD needs exactly.
+_MIC_FRAME_HEADER = struct.Struct("<I")
 
 # What the designed voice says when its reference clip is generated. The clip
 # becomes the saved voice's reference, so it should be a natural, moderately
@@ -147,7 +154,7 @@ class Pipeline:
             self.cfg.tts.default_voice = voice
             self.tts.set_default_voice(voice)
             self._select_speaker(None)  # picking a built-in voice drops any cloned/trained one
-        elif action in ("refresh_devices", "set_audio_devices"):
+        elif action in ("refresh_devices", "set_audio_devices", "mic_start", "mic_stop"):
             threading.Thread(target=self._handle_device_action, args=(action, data), daemon=True).start()
             return
         elif action == "set_min_silence":
@@ -287,6 +294,18 @@ class Pipeline:
         if action == "refresh_devices":
             self._broadcast_devices()
             return
+        if action == "mic_start":
+            with self._device_lock:
+                self.capture.switch_to_browser()
+            vlog("audio", "input switched to this browser's microphone")
+            self._broadcast_status()
+            return
+        if action == "mic_stop":
+            with self._device_lock:
+                self.capture.switch_to_alsa()
+            vlog("audio", "input switched back to the local ALSA device")
+            self._broadcast_status()
+            return
 
         def parse(value):
             return None if value in (None, "") else int(value)
@@ -296,16 +315,20 @@ class Pipeline:
         except (TypeError, ValueError):
             return
         audio = self.cfg.audio
+        # Picking an item from the Input dropdown always means "use ALSA with
+        # this device" - including when the browser mic was active and the
+        # index itself hasn't changed, since capture isn't reading it yet.
+        input_changed = new_input != audio.input_device or audio.source != "alsa"
         with self._device_lock:
             try:
                 from sts.audio.devices import check_input, check_output
 
-                if new_input != audio.input_device:
+                if input_changed:
                     check_input(new_input, audio.sample_rate, audio.channels)
                 if new_output != audio.output_device:
                     check_output(new_output, 24_000)
-                if new_input != audio.input_device:
-                    self.capture.switch_device(new_input)
+                if input_changed:
+                    self.capture.switch_to_alsa(new_input)
                 if new_output != audio.output_device:
                     audio.output_device = new_output
                     self.playback.stop()  # the output stream reopens on the new device with the next clip
@@ -315,6 +338,24 @@ class Pipeline:
                 return
             vlog("audio", f"devices applied: input={audio.input_device}, output={audio.output_device}")
             self._broadcast_devices(applied=True)
+        self._broadcast_status()  # audio.source may have just changed too
+
+    def _handle_mic_frame(self, payload: bytes) -> None:
+        """One block_ms worth of PCM pushed by the browser tab currently
+        acting as the mic source (see the `mic_start` control action and the
+        matching client-side AudioWorklet in index.html). Silently dropped
+        if it doesn't match what the VAD needs exactly - e.g. a browser that
+        didn't honor its AudioContext's forced sample rate."""
+        if len(payload) < _MIC_FRAME_HEADER.size:
+            return
+        (sample_rate,) = _MIC_FRAME_HEADER.unpack_from(payload)
+        if sample_rate != self.cfg.audio.sample_rate:
+            return
+        samples = np.frombuffer(payload, dtype="<f4", offset=_MIC_FRAME_HEADER.size)
+        expected_samples = int(self.cfg.audio.sample_rate * self.cfg.audio.block_ms / 1000)
+        if len(samples) != expected_samples:
+            return
+        self.capture.push_browser_frame(samples.copy())  # copy: payload's buffer is reused by the socket
 
     # -- "Create Voice" dialog (Qwen3 voice design) ---------------------------
 
@@ -406,6 +447,7 @@ class Pipeline:
                 cloned=self.tts.cloned_speaker_wav is not None,
                 can_save=self._pending_voice is not None,
                 min_silence_ms=self.cfg.vad.min_silence_ms,
+                audio_source=self.cfg.audio.source,
                 can_design=hasattr(self.tts, "design_reference"),
                 default_voice=self.cfg.tts.resolve_voice(self.cfg.tts.default_voice),
                 voice_groups=self.cfg.tts.voice_groups,

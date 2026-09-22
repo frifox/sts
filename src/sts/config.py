@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 class AudioConfig:
     input_device: int | None = None
     output_device: int | None = None
+    # "alsa" reads `input_device` via sounddevice, as always; "browser" instead
+    # accepts frames pushed over the websocket by a connected browser's
+    # microphone (see Pipeline._handle_mic_frame). Switched at runtime by the
+    # caption page's "Use this browser's mic" control / the input dropdown.
+    source: str = "alsa"
     sample_rate: int = 16_000
     channels: int = 1
     # Minimum silence between one translated text and the next when they play

@@ -95,6 +95,7 @@ def main() -> None:
         pipeline.clone_voice(args.clone, name=args.clone_name)
     if broadcaster:
         broadcaster.on_control = pipeline.handle_control
+        broadcaster.on_mic_frame = pipeline._handle_mic_frame
 
     pipeline.start()
     print("Pipeline running. Ctrl+C to stop.")
