@@ -34,6 +34,7 @@ class AudioPlayback:
         self._stream_rate: int | None = None
         self._lock = threading.Lock()
         self._scheduled_end = 0.0  # monotonic time at which queued audio finishes playing
+        self._resolved_rates: dict[int, int] = {}  # clip rate -> device-accepted rate, probed once each
 
     def _target_rate(self, requested: int) -> int:
         """The rate to actually open the stream at: `requested` if the output
@@ -41,13 +42,23 @@ class AudioPlayback:
         (opened this way - PortAudio's raw ALSA "hw" access, no "plug" layer
         - many real sound cards only accept a couple of fixed hardware rates,
         e.g. 44100/48000, and flatly reject a TTS model's own output rate,
-        typically 24kHz)."""
+        typically 24kHz).
+
+        Cached per requested rate: `check_output_settings` briefly opens the
+        device itself to probe it, which collides ("AlsaOpen" failure) with
+        the persistent stream this class already keeps open on the same
+        exclusive-access hw device if done on every clip instead of once."""
+        cached = self._resolved_rates.get(requested)
+        if cached is not None:
+            return cached
         try:
             sd.check_output_settings(device=self.cfg.output_device, samplerate=requested)
-            return requested
+            target = requested
         except Exception:
             info = sd.query_devices(self.cfg.output_device, "output")
-            return int(info["default_samplerate"])
+            target = int(info["default_samplerate"])
+        self._resolved_rates[requested] = target
+        return target
 
     def _ensure_stream(self, sample_rate: int) -> tuple[sd.OutputStream, int]:
         target = self._target_rate(sample_rate)
