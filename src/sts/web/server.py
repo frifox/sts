@@ -11,16 +11,23 @@ registered as `on_control`.
 
 import asyncio
 import json
+import struct
 import threading
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from sts.log import vlog
+
+# Binary audio frames sent over /ws are a 4-byte little-endian sample rate
+# header followed by raw float32 LE mono PCM - self-contained, no separate
+# control message needed to keep the two in sync.
+_AUDIO_HEADER = struct.Struct("<I")
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -80,6 +87,16 @@ class CaptionBroadcaster:
         for client in dead:
             self._clients.discard(client)
 
+    async def _send_bytes_to_all(self, payload: bytes) -> None:
+        dead = []
+        for client in self._clients:
+            try:
+                await client.send_bytes(payload)
+            except Exception:
+                dead.append(client)
+        for client in dead:
+            self._clients.discard(client)
+
     def _broadcast(self, kind: str, text: str) -> None:
         if not text:
             return
@@ -114,6 +131,18 @@ class CaptionBroadcaster:
             "en_text": en_text,
         }
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
+
+    def broadcast_audio(self, audio: np.ndarray, sample_rate: int) -> None:
+        """Streams a synthesized speech clip to every connected page (the
+        speaker-icon toggle decides client-side whether to actually play it -
+        cheaper than tracking per-client subscriptions here, and the browser
+        never plays anything without TTS voicing already being on, since this
+        is only called with clips the pipeline already produced for the local
+        speaker output)."""
+        if self.loop is None or not audio.size:
+            return
+        payload = _AUDIO_HEADER.pack(sample_rate) + np.ascontiguousarray(audio, dtype=np.float32).tobytes()
+        asyncio.run_coroutine_threadsafe(self._send_bytes_to_all(payload), self.loop)
 
     def broadcast_stage(self, text: str, ready: bool = False) -> None:
         """Startup progress ("Loading Whisper…" -> "Listening"). Remembered so

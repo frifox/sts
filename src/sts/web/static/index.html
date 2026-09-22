@@ -231,7 +231,7 @@
     color: #ddd;
   }
 
-  #btn-config {
+  #btn-config, #btn-stream {
     font: inherit;
     font-size: 1.15rem;
     line-height: 1;
@@ -242,7 +242,8 @@
     color: #9a9aa5;
     cursor: pointer;
   }
-  #btn-config:hover { color: #ddd; border-color: #444; }
+  #btn-config:hover, #btn-stream:hover { color: #ddd; border-color: #444; }
+  #btn-stream.is-active { color: #7fd0ff; border-color: #3a90c9; background: #1a2a33; }
 
   #config-dialog {
     position: fixed; inset: 0; z-index: 10; display: none;
@@ -325,6 +326,7 @@
       </label>
       <div id="stage"></div>
       <div id="status" class="disconnected">Not connected</div>
+      <button id="btn-stream" title="Stream translated audio to this browser" aria-label="Stream audio">🔇</button>
       <button id="btn-config" title="Configuration" aria-label="Configuration">⚙</button>
     </div>
   </div>
@@ -735,11 +737,70 @@
     syncDeleteButton();
   });
 
+  // -- Audio streaming (speaker icon) ------------------------------------------
+  // Off by default each visit (remembered locally so a reload keeps the choice);
+  // gated purely client-side since the server already only produces clips when
+  // TTS voicing is on, so there is nothing extra to ask it to skip.
+  const streamBtn = document.getElementById('btn-stream');
+  let streamEnabled = false;
+  try { streamEnabled = localStorage.getItem('sts-stream-audio') === '1'; } catch {}
+  let audioCtx = null;
+  let streamGain = null;
+  let nextStartTime = 0;  // AudioContext time the next scheduled chunk should start at
+
+  function ensureAudioContext() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      streamGain = audioCtx.createGain();
+      streamGain.connect(audioCtx.destination);
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+
+  function renderStreamButton() {
+    streamBtn.textContent = streamEnabled ? '🔊' : '🔇';
+    streamBtn.classList.toggle('is-active', streamEnabled);
+    streamBtn.title = streamEnabled ? 'Stop streaming audio to this browser' : 'Stream translated audio to this browser';
+  }
+  renderStreamButton();
+
+  streamBtn.addEventListener('click', () => {
+    streamEnabled = !streamEnabled;
+    try { localStorage.setItem('sts-stream-audio', streamEnabled ? '1' : '0'); } catch {}
+    if (streamEnabled) {
+      // Start fresh from "now" rather than dumping whatever arrived while off.
+      nextStartTime = ensureAudioContext().currentTime;
+    }
+    renderStreamButton();
+  });
+
+  // Each binary frame: 4-byte LE sample rate header + raw float32 LE mono PCM
+  // (see CaptionBroadcaster.broadcast_audio). Chunks are scheduled back to
+  // back on one AudioContext timeline so consecutive sentences play without
+  // gaps, the same way the server's own local playback stitches clips together.
+  function playAudioChunk(buffer) {
+    if (!streamEnabled || buffer.byteLength <= 4) return;
+    const ctx = ensureAudioContext();
+    const sampleRate = new DataView(buffer).getUint32(0, true);
+    const samples = new Float32Array(buffer, 4);
+    if (!samples.length) return;
+    const audioBuffer = ctx.createBuffer(1, samples.length, sampleRate);
+    audioBuffer.copyToChannel(samples, 0);
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(streamGain);
+    const startAt = Math.max(ctx.currentTime, nextStartTime);
+    source.start(startAt);
+    nextStartTime = startAt + audioBuffer.duration;
+  }
+
   function connect() {
     const status = document.getElementById('status');
     const stage = document.getElementById('stage');
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws`);
+    ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
       // The server replays recent captions on connect, so start clean to
@@ -756,6 +817,7 @@
       setTimeout(connect, 1000);
     };
     ws.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) { playAudioChunk(event.data); return; }
       const msg = JSON.parse(event.data);
       if (msg.type === 'original') addLine('original-lines', msg.text);
       else if (msg.type === 'translated') addLine('translated-lines', msg.text);

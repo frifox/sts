@@ -502,6 +502,8 @@ class Pipeline:
                 self.playback.play(audio, sample_rate=sample_rate, pause_before=pause_before)
             except Exception as exc:
                 print(f"[audio] playback failed: {exc!r}")
+            if self.broadcaster:
+                self.broadcaster.broadcast_audio(audio, sample_rate)
 
     def start(self) -> None:
         self.capture.start()
