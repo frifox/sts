@@ -10,6 +10,8 @@ import time
 
 import numpy as np
 import sounddevice as sd
+import torch
+import torchaudio
 
 from sts.config import AudioConfig
 from sts.log import vlog
@@ -33,17 +35,33 @@ class AudioPlayback:
         self._lock = threading.Lock()
         self._scheduled_end = 0.0  # monotonic time at which queued audio finishes playing
 
-    def _ensure_stream(self, sample_rate: int) -> sd.OutputStream:
-        if self._stream is None or self._stream_rate != sample_rate:
+    def _target_rate(self, requested: int) -> int:
+        """The rate to actually open the stream at: `requested` if the output
+        device accepts it directly, else the device's own default rate
+        (opened this way - PortAudio's raw ALSA "hw" access, no "plug" layer
+        - many real sound cards only accept a couple of fixed hardware rates,
+        e.g. 44100/48000, and flatly reject a TTS model's own output rate,
+        typically 24kHz)."""
+        try:
+            sd.check_output_settings(device=self.cfg.output_device, samplerate=requested)
+            return requested
+        except Exception:
+            info = sd.query_devices(self.cfg.output_device, "output")
+            return int(info["default_samplerate"])
+
+    def _ensure_stream(self, sample_rate: int) -> tuple[sd.OutputStream, int]:
+        target = self._target_rate(sample_rate)
+        if self._stream is None or self._stream_rate != target:
             self._close_stream()
             self._stream = sd.OutputStream(
-                samplerate=sample_rate, channels=1, dtype="float32", device=self.cfg.output_device
+                samplerate=target, channels=1, dtype="float32", device=self.cfg.output_device
             )
             self._stream.start()
-            self._stream_rate = sample_rate
+            self._stream_rate = target
             info = sd.query_devices(self.cfg.output_device, "output")
-            vlog("audio", f"output stream open on [{info['index']}] {info['name']} at {sample_rate} Hz")
-        return self._stream
+            note = f" (resampled from {sample_rate} Hz)" if target != sample_rate else ""
+            vlog("audio", f"output stream open on [{info['index']}] {info['name']} at {target} Hz{note}")
+        return self._stream, target
 
     def _close_stream(self) -> None:
         if self._stream is not None:
@@ -58,9 +76,12 @@ class AudioPlayback:
 
         `pause_before` is the minimum silence to leave after whatever played
         before (0 for continuation chunks of the same text)."""
-        samples = np.ascontiguousarray(audio, dtype=np.float32).reshape(-1, 1)
         with self._lock:
-            stream = self._ensure_stream(sample_rate)
+            stream, target_rate = self._ensure_stream(sample_rate)
+            if target_rate != sample_rate:
+                audio = torchaudio.functional.resample(torch.from_numpy(audio), sample_rate, target_rate).numpy()
+                sample_rate = target_rate
+            samples = np.ascontiguousarray(audio, dtype=np.float32).reshape(-1, 1)
             now = time.monotonic()
             pad = pause_needed(now, self._scheduled_end, pause_before) if pause_before > 0 else 0.0
             self._scheduled_end = max(now, self._scheduled_end) + pad + len(samples) / sample_rate
