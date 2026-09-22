@@ -41,3 +41,6 @@ voices/
 
 # Per-machine benchmark output (sts-benchmark)
 benchmark_results/
+
+# Self-signed TLS cert/key for --https-port (per-machine, never shared)
+certs/

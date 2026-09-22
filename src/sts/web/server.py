@@ -301,6 +301,33 @@ def create_app(broadcaster: CaptionBroadcaster) -> FastAPI:
     return app
 
 
-def run_server(broadcaster: CaptionBroadcaster, host: str = "0.0.0.0", port: int = 8765) -> None:
+def run_server(
+    broadcaster: CaptionBroadcaster,
+    host: str = "0.0.0.0",
+    port: int = 8765,
+    *,
+    https_port: int | None = None,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
+) -> None:
+    """Serves the caption page over HTTP, and - when an HTTPS port and cert
+    are given - also over HTTPS on the same app, concurrently. Both listeners
+    run in the *same* asyncio event loop (via `asyncio.gather`, not separate
+    threads), so `CaptionBroadcaster` still only ever has one loop to
+    schedule broadcasts on regardless of which listener a client connected
+    through. HTTPS matters because browsers only allow microphone capture
+    (`getUserMedia`) from a secure context - plain LAN HTTP doesn't qualify."""
     app = create_app(broadcaster)
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    configs = [uvicorn.Config(app, host=host, port=port, log_level="warning")]
+    if https_port is not None:
+        configs.append(
+            uvicorn.Config(
+                app, host=host, port=https_port, log_level="warning",
+                ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile,
+            )
+        )
+
+    async def _serve_all() -> None:
+        await asyncio.gather(*(uvicorn.Server(cfg).serve() for cfg in configs))
+
+    asyncio.run(_serve_all())
