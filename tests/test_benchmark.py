@@ -1,4 +1,14 @@
-from sts.benchmark import StageResult, first_line, format_rtf, format_table, is_not_installed, result_row, rtf
+from sts.benchmark import (
+    StageResult,
+    coqui_model_cache_dir,
+    coqui_model_is_cached,
+    first_line,
+    format_rtf,
+    format_table,
+    is_not_installed,
+    result_row,
+    rtf,
+)
 
 
 def test_rtf_faster_than_realtime():
@@ -62,3 +72,29 @@ def test_is_not_installed_false_for_a_genuine_error():
 def test_is_not_installed_false_for_a_successful_stage():
     r = StageResult("asr", "cpu", True, detail="9.4s clip, RTF 1.95x", model_load_s=1.0, warmup_s=2.0, runs_s=[3.0])
     assert not is_not_installed(r)
+
+
+def test_coqui_model_cache_dir_replaces_slashes(monkeypatch, tmp_path):
+    monkeypatch.setenv("TTS_HOME", str(tmp_path))
+    d = coqui_model_cache_dir("tts_models/multilingual/multi-dataset/xtts_v2")
+    assert d == tmp_path / "tts" / "tts_models--multilingual--multi-dataset--xtts_v2"
+
+
+def test_coqui_model_is_cached_false_when_dir_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("TTS_HOME", str(tmp_path))
+    assert not coqui_model_is_cached("tts_models/multilingual/multi-dataset/xtts_v2")
+
+
+def test_coqui_model_is_cached_false_when_dir_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("TTS_HOME", str(tmp_path))
+    d = coqui_model_cache_dir("tts_models/multilingual/multi-dataset/xtts_v2")
+    d.mkdir(parents=True)
+    assert not coqui_model_is_cached("tts_models/multilingual/multi-dataset/xtts_v2")
+
+
+def test_coqui_model_is_cached_true_once_populated(monkeypatch, tmp_path):
+    monkeypatch.setenv("TTS_HOME", str(tmp_path))
+    d = coqui_model_cache_dir("tts_models/multilingual/multi-dataset/xtts_v2")
+    d.mkdir(parents=True)
+    (d / "model.pth").write_bytes(b"fake weights")
+    assert coqui_model_is_cached("tts_models/multilingual/multi-dataset/xtts_v2")

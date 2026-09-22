@@ -21,7 +21,10 @@ Usage:
 """
 
 import argparse
+import contextlib
+import io
 import json
+import os
 import platform
 import statistics
 import time
@@ -90,6 +93,26 @@ class StageResult:
 def wav_duration_s(path: Path) -> float:
     with wave.open(str(path), "rb") as w:
         return w.getnframes() / w.getframerate()
+
+
+def coqui_model_cache_dir(model_name: str) -> Path:
+    """Where Coqui TTS's ModelManager stores a downloaded model, mirroring
+    its own get_user_data_dir()/download_model() naming - not imported from
+    TTS directly since this needs to work even when xtts isn't installed."""
+    base = os.environ.get("TTS_HOME") or os.environ.get("XDG_DATA_HOME")
+    root = Path(base).expanduser() if base else Path.home() / ".local" / "share"
+    return root / "tts" / model_name.replace("/", "--")
+
+
+def coqui_model_is_cached(model_name: str) -> bool:
+    """Best-effort check for whether a Coqui TTS model has already been
+    downloaded and its license already accepted, so benchmark_tts only
+    suppresses its stdout noise when doing so can't possibly hide a genuine
+    first-download progress bar or CPML license prompt (both are one-time,
+    only fire when the model isn't cached yet, and the prompt uses a bare
+    input() that would otherwise block silently if hidden)."""
+    d = coqui_model_cache_dir(model_name)
+    return d.is_dir() and any(d.iterdir())
 
 
 def rtf(processing_s: float, audio_s: float) -> float:
@@ -201,10 +224,17 @@ def benchmark_tts(backend: str, device: str, repeats: int) -> StageResult:
     # was added to sts itself to avoid.
     cfg.qwen3_preload_presets = False
 
+    # Coqui TTS prints its own status lines directly (no verbosity flag) and,
+    # on a genuinely fresh download, an interactive CPML license prompt -
+    # only suppress stdout here once the model is already cached, so a real
+    # first-time prompt is never silently hidden behind a blocked input().
+    quiet = backend == "xtts" and coqui_model_is_cached(cfg.model_name)
+
     t0 = time.perf_counter()
     try:
-        synth = create_synthesizer(cfg)
-        synth.clone_voice(str(REFERENCE_WAV), ref_text=REFERENCE_TEXT)
+        with contextlib.redirect_stdout(io.StringIO()) if quiet else contextlib.nullcontext():
+            synth = create_synthesizer(cfg)
+            synth.clone_voice(str(REFERENCE_WAV), ref_text=REFERENCE_TEXT)
     except SystemExit as exc:
         # create_synthesizer raises SystemExit (not ImportError) with a
         # formatted message when a backend's extra isn't installed - by
@@ -332,6 +362,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+
+    # transformers' generation code emits accurate but purely informational
+    # logger.warning_once() calls (a v4.50 deprecation heads-up, an
+    # attention-mask reminder) on every fresh model load; they add nothing to
+    # a speed benchmark's output, and this is transformers' own documented
+    # verbosity control rather than a stream-redirection hack.
+    try:
+        import transformers
+
+        transformers.utils.logging.set_verbosity_error()
+    except ImportError:
+        pass
 
     asr_device, translation_device, tts_device = resolve_devices(args.device or detect_device(), args.asr_device)
     info = system_info()
