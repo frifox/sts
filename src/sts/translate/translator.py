@@ -2,6 +2,7 @@
 
 import re
 
+import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from sts.config import TranslationConfig
@@ -57,7 +58,13 @@ class Translator:
         self.tokenizer = AutoTokenizer.from_pretrained(
             cfg.model_name, src_lang=cfg.source_lang
         )
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model_name).to(cfg.device)
+        # fp16 on cuda roughly halves VRAM versus the default fp32 load - matters
+        # once ASR and TTS are also sharing the same GPU (observed OOM on an 8GB
+        # card loading NLLB fp32 alongside faster-whisper + Qwen3-TTS).
+        dtype = torch.float16 if cfg.device == "cuda" else torch.float32
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model_name, dtype=dtype).to(
+            cfg.device
+        )
         self.model.eval()
 
         # transformers has moved this attribute around across NLLB releases.
