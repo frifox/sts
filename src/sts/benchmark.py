@@ -243,25 +243,64 @@ def benchmark_tts(backend: str, device: str, repeats: int) -> StageResult:
     )
 
 
+def first_line(text: str) -> str:
+    return text.splitlines()[0] if text else ""
+
+
+def format_table(headers: list[str], rows: list[list[str]]) -> str:
+    """Renders a simple aligned ASCII table - no extra dependency (tabulate/
+    rich), just stdlib string formatting, matching the rest of the project."""
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row[:-1]):  # last column is free text, sized by its own header only
+            widths[i] = max(widths[i], len(cell))
+
+    def format_row(cells: list[str]) -> str:
+        # The last column is left unpadded: it can be a long free-text message
+        # (e.g. an install hint), and padding every row to its width would
+        # leave every other row trailing in whitespace for no visible reason.
+        padded = [cell.ljust(widths[i]) for i, cell in enumerate(cells[:-1])]
+        return "  ".join([*padded, cells[-1]])
+
+    lines = [format_row(headers), "  ".join("-" * w for w in widths)]
+    lines.extend(format_row(row) for row in rows)
+    return "\n".join(lines)
+
+
+def result_row(r: StageResult) -> list[str]:
+    if not r.ok:
+        return [r.stage, r.device, "SKIP", "-", "-", "-", "-", first_line(r.detail)]
+    return [
+        r.stage, r.device, "OK",
+        f"{r.model_load_s:.2f}", f"{r.warmup_s:.2f}",
+        f"{r.mean_s:.2f}", f"{r.median_s:.2f}",
+        first_line(r.detail),
+    ]
+
+
 def print_report(info: dict, results: list[StageResult]) -> None:
     print("=" * 72)
     print("System")
     print("=" * 72)
     for key, value in info.items():
         print(f"  {key}: {value}")
+
     print()
     print("=" * 72)
     print("Results")
     print("=" * 72)
-    for r in results:
-        print(f"\n[{r.stage}] device={r.device}")
-        if not r.ok:
-            print(f"  SKIPPED/FAILED: {r.detail}")
-            continue
-        print(f"  {r.detail}")
-        print(f"  model load: {r.model_load_s:.2f}s   first call (warmup): {r.warmup_s:.2f}s")
-        print(f"  timed runs (s): {['%.2f' % x for x in r.runs_s]}")
-        print(f"  mean: {r.mean_s:.2f}s   median: {r.median_s:.2f}s")
+    headers = ["Stage", "Device", "Status", "Load(s)", "Warmup(s)", "Mean(s)", "Median(s)", "Detail"]
+    print(format_table(headers, [result_row(r) for r in results]))
+
+    # Anything that failed, or whose detail didn't fit on one line (e.g. a
+    # missing-backend install hint), gets its full message printed separately
+    # rather than cramming it into - or silently truncating it out of - the table.
+    extra = [r for r in results if not r.ok or "\n" in r.detail]
+    if extra:
+        print()
+        print("Details:")
+        for r in extra:
+            print(f"  [{r.stage}] {r.detail}")
 
 
 def build_parser() -> argparse.ArgumentParser:
