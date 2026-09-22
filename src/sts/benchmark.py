@@ -247,6 +247,13 @@ def first_line(text: str) -> str:
     return text.splitlines()[0] if text else ""
 
 
+def is_not_installed(r: StageResult) -> bool:
+    """True for a skipped stage whose only reason is a missing TTS backend
+    (see benchmark_tts's SystemExit/ModuleNotFoundError handling) - as
+    opposed to a genuine error worth elaborating on in the Details section."""
+    return not r.ok and r.detail.startswith("not installed")
+
+
 def format_table(headers: list[str], rows: list[list[str]]) -> str:
     """Renders a simple aligned ASCII table - no extra dependency (tabulate/
     rich), just stdlib string formatting, matching the rest of the project."""
@@ -292,10 +299,13 @@ def print_report(info: dict, results: list[StageResult]) -> None:
     headers = ["Stage", "Device", "Status", "Load(s)", "Warmup(s)", "Mean(s)", "Median(s)", "Detail"]
     print(format_table(headers, [result_row(r) for r in results]))
 
-    # Anything that failed, or whose detail didn't fit on one line (e.g. a
-    # missing-backend install hint), gets its full message printed separately
-    # rather than cramming it into - or silently truncating it out of - the table.
-    extra = [r for r in results if not r.ok or "\n" in r.detail]
+    # Anything that failed, or whose detail didn't fit on one line, gets its
+    # full message printed separately rather than cramming it into - or
+    # silently truncating it out of - the table. A missing-backend skip is
+    # the one exception: running this script via an explicit .venv-xtts or
+    # .venv-qwen python already tells the caller which backend to expect, so
+    # the install-hint paragraph would just be noise here.
+    extra = [r for r in results if (not r.ok or "\n" in r.detail) and not is_not_installed(r)]
     if extra:
         print()
         print("Details:")

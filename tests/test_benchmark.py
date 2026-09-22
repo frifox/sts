@@ -1,4 +1,4 @@
-from sts.benchmark import StageResult, first_line, format_rtf, format_table, result_row, rtf
+from sts.benchmark import StageResult, first_line, format_rtf, format_table, is_not_installed, result_row, rtf
 
 
 def test_rtf_faster_than_realtime():
@@ -47,3 +47,18 @@ def test_result_row_failed_stage_has_dashes():
     assert row[:3] == ["tts:xtts", "cuda", "SKIP"]
     assert row[3:7] == ["-", "-", "-", "-"]
     assert row[-1] == "not installed: no module named TTS"  # only the first line
+
+
+def test_is_not_installed_true_for_missing_backend():
+    r = StageResult("tts:xtts", "cuda", False, detail="not installed: no module named TTS\nmore detail")
+    assert is_not_installed(r)
+
+
+def test_is_not_installed_false_for_a_genuine_error():
+    r = StageResult("tts:qwen3", "cuda", False, detail="OutOfMemoryError('CUDA out of memory')")
+    assert not is_not_installed(r)
+
+
+def test_is_not_installed_false_for_a_successful_stage():
+    r = StageResult("asr", "cpu", True, detail="9.4s clip, RTF 1.95x", model_load_s=1.0, warmup_s=2.0, runs_s=[3.0])
+    assert not is_not_installed(r)
