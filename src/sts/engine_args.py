@@ -67,6 +67,15 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "words), 'xvector' = speaker embedding only (steadier), 'auto' = xvector unless the transcript is English (default)",
     )
     parser.add_argument(
+        "--qwen-preload-presets",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Load Qwen3-TTS's CustomVoice preset model at start-up alongside the base cloning model "
+        "(needed for the preset speaker dropdown). --no-qwen-preload-presets saves several GB of VRAM "
+        "when only a cloned/trained voice is used throughout, e.g. a live service on the bundled "
+        "Default voice (default: on)",
+    )
+    parser.add_argument(
         "--qwen-quality-retries",
         type=int,
         default=None,
@@ -130,6 +139,8 @@ def build_engine_config(args: argparse.Namespace, prefer_backend: str = "xtts") 
     cfg.tts.voice_library_dir = args.voice_library_dir
     if args.qwen_clone_mode is not None:
         cfg.tts.qwen3_clone_mode = args.qwen_clone_mode
+    if args.qwen_preload_presets is not None:
+        cfg.tts.qwen3_preload_presets = args.qwen_preload_presets
     if args.qwen_quality_retries is not None:
         cfg.tts.qwen3_quality_retries = max(0, args.qwen_quality_retries)
     if args.qwen_temperature is not None:
