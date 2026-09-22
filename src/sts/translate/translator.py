@@ -61,8 +61,12 @@ class Translator:
         # fp16 on cuda roughly halves VRAM versus the default fp32 load - matters
         # once ASR and TTS are also sharing the same GPU (observed OOM on an 8GB
         # card loading NLLB fp32 alongside faster-whisper + Qwen3-TTS).
+        # `torch_dtype`, not `dtype`: sts supports transformers back to 4.40
+        # (the xtts extra pins <4.50), and `dtype` only exists on newer
+        # releases - `torch_dtype` still works everywhere, just deprecated
+        # (with a one-time warning) on the newest ones.
         dtype = torch.float16 if cfg.device == "cuda" else torch.float32
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model_name, dtype=dtype).to(
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model_name, torch_dtype=dtype).to(
             cfg.device
         )
         self.model.eval()
