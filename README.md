@@ -652,6 +652,34 @@ timeline where the Russian sentence began.
   speech step, plus transcription time; a one-hour video takes on the order
   of an hour or more. Progress and a time estimate are printed.
 
+## Benchmarking hardware
+
+`benchmark.py` times each pipeline stage - ASR (faster-whisper), translation
+(NLLB), and TTS (both backends, whichever are installed) - using the exact
+same model configs and device-selection logic `sts` itself runs, so the
+numbers reflect real pipeline performance, not a synthetic benchmark of the
+frameworks in isolation. Point of it: run it on different machines/OSes (an
+old GPU vs a new one, a Mac's MPS backend, CPU-only) and diff the results to
+see where one is actually faster - this is what decided the GPU upgrade
+options in the church-service deployment this was built for.
+
+```bash
+python benchmark.py                       # auto-detect device, benchmark everything installed
+python benchmark.py --device cpu          # force a device
+python benchmark.py --asr-device cpu      # override just ASR (e.g. to match a VRAM-constrained deployment)
+python benchmark.py --repeats 5           # timed repetitions per stage (default 3, plus 1 untimed warmup call)
+python benchmark.py --tts-backend qwen3   # only benchmark one TTS backend instead of both
+```
+
+Each stage reports model load time, a warmup call (excluded from the timed
+numbers, so first-call CUDA/CTranslate2 init doesn't skew them), and the
+timed runs with mean/median - plus a real-time factor (processing time /
+audio duration) for ASR and TTS, since that's what actually determines
+whether a stage keeps up with a live speaker. A backend that isn't installed
+in the current environment is reported as skipped, not an error. Results are
+also written to `benchmark_results/<hostname>_<timestamp>.json` for
+diffing between machines.
+
 ## Tests
 
 ```bash

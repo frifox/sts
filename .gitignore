@@ -38,3 +38,6 @@ models/
 
 # Per-user saved voices (reference clips + metadata)
 voices/
+
+# Per-machine benchmark output (sts-benchmark)
+benchmark_results/
