@@ -38,7 +38,7 @@ from sts.config import PipelineConfig
 from sts.control import RecognitionControl
 from sts.log import vlog
 from sts.persistent_config import PersistentConfig
-from sts.textclean import split_complete
+from sts.textclean import new_text_since, split_complete
 from sts.translate.translator import Translator, split_sentences
 from sts.tts import create_synthesizer
 from sts.tts.voice_library import BUNDLED_VOICES_DIR, VoiceLibrary
@@ -762,19 +762,21 @@ class Pipeline:
         occasionally reworded even the very start of a long segment once the
         *entire* segment's audio was available as context - not just near
         chunk edges - so requiring the final transcript to still start with
-        the committed prefix would, in that case, silently drop every
-        sentence after the divergence instead of just duplicating a couple of
-        already-shown words. Content loss is the worse failure of the two, so
-        the final pass always pushes its complete, authoritative text (never
-        held back), accepting that a diverged one occasionally repeats a
-        little of what a partial already showed."""
+        the committed prefix (character for character) would, in that case,
+        silently drop every sentence after the divergence instead of just
+        duplicating a couple of already-shown words. Content loss is the
+        worse failure of the two, so a divergence is never allowed to drop
+        anything - but it's compared *word by word, ignoring punctuation*
+        (see new_text_since()) rather than as one raw string, so a boundary
+        the model re-punctuated differently the second time (a period
+        becoming a comma, continuing the sentence instead of ending it)
+        doesn't make the whole segment look diverged and get resent in full
+        - only whatever's actually new is."""
         if final:
-            to_commit = full_text.strip()
-            if full_text.startswith(self._committed_text):
-                to_commit = full_text[len(self._committed_text):].strip()
-            elif self._committed_text:
-                vlog("asr", "final transcript reworded already-committed text; "
-                            "sending it in full rather than risk dropping what follows")
+            if self._committed_text and not full_text.startswith(self._committed_text):
+                vlog("asr", "final transcript's wording diverged from what's already committed; "
+                            "resending only what isn't already covered")
+            to_commit = new_text_since(self._committed_text, full_text)
             self._committed_text = ""  # this segment is done; ready for the next one
         elif full_text.startswith(self._committed_text):
             new_text = full_text[len(self._committed_text):].strip()

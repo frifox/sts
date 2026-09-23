@@ -173,18 +173,63 @@ def test_diverged_final_sends_the_full_text_rather_than_risk_dropping_content():
     already shown/spoken for this segment can't be trusted to still be a
     clean prefix of the truth. Measured against real audio, requiring an
     exact prefix match here caused the final pass to silently drop every
-    sentence after the divergence point - so instead the full, authoritative
-    final text is always sent, even though that means the couple of already-
-    shown words may appear a second time. Duplication is visibly wrong;
-    silently missing content is worse and easy to miss."""
+    sentence after the divergence point - so instead everything not already
+    covered is always sent (see new_text_since()), even though that means a
+    couple of already-shown words may occasionally appear a second time.
+    Duplication is visibly wrong; silently missing content is worse and easy
+    to miss. Here nothing in the final pass matches the committed text at
+    all, so the whole thing is resent."""
+    p = _stub_pipeline()
+    p._commit_new_asr_text("Он сказал одно. И еще", final=False)
+    assert p.broadcaster.original == ["Он сказал одно."]
+
+    p._commit_new_asr_text("Что-то совсем другое было сказано.", final=True)
+
+    assert p.broadcaster.original == ["Он сказал одно.", "Что-то совсем другое было сказано."]
+    assert p._committed_text == ""  # ready for the next segment
+
+
+def test_diverged_final_only_resends_the_part_not_already_covered():
+    """A final pass that only reworded a couple of already-shown words used
+    to resend the whole segment (see the test above for when that's still
+    correct). Comparing word by word instead of the whole string finds the
+    actual divergence point and only resends from there, so "Он сказал" -
+    heard identically both times - isn't duplicated just because "одно"
+    became something else."""
     p = _stub_pipeline()
     p._commit_new_asr_text("Он сказал одно. И еще", final=False)
     assert p.broadcaster.original == ["Он сказал одно."]
 
     p._commit_new_asr_text("Он сказал на самом деле другое, и продолжил дальше.", final=True)
 
-    assert p.broadcaster.original == ["Он сказал одно.", "Он сказал на самом деле другое, и продолжил дальше."]
-    assert p._committed_text == ""  # ready for the next segment
+    assert p.broadcaster.original == ["Он сказал одно.", "на самом деле другое, и продолжил дальше."]
+    assert p._committed_text == ""
+
+
+def test_diverged_final_ignores_a_repunctuated_boundary():
+    """The real regression this guards against, seen in live use: a final
+    pass that hears the same words at a sentence boundary but with different
+    punctuation (a period becoming a comma, continuing the sentence instead
+    of ending it) used to look like a total divergence - `full_text` no
+    longer *starts with* `committed_text` character for character - and
+    resent the entire first sentence as a duplicate, verbatim, ahead of the
+    genuinely new content. Word-by-word comparison (ignoring punctuation)
+    sees through the re-punctuation and only resends what's actually new."""
+    p = _stub_pipeline()
+    p._commit_new_asr_text("Первое предложение полностью произнесено. И еще", final=False)
+    assert p.broadcaster.original == ["Первое предложение полностью произнесено."]
+
+    # Same words up through "произнесено", but a comma instead of a period -
+    # the sentence continues instead of ending, then adds genuinely new content.
+    p._commit_new_asr_text(
+        "Первое предложение полностью произнесено, а затем добавлено что-то новое.", final=True
+    )
+
+    assert p.broadcaster.original == [
+        "Первое предложение полностью произнесено.",
+        "а затем добавлено что-то новое.",
+    ]
+    assert p._committed_text == ""
 
 
 # -- _process_captured_frame (segment loop's per-frame decision) -----------

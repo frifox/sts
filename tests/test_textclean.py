@@ -137,6 +137,32 @@ def test_split_complete():
     assert split_complete("Первое. Второе. третье без точки") == ("Первое. Второе.", "третье без точки")
 
 
+def test_new_text_since():
+    from sts.textclean import new_text_since
+
+    # Nothing committed yet - the whole thing is new.
+    assert new_text_since("", "Привет, как дела?") == "Привет, как дела?"
+    assert new_text_since("   ", "Привет.") == "Привет."
+
+    # An exact prefix match - only what's after it is new (the common case).
+    assert new_text_since("Привет.", "Привет. Как дела?") == "Как дела?"
+
+    # A boundary re-punctuated differently (period -> comma, continuing the
+    # sentence instead of ending it) is still recognized as the same words -
+    # only the genuinely new tail is returned, not the whole thing.
+    assert new_text_since("Привет, друг.", "Привет, друг, как дела?") == "как дела?"
+
+    # No words in common at all - the whole thing is new.
+    assert new_text_since("Одно.", "Совсем другое.") == "Совсем другое."
+
+    # A mid-word divergence returns exactly what's new, from that word on -
+    # matched words before it ("Он сказал") aren't duplicated.
+    assert new_text_since("Он сказал одно.", "Он сказал совсем другое.") == "совсем другое."
+
+    # Nothing new (final pass reproduces exactly what was already committed).
+    assert new_text_since("Привет.", "Привет.") == ""
+
+
 def test_restore_unk_quotes():
     from sts.textclean import restore_unk_quotes
 

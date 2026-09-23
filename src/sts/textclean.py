@@ -120,6 +120,40 @@ def split_complete(text: str) -> tuple[str, str]:
     return text[: match.end()].strip(), text[match.end() :].strip()
 
 
+_WORD_RE = re.compile(r"\S+")
+# Stripped off each word's ends before comparing two transcripts word for
+# word - the em dash is included since restore_unk_quotes() can introduce
+# one at a spot the earlier, partial transcript had rendered as a comma.
+_WORD_PUNCT = ".,!?…:;\"'«»()-—"
+
+
+def new_text_since(committed: str, full: str) -> str:
+    """The part of `full` not already covered by `committed`, matched word by
+    word (ignoring each word's surrounding punctuation) rather than as an
+    exact character prefix. Re-transcribing a segment from scratch can
+    render an already-committed boundary slightly differently the second
+    time - e.g. a period becoming a comma, continuing the sentence instead
+    of ending it - which a plain `full.startswith(committed)` treats as a
+    total divergence and resends everything for; comparing words themselves
+    (stripped of punctuation) sees through that and skips only what's
+    genuinely the same. `full`'s own wording/punctuation is preserved in
+    what's returned - only how far to skip into it is decided this way."""
+    if not committed.strip():
+        return full.strip()
+    committed_words = [w.strip(_WORD_PUNCT).lower() for w in _WORD_RE.findall(committed)]
+    full_matches = list(_WORD_RE.finditer(full))
+    common = 0
+    while (
+        common < len(committed_words)
+        and common < len(full_matches)
+        and full_matches[common].group().strip(_WORD_PUNCT).lower() == committed_words[common]
+    ):
+        common += 1
+    if common == 0:
+        return full.strip()
+    return full[full_matches[common - 1].end() :].strip()
+
+
 # Parakeet's tokenizer has no token for any punctuation mark outside a small
 # basic set (it keeps , . : - ! ?, confirmed against the tokenizer directly) -
 # quotation marks of any style («», „", "") *and* em dashes and semicolons all
