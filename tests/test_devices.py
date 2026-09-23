@@ -141,3 +141,21 @@ def test_clarity_bar_follows_the_voice():
     assert clarity_bar([], 4.0) is None and clarity_bar([-14.0, -14.0], 4.0) is None   # nothing judged without a track record
     assert clarity_bar([-14.0, -13.5, -14.5], 4.0) == -18.0                            # a clear voice: 4 dB below its own median
     assert clarity_bar([-22.0, -21.0, -23.0], 4.0) == -26.0                            # a muffled voice isn't retried forever
+
+
+def test_translation_model_flag_overrides_the_default():
+    import argparse
+
+    from sts.config import TranslationConfig
+    from sts.engine_args import add_engine_arguments, build_engine_config
+
+    parser = argparse.ArgumentParser()
+    add_engine_arguments(parser)
+
+    default_cfg, _ = build_engine_config(parser.parse_args(["--device", "cpu", "--tts-backend", "xtts"]))
+    assert default_cfg.translation.model_name == TranslationConfig().model_name  # untouched without the flag
+
+    cfg, _ = build_engine_config(
+        parser.parse_args(["--device", "cpu", "--tts-backend", "xtts", "--translation-model", "facebook/nllb-200-3.3B"])
+    )
+    assert cfg.translation.model_name == "facebook/nllb-200-3.3B"

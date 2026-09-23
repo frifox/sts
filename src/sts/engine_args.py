@@ -33,6 +33,14 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "to share an 8GB card with translation and TTS.",
     )
     parser.add_argument(
+        "--translation-model",
+        default=None,
+        metavar="HF_MODEL",
+        help="Hugging Face NLLB model used for translation (default: facebook/nllb-200-distilled-1.3B). "
+        "e.g. facebook/nllb-200-3.3B is larger and slower (about 2x the memory: ~13GB in fp32 on mps) "
+        "for a modest quality gain; facebook/nllb-200-distilled-600M is smaller and faster.",
+    )
+    parser.add_argument(
         "--tts-backend",
         default=None,
         choices=["xtts", "qwen3"],
@@ -151,6 +159,8 @@ def build_engine_config(args: argparse.Namespace, prefer_backend: str = "xtts") 
     cfg.asr.compute_type = args.asr_compute_type or ("float16" if asr_device == "cuda" else "int8")
     cfg.asr.model_size = args.whisper_model
     cfg.translation.device = translation_device
+    if args.translation_model:
+        cfg.translation.model_name = args.translation_model
     cfg.tts.device = tts_device
     cfg.tts.backend = args.tts_backend or default_tts_backend(prefer_backend)
     if not args.tts_backend:

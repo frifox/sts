@@ -202,10 +202,12 @@ def benchmark_asr(backend: str, device: str, model_size: str, repeats: int) -> S
     )
 
 
-def benchmark_translation(device: str, repeats: int) -> StageResult:
+def benchmark_translation(device: str, repeats: int, model_name: str | None = None) -> StageResult:
     from sts.translate.translator import Translator
 
     cfg = TranslationConfig(device=device)
+    if model_name:
+        cfg.model_name = model_name
     t0 = time.perf_counter()
     try:
         translator = Translator(cfg)
@@ -397,6 +399,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--asr-backend", choices=["whisper", "parakeet"], default=None,
                         help="Only benchmark this ASR backend (default: try both, skipping whichever isn't installed)")
     parser.add_argument("--whisper-model", default="large-v3", help="faster-whisper model size (default: large-v3, matches sts's default)")
+    parser.add_argument("--translation-model", default=None, metavar="HF_MODEL",
+                        help="Hugging Face NLLB model to benchmark (default: facebook/nllb-200-distilled-1.3B)")
     parser.add_argument("--repeats", type=int, default=3, help="Timed repetitions per stage, after 1 untimed warmup call (default: 3)")
     parser.add_argument("--skip-asr", action="store_true")
     parser.add_argument("--skip-translate", action="store_true")
@@ -447,8 +451,8 @@ def main() -> None:
             results.append(benchmark_asr(backend, asr_device, args.whisper_model, args.repeats))
 
     if not args.skip_translate:
-        print(f"Benchmarking translation (NLLB on {translation_device})...", flush=True)
-        results.append(benchmark_translation(translation_device, args.repeats))
+        print(f"Benchmarking translation ({args.translation_model or 'NLLB'} on {translation_device})...", flush=True)
+        results.append(benchmark_translation(translation_device, args.repeats, args.translation_model))
 
     if not args.skip_tts:
         backends = [args.tts_backend] if args.tts_backend else ["xtts", "qwen3"]
