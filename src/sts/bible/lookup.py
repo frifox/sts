@@ -58,6 +58,14 @@ class BibleLookup:
 
     def lookup(self, book: str, ru_label: str, chapter: int, verse: int, verse_end: int | None = None) -> VerseQuote:
         verses = range(verse, (verse_end or verse) + 1)
+        # Only worth numbering when there's more than one verse to tell apart -
+        # a single verse's own reference (e.g. "Иоанна 3:16") already says
+        # which one it is. Both languages are labeled with the same (Synodal)
+        # verse number, even though a Psalm's English text is pulled from a
+        # different underlying KJV verse (see _synodal_psalm_to_kjv) - that
+        # KJV numbering is never spoken or shown elsewhere, so labeling by it
+        # instead would just be confusing next to the Russian side.
+        numbered = len(verses) > 1
 
         if book == "Psalms":
             en_targets = [_synodal_psalm_to_kjv(chapter, v) for v in verses]
@@ -70,8 +78,12 @@ class BibleLookup:
             for target in en_targets
         ]
 
-        ru_text = " ".join(p for p in ru_parts if p) or None
-        en_text = " ".join(p for p in en_parts if p) or None
+        def join(parts: list[str | None]) -> str | None:
+            pieces = [f"({v}) {p}" if numbered else p for v, p in zip(verses, parts) if p]
+            return " ".join(pieces) or None
+
+        ru_text = join(ru_parts)
+        en_text = join(en_parts)
 
         return VerseQuote(
             book=book,

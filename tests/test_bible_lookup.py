@@ -15,6 +15,20 @@ def test_verse_range_joins_text():
     assert "morning" in quote.en_text
 
 
+def test_verse_range_is_numbered():
+    quote = _lookup.lookup("John", "Иоанна", 15, 1, 3)
+    assert quote.ru_text.startswith("(1) Я есмь истинная виноградная лоза")
+    assert " (2) " in quote.ru_text and " (3) " in quote.ru_text
+    assert quote.en_text.startswith("(1) I AM the true vine")
+    assert " (2) " in quote.en_text and " (3) " in quote.en_text
+
+
+def test_single_verse_is_not_numbered():
+    quote = _lookup.lookup("John", "Иоанна", 3, 16)
+    assert not quote.ru_text.startswith("(16)")
+    assert not quote.en_text.startswith("(16)")
+
+
 def test_psalm_numbering_is_converted_between_synodal_and_kjv():
     # Synodal Psalm 22 (LXX numbering) == KJV Psalm 23 ("The Lord is my shepherd").
     quote = _lookup.lookup("Psalms", "Псалтирь", 22, 1)
