@@ -163,7 +163,7 @@ class TTSConfig:
     # a normal speech level). The models speak short phrases quieter than long sentences, which
     # sounds distant. None leaves the clips as generated.
     target_level: float | None = 0.10
-    default_voice: str = "Adde Michal"  # an XTTS speaker name from voice_groups (or "male"/"female")
+    default_voice: str = "Dionisio Schuyler"  # an XTTS speaker name from voice_groups (or "male"/"female")
     # Cloned voices inherit the accent of their reference clip (here: a Russian
     # speaker), so English cloned from it comes out accented. XTTS's style/accent
     # conditioning is separate from timbre, so the clone's style is blended

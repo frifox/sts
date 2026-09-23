@@ -140,7 +140,7 @@ slow translation or TTS call doesn't stall audio capture.
       None`. It can't be deleted, but saving
       your own voice named "Default" replaces it (deleting that copy brings the
       shipped one back). After it come the built-in (non-trained) voices. XTTS offers 13
-      (defaults to Adde Michal; `--default-voice "Craig Gutsy"` or
+      (defaults to Dionisio Schuyler; `--default-voice "Craig Gutsy"` or
       `male`/`female` sets the starting choice). Qwen3-TTS offers the preset
       voices Aiden and Ryan, spoken in a calm "preacher" style. The list
       lives in `TTSConfig.voice_groups` (`sts/config.py`); any of XTTS's 58
@@ -546,7 +546,7 @@ KJV Pure Cambridge Edition (1769) texts, both public domain, sourced from
 ```bash
 sts --list-devices                 # find your sound card's input/output index
 sts --input-device 2 --output-device 3
-sts --default-voice "Craig Gutsy"   # a different built-in voice (default: Adde Michal)
+sts --default-voice "Craig Gutsy"   # a different built-in voice (default: Dionisio Schuyler)
 sts --accent-voice "Andrew Chipper" --accent-strength 1.0
                                     # steer cloned voices' accent toward a built-in speaker
 sts --pause-s 1.0 --sentence-pause-s 0.35
