@@ -160,6 +160,47 @@ def test_voice_off_drops_already_synthesized_but_unplayed_sentences():
     assert p._audio.empty()  # nothing left for _playback_loop to still play
 
 
+def test_playback_loop_broadcasts_before_playing_locally_not_after():
+    """playback.play() blocks for close to a clip's real duration (it paces
+    with the sound card draining its buffer), so broadcasting to connected
+    browsers only after it returns meant a browser wouldn't get the clip
+    until local playback had *already finished* - a multi-second "streaming
+    delay" that scaled with clip length. The broadcast must happen before
+    the blocking local play() call, not after."""
+    import queue
+    import threading
+    import time
+
+    from sts.config import PipelineConfig
+    from sts.pipeline import Pipeline
+
+    calls = []
+
+    class Playback:
+        def play(self, *args, **kwargs):
+            calls.append("play")
+            time.sleep(0.05)  # stands in for play() blocking near-realtime
+
+    class Broadcaster:
+        def broadcast_audio(self, audio, sample_rate):
+            calls.append("broadcast")
+
+    p = object.__new__(Pipeline)
+    p.playback = Playback()
+    p.broadcaster = Broadcaster()
+    p.control = RecognitionControl(16000)
+    p.control.enable_voice()
+    p._audio = queue.Queue()
+    p._stop = threading.Event()
+    p._audio.put((np.zeros(10, dtype=np.float32), 24000, 0.0))
+
+    thread = threading.Thread(target=p._playback_loop, daemon=True)
+    thread.start()
+    thread.join(timeout=2)
+
+    assert calls == ["broadcast", "play"]
+
+
 def _startup_voice_pipeline(tmp_path):
     """A Pipeline stub with a real library (one shipped voice + one of the user's) and a recording TTS."""
     import queue

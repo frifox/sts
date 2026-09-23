@@ -577,6 +577,16 @@ class Pipeline:
             audio, sample_rate, pause_before = self._audio.get()
             if not self.control.voice_enabled.is_set():
                 continue  # voice was switched off while this was queued
+            # Broadcast before playing locally, not after: play() blocks for
+            # close to the clip's real duration (it paces with the sound
+            # card draining its buffer), so a connected browser would
+            # otherwise only receive the clip once local playback had
+            # already finished - the 3-5s "streaming delay" this was
+            # written to fix. broadcast_audio itself is fire-and-forget
+            # (schedules onto the server's event loop and returns
+            # immediately), so this doesn't delay local playback at all.
+            if self.broadcaster:
+                self.broadcaster.broadcast_audio(audio, sample_rate)
             try:
                 self.playback.play(
                     audio, sample_rate=sample_rate, pause_before=pause_before,
@@ -584,8 +594,6 @@ class Pipeline:
                 )
             except Exception as exc:
                 print(f"[audio] playback failed: {exc!r}")
-            if self.broadcaster and self.control.voice_enabled.is_set():
-                self.broadcaster.broadcast_audio(audio, sample_rate)
 
     def start(self) -> None:
         self.capture.start()
