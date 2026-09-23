@@ -514,7 +514,27 @@
   // currently on screen.
   const HISTORY_RETENTION = 2;
 
-  function addLine(containerId, text) {
+  // A single backend commit can be pushed as several separate "original"/
+  // "translated" messages, one per sentence (see Pipeline._commit_new_asr_text
+  // and _translate_segment) - they arrive close together but aren't a mix of
+  // fresh + historical, so treating only the very last of that burst as
+  // "current" would wrongly fade out the sentences just before it. Anything
+  // that arrives within BATCH_GAP_MS of the previous one joins the same
+  // still-highlighted batch instead of dimming it; only a real gap (the next
+  // genuinely new commit, which needs actual new speech to produce) starts a
+  // fresh batch and dims the previous one.
+  const BATCH_GAP_MS = 2000;
+  const lastAddTime = {};
+
+  function markOldIfNewBatch(key, elements, { forceNewBatch = false } = {}) {
+    const now = Date.now();
+    if (forceNewBatch || now - (lastAddTime[key] || 0) > BATCH_GAP_MS) {
+      for (const el of elements) el.classList.add('old');
+    }
+    lastAddTime[key] = now;
+  }
+
+  function addLine(containerId, text, opts) {
     const container = document.getElementById(containerId);
     let flow = container.querySelector('.flow');
     if (!flow) {
@@ -526,7 +546,7 @@
     const snippet = document.createElement('span');
     snippet.className = 'line';
     snippet.textContent = text + ' ';  // the space keeps consecutive snippets apart on one line
-    for (const previous of flow.children) previous.classList.add('old');
+    markOldIfNewBatch(containerId, flow.children, opts);
     flow.appendChild(snippet);
 
     // Drop the oldest snippets once even the retained (not just visible)
@@ -570,8 +590,8 @@
     }
   }
 
-  function addPortraitOriginal(text) {
-    for (const cell of portraitGrid.querySelectorAll('.original')) cell.classList.add('old');
+  function addPortraitOriginal(text, opts) {
+    markOldIfNewBatch('portrait-original', portraitGrid.querySelectorAll('.original'), opts);
     const original = document.createElement('p');
     original.className = 'portrait-cell line original';
     original.style.margin = '0';
@@ -585,14 +605,18 @@
     prunePortraitRows();
   }
 
-  function addPortraitTranslated(text) {
+  function addPortraitTranslated(text, opts) {
     const cell = pendingTranslationCells.shift();
     if (!cell) return;  // more translations than rows currently exist - nothing to pair it with
-    // cell is already in the grid (created empty alongside its original
-    // back in addPortraitOriginal) - exclude it here or it dims itself.
-    for (const other of portraitGrid.querySelectorAll('.translated')) {
-      if (other !== cell) other.classList.add('old');
-    }
+    // Exclude cell itself (already in the grid, created empty alongside its
+    // original back in addPortraitOriginal - it would dim itself otherwise)
+    // and any other still-empty pending cell: those are later rows in the
+    // same in-flight commit waiting for their own translation, not history,
+    // and marking them old now would leave them stuck that way once filled.
+    const others = Array.from(portraitGrid.querySelectorAll('.translated')).filter(
+      (el) => el !== cell && el.textContent !== ''
+    );
+    markOldIfNewBatch('portrait-translated', others, opts);
     cell.textContent = text;
     prunePortraitRows();
   }
@@ -619,9 +643,13 @@
     const n = Math.min(originals.length, translateds.length);
     const recentOriginals = originals.slice(originals.length - n);
     const recentTranslateds = translateds.slice(translateds.length - n);
+    // Rebuilding replays distinct, separately-timed historical lines through
+    // the same add-functions as live updates - unlike a live burst, each one
+    // really is older than the next, so each forces its own batch (dims
+    // whatever came before it) rather than joining a shared "just arrived" one.
     for (let i = 0; i < n; i++) {
-      addPortraitOriginal(recentOriginals[i]);
-      addPortraitTranslated(recentTranslateds[i]);
+      addPortraitOriginal(recentOriginals[i], { forceNewBatch: true });
+      addPortraitTranslated(recentTranslateds[i], { forceNewBatch: true });
     }
   }
 
@@ -631,8 +659,8 @@
 
     document.getElementById('original-lines').querySelector('.flow')?.remove();
     document.getElementById('translated-lines').querySelector('.flow')?.remove();
-    for (const text of originals) addLine('original-lines', text);
-    for (const text of translateds) addLine('translated-lines', text);
+    for (const text of originals) addLine('original-lines', text, { forceNewBatch: true });
+    for (const text of translateds) addLine('translated-lines', text, { forceNewBatch: true });
   }
 
   // The verse overlay hangs from just below the header, whatever its height
