@@ -119,13 +119,16 @@ def test_pause_threshold_changes_live_and_is_clamped():
     assert p.cfg.vad.min_silence_ms == 1500
 
 
-def test_voice_off_cuts_off_already_buffered_audio_instead_of_letting_it_drain():
-    """AudioPlayback.play() only blocks until there's room in the output
-    buffer, not until a clip finishes, so a sentence or two can already be
-    queued in the sound card's buffer by the time the operator unchecks
-    Voice. voice_off must actively cut that off (drain the pipeline's own
-    audio queue and stop/reopen the output stream), not just flip a flag
-    that only stops *new* audio from being queued."""
+def test_voice_off_drops_already_synthesized_but_unplayed_sentences():
+    """voice_off must drop anything already synthesized and queued but not
+    yet handed to the sound card - not just stop *new* audio from being
+    queued - so a sentence or two that raced ahead of playback doesn't still
+    play out after the operator unchecks Voice. (The clip playing *right
+    now*, if any, is cut short by _playback_loop's should_continue polling
+    - see test_playback.py - rather than by anything handle_control does
+    directly: aborting/closing the output stream from this thread while
+    _playback_loop's thread is mid-write() has been observed to segfault
+    PortAudio's ALSA backend.)"""
     import queue
 
     from sts.config import PipelineConfig
@@ -135,19 +138,12 @@ def test_voice_off_cuts_off_already_buffered_audio_instead_of_letting_it_drain()
         def broadcast_status(self, **kwargs):
             pass
 
-    class Playback:
-        stopped = False
-
-        def stop(self):
-            self.stopped = True
-
     class Tts:
         cloned_speaker_wav = None
 
     p = object.__new__(Pipeline)
     p.cfg = PipelineConfig()
     p.broadcaster = Broadcaster()
-    p.playback = Playback()
     p.tts = Tts()
     p._pending_voice = None
     p._active_speaker_id = None
@@ -161,8 +157,7 @@ def test_voice_off_cuts_off_already_buffered_audio_instead_of_letting_it_drain()
     p.handle_control({"action": "voice_off"})
 
     assert not p.control.voice_enabled.is_set()
-    assert p._audio.empty()          # nothing left for _playback_loop to still play
-    assert p.playback.stopped         # the output stream itself was cut off, not just gated
+    assert p._audio.empty()  # nothing left for _playback_loop to still play
 
 
 def _startup_voice_pipeline(tmp_path):

@@ -1,4 +1,8 @@
-from sts.audio.playback import pause_needed
+import numpy as np
+import pytest
+
+from sts.audio.playback import AudioPlayback, pause_needed
+from sts.config import AudioConfig
 
 
 def test_no_pause_before_first_clip():
@@ -16,3 +20,83 @@ def test_partial_pause_when_previous_just_ended():
 
 def test_no_pause_after_a_long_natural_gap():
     assert pause_needed(now=110.0, scheduled_end=100.0, gap=1.0) == 0.0
+
+
+class _StubOutputStream:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.written: list[np.ndarray] = []
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def abort(self):
+        pass
+
+    def close(self):
+        pass
+
+    def write(self, samples):
+        self.written.append(samples.copy())
+
+
+@pytest.fixture
+def stub_output(monkeypatch):
+    """Stands in for `sounddevice.OutputStream` so play()'s chunking/
+    interruption logic can be unit tested without real audio hardware."""
+    holder: dict[str, _StubOutputStream] = {}
+
+    def make_stream(**kwargs):
+        holder["stream"] = _StubOutputStream(**kwargs)
+        return holder["stream"]
+
+    monkeypatch.setattr("sts.audio.playback.sd.OutputStream", make_stream)
+    monkeypatch.setattr("sts.audio.playback.sd.check_output_settings", lambda **kw: None)
+    monkeypatch.setattr(
+        "sts.audio.playback.sd.query_devices", lambda device, kind: {"index": device or 0, "name": "Stub Output"}
+    )
+    return holder
+
+
+def test_play_without_should_continue_writes_the_whole_clip_in_one_call(stub_output):
+    pb = AudioPlayback(AudioConfig())
+    audio = np.zeros(24_000 * 2, dtype=np.float32)  # 2s clip
+    pb.play(audio, sample_rate=24_000)
+    stream = stub_output["stream"]
+    assert len(stream.written) == 1
+    assert sum(len(c) for c in stream.written) == len(audio)
+
+
+def test_should_continue_false_cuts_playback_short_instead_of_finishing_the_clip(stub_output):
+    """The regression this guards: unchecking Voice mid-sentence must stop
+    the sound actually coming out, not just prevent the *next* sentence from
+    starting - without calling stream.abort()/close() from a different
+    thread than the one blocked in write(), which can segfault PortAudio's
+    ALSA backend (reproduced directly against real hardware while
+    investigating this)."""
+    pb = AudioPlayback(AudioConfig())
+    audio = np.zeros(24_000 * 2, dtype=np.float32)  # 2s clip
+
+    calls = {"n": 0}
+
+    def should_continue():
+        calls["n"] += 1
+        return calls["n"] <= 1  # let exactly one chunk through, then cut
+
+    pb.play(audio, sample_rate=24_000, should_continue=should_continue)
+
+    stream = stub_output["stream"]
+    total_written = sum(len(chunk) for chunk in stream.written)
+    assert 0 < total_written < len(audio)  # some audio played, but nowhere near the whole clip
+    assert len(stream.written) == 1
+
+
+def test_should_continue_true_throughout_writes_the_whole_clip(stub_output):
+    pb = AudioPlayback(AudioConfig())
+    audio = np.zeros(24_000 * 2, dtype=np.float32)
+    pb.play(audio, sample_rate=24_000, should_continue=lambda: True)
+    stream = stub_output["stream"]
+    assert sum(len(c) for c in stream.written) == len(audio)

@@ -133,15 +133,16 @@ class Pipeline:
             self.control.enable_voice()
         elif action == "voice_off":
             self.control.disable_voice()
-            # AudioPlayback.play() only blocks until there's room in the output
-            # buffer, not until the clip finishes - so by the time this fires,
-            # a sentence or two already queued ahead of it may be sitting in
-            # that buffer waiting to play. Drop what's still in our own queue
-            # (already covered by _playback_loop's own voice_enabled check,
-            # but no reason to let it sit there) and cut off whatever's
-            # already been handed to the sound card.
+            # Drop anything already synthesized and queued but not yet handed
+            # to the sound card (already covered by _playback_loop's own
+            # voice_enabled check too, but no reason to let it sit there).
+            # The clip playing *right now* is cut short by _playback_loop's
+            # own should_continue polling instead of aborting the output
+            # stream from this thread - a different thread calling
+            # stream.abort()/close() while _playback_loop's thread is
+            # mid-write() has been observed to segfault PortAudio's ALSA
+            # backend.
             self._drain(self._audio)
-            self.playback.stop()
         elif action == "translate_on":
             self.control.enable_translation()
         elif action == "translate_off":
@@ -577,10 +578,13 @@ class Pipeline:
             if not self.control.voice_enabled.is_set():
                 continue  # voice was switched off while this was queued
             try:
-                self.playback.play(audio, sample_rate=sample_rate, pause_before=pause_before)
+                self.playback.play(
+                    audio, sample_rate=sample_rate, pause_before=pause_before,
+                    should_continue=self.control.voice_enabled.is_set,
+                )
             except Exception as exc:
                 print(f"[audio] playback failed: {exc!r}")
-            if self.broadcaster:
+            if self.broadcaster and self.control.voice_enabled.is_set():
                 self.broadcaster.broadcast_audio(audio, sample_rate)
 
     def start(self) -> None:

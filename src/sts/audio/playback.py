@@ -81,12 +81,28 @@ class AudioPlayback:
             self._stream = None
             self._stream_rate = None
 
-    def play(self, audio: np.ndarray, sample_rate: int, blocking: bool = True, pause_before: float = 0.0) -> None:
+    def play(
+        self,
+        audio: np.ndarray,
+        sample_rate: int,
+        blocking: bool = True,
+        pause_before: float = 0.0,
+        should_continue=None,
+    ) -> None:
         """Queues `audio` on the output stream. The write blocks only until the
         stream's buffer has room, so back-to-back calls play continuously.
 
         `pause_before` is the minimum silence to leave after whatever played
-        before (0 for continuation chunks of the same text)."""
+        before (0 for continuation chunks of the same text).
+
+        `should_continue`, if given, is polled every ~50ms of audio and lets
+        the caller cut *this* clip short mid-playback (e.g. the operator
+        unchecking Voice) - without calling `stop()`, which aborts/closes the
+        stream from whatever thread calls it. Since `write()` below blocks
+        the *this* method's own thread, not the caller's, aborting the
+        stream from a different thread while this one is mid-write has been
+        observed to segfault PortAudio's ALSA backend; polling in small
+        chunks on this same thread gets the same prompt cutoff safely."""
         with self._lock:
             stream, target_rate = self._ensure_stream(sample_rate)
             if target_rate != sample_rate:
@@ -99,7 +115,17 @@ class AudioPlayback:
             if pad > 0:
                 samples = np.concatenate([np.zeros((int(pad * sample_rate), 1), dtype=np.float32), samples])
         vlog("audio", f"playing {len(audio) / sample_rate:.1f}s of speech" + (f" after a {pad:.1f}s pause" if pad > 0 else ""))
-        stream.write(samples)
+        if should_continue is None:
+            stream.write(samples)
+            return
+        chunk_frames = max(1, int(0.05 * sample_rate))
+        for start in range(0, len(samples), chunk_frames):
+            if not should_continue():
+                with self._lock:
+                    self._scheduled_end = 0.0  # what got cut short isn't "queued" anymore
+                vlog("audio", "playback cut short")
+                return
+            stream.write(samples[start : start + chunk_frames])
 
     def stop(self) -> None:
         """Cuts off whatever is currently playing (used when the operator resets)."""
