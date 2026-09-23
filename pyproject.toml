@@ -31,6 +31,13 @@ qwen3 = [
     "peft>=0.11",
     "safetensors>=0.4",
 ]
+# Unlike the TTS backends, this doesn't conflict with either one - nemo's own
+# transformers requirement is unpinned, so it resolves to whatever xtts/qwen3
+# already pinned in that virtualenv. Install alongside whichever TTS extra
+# you're already using, e.g. `pip install -e '.[xtts,parakeet]'`.
+parakeet = [
+    "nemo_toolkit[asr]",
+]
 
 [project.scripts]
 sts = "sts.cli:main"

@@ -16,6 +16,7 @@ they're cheap and because voice-clone training needs segmented audio
 independently of whether recognition/translation/voicing is on.
 """
 
+import gc
 import queue
 import struct
 import tempfile
@@ -24,8 +25,9 @@ import time
 import wave
 
 import numpy as np
+import torch
 
-from sts.asr.whisper_asr import WhisperASR
+from sts.asr import create_asr, parakeet_asr
 from sts.audio.capture import AudioCapture
 from sts.audio.playback import AudioPlayback
 from sts.audio.vad import SpeechSegmenter
@@ -57,6 +59,17 @@ DESIGN_REFERENCE_TEXT = (
 )
 
 
+class _NullASR:
+    """Last-resort stand-in when a live ASR backend switch fails and the
+    fallback reload of the previous engine fails too (see
+    Pipeline._switch_asr_backend) - keeps _asr_loop's thread alive instead of
+    crashing on a missing self.asr, at the cost of transcribing nothing until
+    the operator retries or restarts the service."""
+
+    def transcribe(self, audio) -> str:
+        return ""
+
+
 class Pipeline:
     def __init__(self, cfg: PipelineConfig, broadcaster: CaptionBroadcaster | None = None):
         self.cfg = cfg
@@ -65,8 +78,9 @@ class Pipeline:
         self.playback = AudioPlayback(cfg.audio)
         self._stage("Loading speech detector…")
         self.segmenter = SpeechSegmenter(cfg.audio, cfg.vad)
-        self._stage(f"Loading speech recognition ({cfg.asr.model_size})…")
-        self.asr = WhisperASR(cfg.asr)
+        asr_label = cfg.asr.model_size if cfg.asr.backend == "whisper" else cfg.asr.backend
+        self._stage(f"Loading speech recognition ({asr_label})…")
+        self.asr = create_asr(cfg.asr)
         self._stage("Loading translation model…")
         self.translator = Translator(cfg.translation)
         self._stage(f"Loading voice synthesis ({cfg.tts.backend})…")
@@ -83,6 +97,11 @@ class Pipeline:
         self._design_busy = threading.Lock()
         self._device_lock = threading.Lock()
         self._active_speaker_id: str | None = None
+        # Held around every self.asr.transcribe() call and around swapping
+        # self.asr out for a different backend, so _asr_loop can never see a
+        # None/half-built ASR object mid-swap (see _switch_asr_backend).
+        self._asr_lock = threading.Lock()
+        self._asr_busy = False  # a switch is already in flight; ignore a repeat click
 
         self._segments: queue.Queue = queue.Queue()
         self._transcripts: queue.Queue = queue.Queue()
@@ -166,6 +185,13 @@ class Pipeline:
             self._select_speaker(None)  # picking a built-in voice drops any cloned/trained one
         elif action in ("refresh_devices", "set_audio_devices", "mic_start", "mic_stop"):
             threading.Thread(target=self._handle_device_action, args=(action, data), daemon=True).start()
+            return
+        elif action == "set_asr_backend":
+            backend = str(data.get("backend") or "")
+            if backend not in ("whisper", "parakeet") or self._asr_busy:
+                return
+            self._asr_busy = True
+            threading.Thread(target=self._switch_asr_backend, args=(backend,), daemon=True).start()
             return
         elif action == "set_min_silence":
             try:
@@ -367,6 +393,63 @@ class Pipeline:
             return
         self.capture.push_browser_frame(samples.copy())  # copy: payload's buffer is reused by the socket
 
+    def _load_asr(self, backend: str) -> None:
+        """(Re)builds self.asr for `backend`, freeing whatever GPU memory the
+        current one holds first - dropping the reference and collecting
+        before building the replacement, rather than briefly holding both,
+        since two ASR engines resident at once doesn't fit an 8GB card
+        alongside translation/TTS. Must be called with _asr_lock held."""
+        if hasattr(self, "asr"):
+            del self.asr
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        self.cfg.asr.backend = backend
+        self.asr = create_asr(self.cfg.asr)
+
+    def _switch_asr_backend(self, backend: str) -> None:
+        """Swaps the ASR engine live (e.g. Whisper <-> Parakeet from the
+        Caption dropdown). Runs off the web server's event loop since a cold
+        load can take tens of seconds. _asr_loop is blocked on _asr_lock for
+        the whole swap, so it can never see self.asr as None or half-built -
+        a transcription simply waits for the swap to finish, same as it
+        already waits for a slow one from the current engine."""
+        previous = self.cfg.asr.backend
+        if backend == previous:
+            self._asr_busy = False
+            return
+        try:
+            with self._asr_lock:
+                self._stage(f"Switching speech recognition to {backend}…")
+                self._load_asr(backend)
+            vlog("asr", f"switched backend: {previous} -> {backend}")
+        except (Exception, SystemExit) as exc:
+            # create_asr() raises SystemExit (not Exception) for a missing
+            # optional backend, appropriate for a hard CLI-startup failure
+            # but not for a live webui toggle - caught here too so a missing
+            # dependency falls back cleanly instead of leaving self.asr gone.
+            print(f"[asr] couldn't switch to {backend!r}, reloading {previous!r}: {exc!r}")
+            try:
+                with self._asr_lock:
+                    self._load_asr(previous)
+            except (Exception, SystemExit) as exc2:
+                # The fallback failed too (e.g. the failed switch left GPU
+                # memory fragmented/exhausted) - leaving self.asr undefined
+                # would crash _asr_loop's next transcribe() call outright and
+                # kill that thread. A no-op stand-in keeps every thread alive
+                # so the operator can retry (or restart the service) once
+                # whatever's holding GPU memory clears, instead of losing
+                # captions silently until someone notices and restarts it.
+                print(f"[asr] fallback reload of {previous!r} also failed: {exc2!r}")
+                with self._asr_lock:
+                    self.cfg.asr.backend = previous
+                    self.asr = _NullASR()
+        finally:
+            self._asr_busy = False
+            self._stage("Listening", ready=True)
+            self._broadcast_engines()
+            self._broadcast_status()
+
     # -- "Create Voice" dialog (Qwen3 voice design) ---------------------------
 
     def _design_state(self, state: str, message: str = "") -> None:
@@ -472,16 +555,19 @@ class Pipeline:
             self.broadcaster.broadcast_library(speakers)
 
     def _broadcast_engines(self) -> None:
-        """Model/device info for the header dropdowns. Fixed for the life of
-        the process (set from CLI flags at startup), so this is only ever
-        sent once per connection rather than tracked as live status."""
+        """Model/device info for the header dropdowns. Translation and TTS
+        are fixed for the life of the process (set from CLI flags at
+        startup); ASR isn't - its backend can change live via the Caption
+        dropdown (see _switch_asr_backend) - so this is re-sent after every
+        switch, not just once."""
         if self.broadcaster:
+            asr_model = self.cfg.asr.model_size if self.cfg.asr.backend == "whisper" else parakeet_asr.MODEL_NAME
             tts_model = (
                 self.cfg.tts.qwen3_model_name if self.cfg.tts.backend == "qwen3" else self.cfg.tts.model_name
             )
             self.broadcaster.broadcast_engines(
                 {
-                    "asr": {"model": self.cfg.asr.model_size, "device": self.cfg.asr.device},
+                    "asr": {"model": asr_model, "device": self.cfg.asr.device, "backend": self.cfg.asr.backend},
                     "translation": {"model": self.cfg.translation.model_name, "device": self.cfg.translation.device},
                     "tts": {"model": tts_model, "device": self.cfg.tts.device},
                 }
@@ -508,7 +594,8 @@ class Pipeline:
         while not self._stop.is_set():
             segment = self._segments.get()
             t0 = time.monotonic()
-            text = self.asr.transcribe(segment)
+            with self._asr_lock:
+                text = self.asr.transcribe(segment)
             vlog("asr", f"transcribed {len(segment) / self.cfg.audio.sample_rate:.1f}s of audio in {time.monotonic() - t0:.2f}s")
             if text:
                 print(f"[ru] {text}")

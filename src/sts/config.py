@@ -37,6 +37,7 @@ class VADConfig:
 
 @dataclass
 class ASRConfig:
+    backend: str = "whisper"  # "whisper" (faster-whisper) or "parakeet" (NVIDIA Parakeet TDT, via NeMo)
     model_size: str = "large-v3"
     device: str = "cuda"
     compute_type: str = "float16"

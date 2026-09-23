@@ -50,6 +50,9 @@ def test_asr_drops_prompt_echo():
 
 
 def test_xtts_chunking():
+    import pytest
+
+    pytest.importorskip("TTS")  # this venv may only have the qwen3 backend installed
     from sts.tts.xtts import split_for_xtts
 
     assert split_for_xtts("Short one.") == ["Short one."]

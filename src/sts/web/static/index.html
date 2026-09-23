@@ -349,6 +349,11 @@
             <div>Device: <b id="asr-info-device">–</b></div>
             <div>Input: <b id="asr-info-source">–</b></div>
           </div>
+          <label for="asr-backend-select" title="Switching reloads the recognition model - captions pause for a few seconds to a minute while it loads">Engine</label>
+          <select id="asr-backend-select">
+            <option value="whisper">Whisper (faster-whisper)</option>
+            <option value="parakeet">Parakeet (NVIDIA, experimental)</option>
+          </select>
           <label id="pause-control" title="How long the speaker must pause before the current caption ends and a new one starts. Lower = shorter, quicker captions; higher = longer ones. Adjust to the speaker.">
             Pause
             <input id="pause-slider" type="range" min="200" max="1500" step="50" value="500" />
@@ -679,6 +684,8 @@
     if (!event.target.closest('.engine-dropdown') && !event.target.closest('.engine-caret')) closeDropdowns();
   });
 
+  const asrBackendSelect = document.getElementById('asr-backend-select');
+
   function applyEngines(msg) {
     document.getElementById('asr-info-model').textContent = msg.asr?.model || '–';
     document.getElementById('asr-info-device').textContent = msg.asr?.device || '–';
@@ -686,7 +693,23 @@
     document.getElementById('translate-info-device').textContent = msg.translation?.device || '–';
     document.getElementById('tts-info-model').textContent = msg.tts?.model || '–';
     document.getElementById('tts-info-device').textContent = msg.tts?.device || '–';
+    // Re-sent after every ASR switch (not just once at startup); this is
+    // what clears the "switching" disabled state once the new engine is up
+    // (or reverts the dropdown if the switch failed and fell back).
+    if (document.activeElement !== asrBackendSelect) {
+      asrBackendSelect.value = msg.asr?.backend || 'whisper';
+    }
+    asrBackendSelect.disabled = false;
   }
+
+  // Switching reloads the whole ASR engine (several seconds to about a
+  // minute for a cold Parakeet load), during which the #stage indicator
+  // shows "Switching speech recognition to ..." via the existing stage
+  // broadcast - no separate progress UI needed here.
+  asrBackendSelect.addEventListener('change', () => {
+    asrBackendSelect.disabled = true;
+    send('set_asr_backend', { backend: asrBackendSelect.value });
+  });
 
   trainBtn.addEventListener('click', () => {
     if (lastStatus.training) {
