@@ -1,6 +1,7 @@
 """Entry point: `sts` starts the live pipeline, `sts --list-devices` lists sound cards."""
 
 import argparse
+import importlib.util
 import sys
 import threading
 import time
@@ -9,6 +10,7 @@ from pathlib import Path
 from sts.audio.capture import list_devices
 from sts.engine_args import add_engine_arguments, build_engine_config
 from sts.log import vlog
+from sts.persistent_config import PersistentConfig
 from sts.pipeline import Pipeline
 from sts.web.server import CaptionBroadcaster, run_server
 
@@ -92,6 +94,13 @@ def build_parser() -> argparse.ArgumentParser:
         "(see VADConfig.partial_interval_ms's docstring for details). Try e.g. 1200 to see how it behaves "
         "with your speaker/backend.",
     )
+    parser.add_argument(
+        "--config-db",
+        default="sts.db",
+        help="SQLite file that remembers the operator's ASR engine, input/output device, and active voice "
+        "across restarts (default: sts.db in the working directory). An explicit --input-device/--output-device/ "
+        "--default-voice/--clone still wins over what's saved. Pass '' to disable persistence.",
+    )
     return parser
 
 
@@ -103,10 +112,31 @@ def main() -> None:
         return
 
     cfg, (asr_device, translation_device, tts_device) = build_engine_config(args)
-    cfg.audio.input_device = args.input_device
+
+    persistent_config = PersistentConfig(args.config_db) if args.config_db else None
+    if persistent_config is not None:
+        saved_backend = persistent_config.get("asr_backend")
+        if saved_backend and saved_backend != cfg.asr.backend:
+            if saved_backend == "parakeet" and importlib.util.find_spec("nemo") is None:
+                # A stale preference from an environment that had the
+                # parakeet extra installed - fall back quietly rather than
+                # crashing a previously-working setup over it.
+                print("[config] saved ASR engine 'parakeet' isn't installed here; starting on 'whisper' instead")
+            else:
+                cfg.asr.backend = saved_backend
+
+    def _restore_device(cli_value, key):
+        if cli_value is not None:
+            return cli_value
+        if persistent_config is None:
+            return None
+        saved = persistent_config.get(key)
+        return None if not saved else int(saved)
+
+    cfg.audio.input_device = _restore_device(args.input_device, "input_device")
     if args.default_voice or args.clone:
         cfg.tts.startup_voice = None  # an explicit voice choice on the command line wins over the bundled Default
-    cfg.audio.output_device = args.output_device
+    cfg.audio.output_device = _restore_device(args.output_device, "output_device")
     if args.pause_s is not None:
         cfg.audio.pause_between_s = args.pause_s
     if args.min_silence_ms is not None:
@@ -144,7 +174,7 @@ def main() -> None:
 
     vlog("init", f"loading models (whisper={cfg.asr.model_size} on {asr_device}, translation on {translation_device}, "
          f"tts={cfg.tts.backend} on {tts_device})")
-    pipeline = Pipeline(cfg, broadcaster=broadcaster)
+    pipeline = Pipeline(cfg, broadcaster=broadcaster, persistent_config=persistent_config)
     vlog("init", "models loaded")
     if args.clone:
         pipeline.clone_voice(args.clone, name=args.clone_name)
@@ -161,6 +191,8 @@ def main() -> None:
         pass
     finally:
         pipeline.stop()
+        if persistent_config is not None:
+            persistent_config.close()
 
 
 if __name__ == "__main__":

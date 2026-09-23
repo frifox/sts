@@ -44,3 +44,6 @@ benchmark_results/
 
 # Self-signed TLS cert/key for --https-port (per-machine, never shared)
 certs/
+
+# Per-machine persisted operator settings (--config-db)
+sts.db

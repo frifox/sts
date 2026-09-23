@@ -238,6 +238,7 @@ def _startup_voice_pipeline(tmp_path):
     p.control = RecognitionControl(16000)
     p._pending_voice = None
     p._active_speaker_id = None
+    p._persistent_config = None
     for name in ("_segments", "_transcripts", "_translations", "_audio"):
         setattr(p, name, queue.Queue())
     mine = p.voice_library.save("Mine", wav)

@@ -63,6 +63,7 @@ def _switch_pipeline(monkeypatch, asr_factory):
     p._active_speaker_id = None
     p._asr_lock = threading.Lock()
     p._asr_busy = False
+    p._persistent_config = None
     from sts.control import RecognitionControl
 
     p.control = RecognitionControl(16000)

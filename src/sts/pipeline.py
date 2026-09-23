@@ -36,6 +36,7 @@ from sts.bible.reference import find_references
 from sts.config import PipelineConfig
 from sts.control import RecognitionControl
 from sts.log import vlog
+from sts.persistent_config import PersistentConfig
 from sts.textclean import split_complete
 from sts.translate.translator import Translator
 from sts.tts import create_synthesizer
@@ -72,9 +73,19 @@ class _NullASR:
 
 
 class Pipeline:
-    def __init__(self, cfg: PipelineConfig, broadcaster: CaptionBroadcaster | None = None):
+    def __init__(
+        self,
+        cfg: PipelineConfig,
+        broadcaster: CaptionBroadcaster | None = None,
+        persistent_config: PersistentConfig | None = None,
+    ):
         self.cfg = cfg
         self.broadcaster = broadcaster
+        # Remembers the operator's ASR engine/device/voice choices across
+        # restarts - see the persist-on-change calls below and
+        # _restore_persisted_voice(). None (the default) just means nothing
+        # is persisted, e.g. in tests that build a Pipeline stub directly.
+        self._persistent_config = persistent_config
         self.capture = AudioCapture(cfg.audio)
         self.playback = AudioPlayback(cfg.audio)
         self._stage("Loading speech detector…")
@@ -119,6 +130,11 @@ class Pipeline:
         if cfg.tts.startup_voice:
             self._stage("Preparing the default voice…")
         self._use_startup_voice()
+        # An explicit --default-voice/--clone already cleared startup_voice
+        # (see cli.py) - that same signal means "don't override it with
+        # whatever was last saved" here too.
+        if self._persistent_config is not None and cfg.tts.startup_voice:
+            self._restore_persisted_voice()
 
     def _stage(self, text: str, ready: bool = False) -> None:
         vlog("init", text)
@@ -189,6 +205,8 @@ class Pipeline:
             self.cfg.tts.default_voice = voice
             self.tts.set_default_voice(voice)
             self._select_speaker(None)  # picking a built-in voice drops any cloned/trained one
+            if self._persistent_config is not None:
+                self._persistent_config.set(f"voice:{self.cfg.tts.backend}", f"default:{voice}")
         elif action in ("refresh_devices", "set_audio_devices", "mic_start", "mic_stop"):
             threading.Thread(target=self._handle_device_action, args=(action, data), daemon=True).start()
             return
@@ -210,7 +228,10 @@ class Pipeline:
         elif action == "delete_voice":
             self._delete_voice(str(data.get("speaker_id") or ""))
         elif action == "select_speaker":
-            self._select_speaker(data.get("speaker_id"))
+            speaker_id = data.get("speaker_id")
+            self._select_speaker(speaker_id)
+            if speaker_id and self._persistent_config is not None:
+                self._persistent_config.set(f"voice:{self.cfg.tts.backend}", f"saved:{speaker_id}")
         else:
             return
         self._broadcast_status()
@@ -237,6 +258,27 @@ class Pipeline:
         (or the plain built-in voice if that is disabled or missing)."""
         wanted = self.cfg.tts.startup_voice
         self._select_speaker(wanted if wanted and self.voice_library.get(wanted) else None)
+
+    def _restore_persisted_voice(self) -> None:
+        """Applies the operator's last-picked voice for this session's TTS
+        backend (saved by handle_control's default_voice/select_speaker
+        branches below), layered on top of _use_startup_voice() - called
+        right before this, at __init__ only - rather than replacing it, so
+        Reset still always goes back to the bundled Default voice as before;
+        only the very first state of a fresh process differs."""
+        saved = self._persistent_config.get(f"voice:{self.cfg.tts.backend}")
+        if not saved:
+            return
+        if saved.startswith("default:"):
+            name = self.cfg.tts.resolve_voice(saved[len("default:") :])
+            if name in self.cfg.tts.all_voices():
+                self.cfg.tts.default_voice = name
+                self.tts.set_default_voice(name)
+                self._select_speaker(None)
+        elif saved.startswith("saved:"):
+            speaker_id = saved[len("saved:") :]
+            if self.voice_library.get(speaker_id):
+                self._select_speaker(speaker_id)
 
     def _select_speaker(self, speaker_id: str | None) -> None:
         self._pending_voice = None
@@ -363,17 +405,18 @@ class Pipeline:
         # this device" - including when the browser mic was active and the
         # index itself hasn't changed, since capture isn't reading it yet.
         input_changed = new_input != audio.input_device or audio.source != "alsa"
+        output_changed = new_output != audio.output_device
         with self._device_lock:
             try:
                 from sts.audio.devices import check_input, check_output
 
                 if input_changed:
                     check_input(new_input, audio.sample_rate, audio.channels)
-                if new_output != audio.output_device:
+                if output_changed:
                     check_output(new_output, 24_000)
                 if input_changed:
                     self.capture.switch_to_alsa(new_input)
-                if new_output != audio.output_device:
+                if output_changed:
                     audio.output_device = new_output
                     self.playback.stop()  # the output stream reopens on the new device with the next clip
             except Exception as exc:
@@ -381,6 +424,17 @@ class Pipeline:
                 self._broadcast_devices(error=f"Couldn't use that device: {exc}")
                 return
             vlog("audio", f"devices applied: input={audio.input_device}, output={audio.output_device}")
+            if self._persistent_config is not None:
+                # Only a real ALSA device is a restorable choice - not the
+                # browser-mic mode, which is inherently session-only.
+                if input_changed:
+                    self._persistent_config.set(
+                        "input_device", "" if audio.input_device is None else str(audio.input_device)
+                    )
+                if output_changed:
+                    self._persistent_config.set(
+                        "output_device", "" if audio.output_device is None else str(audio.output_device)
+                    )
             self._broadcast_devices(applied=True)
         self._broadcast_status()  # audio.source may have just changed too
 
@@ -431,6 +485,8 @@ class Pipeline:
                 self._stage(f"Switching speech recognition to {backend}…")
                 self._load_asr(backend)
             vlog("asr", f"switched backend: {previous} -> {backend}")
+            if self._persistent_config is not None:
+                self._persistent_config.set("asr_backend", backend)
         except (Exception, SystemExit) as exc:
             # create_asr() raises SystemExit (not Exception) for a missing
             # optional backend, appropriate for a hard CLI-startup failure

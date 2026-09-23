@@ -119,9 +119,10 @@ slow translation or TTS call doesn't stall audio capture.
     restarting: capture moves to the new input, and the next spoken sentence
     plays on the new output. If a device can't be opened, you get an error
     and the previous one stays in use. The list refreshes each time the
-    dialog opens, so a device plugged in after start-up shows up. Choices
-    last until `sts` restarts (`--input-device` / `--output-device` set the
-    starting ones).
+    dialog opens, so a device plugged in after start-up shows up. Choices are
+    remembered across restarts (`--config-db`, default `sts.db`); an explicit
+    `--input-device` / `--output-device` on the command line always wins over
+    whatever was last saved.
   - **Pause slider** (top right, next to the connection indicator) — how long
     the speaker must pause before a caption ends and a new one starts
     (200-1500 ms, default 700; `--min-silence-ms` sets the starting value).
@@ -132,9 +133,11 @@ slow translation or TTS call doesn't stall audio capture.
     - **Default** — starts with the bundled **Default** voice, a calm,
       natural English preacher voice (designed with Qwen3's Create Voice) that
       ships inside the repo (`src/sts/bundled_voices/default/`). It is the
-      voice a session starts with and the one Reset returns to. Pass
-      `--default-voice ...` or `--clone ...` to start on something else, or
-      set `TTSConfig.startup_voice = None`. It can't be deleted, but saving
+      voice Reset always returns to. A session instead *starts* on whichever
+      voice was last picked from this dropdown (remembered via `--config-db`);
+      pass `--default-voice ...` or `--clone ...` to start on something else
+      regardless of what was last picked, or set `TTSConfig.startup_voice =
+      None`. It can't be deleted, but saving
       your own voice named "Default" replaces it (deleting that copy brings the
       shipped one back). After it come the built-in (non-trained) voices. XTTS offers 13
       (defaults to Adde Michal; `--default-voice "Craig Gutsy"` or
@@ -567,6 +570,10 @@ sts --web-port 8765                # live captions are served at :8765 by defaul
                                     # runs without the page, printing text only
 sts --voice-library-dir /data/sts-voices
                                     # a custom voice library location
+sts --config-db /data/sts.db       # where the operator's ASR engine, input/output
+                                    # device, and active voice are remembered across
+                                    # restarts (default: sts.db in the working
+                                    # directory; pass '' to disable persistence)
 
 # import a LoRA adapter trained via training/qwen3_lora/ (see its README):
 sts-import-voice "Pastor Ivan" pastor_ivan ./checkpoint-epoch-9 \
