@@ -36,6 +36,7 @@ from sts.bible.reference import find_references
 from sts.config import PipelineConfig
 from sts.control import RecognitionControl
 from sts.log import vlog
+from sts.textclean import split_complete
 from sts.translate.translator import Translator
 from sts.tts import create_synthesizer
 from sts.tts.voice_library import BUNDLED_VOICES_DIR, VoiceLibrary
@@ -105,6 +106,11 @@ class Pipeline:
 
         self._segments: queue.Queue = queue.Queue()
         self._transcripts: queue.Queue = queue.Queue()
+        # Text already committed (pushed to translation) for the segment
+        # currently being spoken, via periodic partial re-transcription - see
+        # _segment_loop/_asr_loop. Reset to "" whenever a segment closes.
+        self._committed_text = ""
+        self._frames_since_partial = 0
         self._translations: queue.Queue = queue.Queue()
         self._audio: queue.Queue = queue.Queue()  # synthesized clips waiting to play
         self._threads: list[threading.Thread] = []
@@ -216,6 +222,8 @@ class Pipeline:
             self.control.stop_training(discard=True)
         self._use_startup_voice()
         self._pending_voice = None
+        self._committed_text = ""
+        self._frames_since_partial = 0
         self._drain(self._segments)
         self._drain(self._transcripts)
         self._drain(self._translations)
@@ -576,11 +584,19 @@ class Pipeline:
     # -- pipeline stages -----------------------------------------------
 
     def _segment_loop(self) -> None:
+        self._frames_since_partial = 0
         while not self._stop.is_set():
-            frame = self.capture.frames.get()
-            segment = self.segmenter.process(frame)
-            if segment is None:
-                continue
+            self._process_captured_frame(self.capture.frames.get())
+
+    def _process_captured_frame(self, frame: np.ndarray) -> None:
+        """One frame's worth of VAD/segmentation bookkeeping: closes and
+        queues a finished segment, or - if the segment is still open -
+        periodically queues what's been spoken so far. Split out from
+        _segment_loop so it's callable (and testable) frame by frame without
+        the blocking queue/infinite-loop scaffolding around it."""
+        segment = self.segmenter.process(frame)
+        if segment is not None:
+            self._frames_since_partial = 0
             if self.control.training.is_set():
                 reached_target = self.control.accumulate_training_segment(segment)
                 self._broadcast_status()
@@ -588,21 +604,95 @@ class Pipeline:
                     self._finish_training()
                     self._broadcast_status()
             if self.control.active.is_set():
-                self._segments.put(segment)
+                self._segments.put(("final", segment))
+            return
+
+        # Segment hasn't closed yet - periodically hand the ASR stage what's
+        # been spoken so far, so a segment with several sentences (VAD only
+        # cuts on a long enough pause) doesn't make the first of them wait
+        # for the last. Only when caught up (queue empty): a slow backend
+        # then just falls back to today's behavior instead of building a backlog.
+        self._frames_since_partial += 1
+        interval = self.cfg.vad.partial_interval_ms
+        if not (self.control.active.is_set() and interval > 0):
+            return
+        if self._frames_since_partial * self.cfg.audio.block_ms < interval:
+            return
+        if self._segments.qsize() > 0:
+            return
+        partial_audio = self.segmenter.peek()
+        if partial_audio is None:
+            return
+        self._frames_since_partial = 0
+        self._segments.put(("partial", partial_audio))
 
     def _asr_loop(self) -> None:
         while not self._stop.is_set():
-            segment = self._segments.get()
+            kind, segment = self._segments.get()
             t0 = time.monotonic()
             with self._asr_lock:
                 text = self.asr.transcribe(segment)
-            vlog("asr", f"transcribed {len(segment) / self.cfg.audio.sample_rate:.1f}s of audio in {time.monotonic() - t0:.2f}s")
-            if text:
-                print(f"[ru] {text}")
-                if self.broadcaster:
-                    self.broadcaster.broadcast_original(text)
-                    self._broadcast_bible_references(text)
-                self._transcripts.put(text)
+            vlog("asr", f"transcribed {len(segment) / self.cfg.audio.sample_rate:.1f}s of audio "
+                        f"({kind}) in {time.monotonic() - t0:.2f}s")
+            self._commit_new_asr_text(text, final=kind == "final")
+
+    def _commit_new_asr_text(self, full_text: str, final: bool) -> None:
+        """Pushes whatever part of `full_text` - the growing (partial) or
+        whole (final) segment's transcript - hasn't already been committed
+        for this segment. A partial re-run only releases complete sentences,
+        and only when there's real text *after* the sentence-ending
+        punctuation too: given only a short audio prefix, the model will
+        often end its output with a plausible-looking period simply because
+        it ran out of audio, not because that's a real sentence boundary -
+        seeing it keep going past that point is what distinguishes a genuine
+        boundary from that. A trailing fragment (real or not yet confirmed)
+        is left for the next re-run to catch.
+
+        Each re-run re-transcribes the growing audio from scratch (no
+        cache/streaming decoder), so in rare cases more context changes how an
+        earlier part was heard - this isn't purely a short-prefix problem
+        (see below), so it can't be assumed away. Mid-segment (not `final`)
+        this only trusts what's still a clean extension of what's already
+        committed and waits for the next re-run rather than guessing.
+
+        The final pass is different: measured against real audio, the model
+        occasionally reworded even the very start of a long segment once the
+        *entire* segment's audio was available as context - not just near
+        chunk edges - so requiring the final transcript to still start with
+        the committed prefix would, in that case, silently drop every
+        sentence after the divergence instead of just duplicating a couple of
+        already-shown words. Content loss is the worse failure of the two, so
+        the final pass always pushes its complete, authoritative text (never
+        held back), accepting that a diverged one occasionally repeats a
+        little of what a partial already showed."""
+        if final:
+            to_commit = full_text.strip()
+            if full_text.startswith(self._committed_text):
+                to_commit = full_text[len(self._committed_text):].strip()
+            elif self._committed_text:
+                vlog("asr", "final transcript reworded already-committed text; "
+                            "sending it in full rather than risk dropping what follows")
+            self._committed_text = ""  # this segment is done; ready for the next one
+        elif full_text.startswith(self._committed_text):
+            new_text = full_text[len(self._committed_text):].strip()
+            to_commit, tail = split_complete(new_text)
+            if to_commit and not tail:
+                # Nothing follows the period *yet* - can't tell a real sentence
+                # boundary from the model just running out of audio to decode.
+                return
+            if to_commit:
+                self._committed_text = f"{self._committed_text} {to_commit}".strip()
+        else:
+            vlog("asr", "partial re-run revised already-committed text; keeping only what was already sent")
+            return
+
+        if not to_commit:
+            return
+        print(f"[ru] {to_commit}")
+        if self.broadcaster:
+            self.broadcaster.broadcast_original(to_commit)
+            self._broadcast_bible_references(to_commit)
+        self._transcripts.put(to_commit)
 
     def _broadcast_bible_references(self, text: str) -> None:
         for ref in find_references(text):

@@ -121,3 +121,17 @@ def test_translate_sentences_yields_incrementally_and_translate_still_joins():
     assert translator.translate(text) == first + " " + " ".join(remaining)
     assert translator.translate("  ") == ""
     assert list(translator.translate_sentences("  ")) == []
+
+
+def test_split_complete():
+    from sts.textclean import split_complete
+
+    assert split_complete("Привет. Как дела") == ("Привет.", "Как дела")
+    assert split_complete("Привет. Как дела сегодня") == ("Привет.", "Как дела сегодня")
+    assert split_complete("Одно предложение без точки в конце") == ("", "Одно предложение без точки в конце")
+    assert split_complete("") == ("", "")
+    assert split_complete("   ") == ("", "")
+    assert split_complete("Только одно.") == ("Только одно.", "")
+    assert split_complete("А? Б! В...") == ("А? Б! В...", "")
+    # only the LAST terminator matters - everything up to it is "complete"
+    assert split_complete("Первое. Второе. третье без точки") == ("Первое. Второе.", "третье без точки")

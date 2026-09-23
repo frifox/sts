@@ -100,3 +100,21 @@ def split_for_tts(text: str, limit: int) -> list[str]:
         if current:
             pieces.append(current)
     return pieces
+
+
+# Matches the *last* sentence-ending punctuation in a string, however much
+# text follows it (used to split "confirmed" text from a still-growing tail).
+_LAST_SENTENCE_END_RE = re.compile(r"[.!?…](?!.*[.!?…])")
+
+
+def split_complete(text: str) -> tuple[str, str]:
+    """(complete, tail): `text` through its last sentence-ending punctuation,
+    and whatever trails after it. Used when re-transcribing a still-growing
+    utterance periodically (rather than waiting for it to finish): the
+    `complete` part won't grow any more sentences before it, so it's safe to
+    commit; `tail` is the not-yet-finished remainder, left to grow on the next
+    pass. `complete` is "" if there's no sentence-ending punctuation yet."""
+    match = _LAST_SENTENCE_END_RE.search(text)
+    if not match:
+        return "", text.strip()
+    return text[: match.end()].strip(), text[match.end() :].strip()

@@ -33,6 +33,27 @@ class VADConfig:
     min_speech_ms: int = 250
     # Hard cap so a run-on speaker doesn't stall translation/TTS.
     max_segment_ms: int = 20_000
+    # How often (ms) to re-transcribe a still-open segment before it closes,
+    # so a multi-sentence segment can have its earlier sentences translated
+    # while the speaker is still talking, instead of everything waiting for
+    # the segment's closing pause. 0 (default) disables it: only the final,
+    # closed segment is transcribed, as before. Only fires when the ASR stage
+    # has caught up from the previous one (see Pipeline._segment_loop), so a
+    # slow backend naturally falls back to this behavior rather than building
+    # a backlog.
+    #
+    # Off by default: tested against real audio with Parakeet, re-transcribing
+    # a growing prefix from scratch (no cache/streaming decoder) sometimes
+    # produced a *different* wording for the same early audio once more of the
+    # segment was available as context - not just near chunk edges - so a
+    # partial commit could end up repeated by the final pass (see
+    # Pipeline._commit_new_asr_text, which always favors that over silently
+    # dropping content). On the one real segment this was tested against, only
+    # the first sentence or two ever got released early before this kicked in,
+    # with that bit of text then appearing twice. Try enabling it against your
+    # own speaker/backend - it may behave better there - but this is why it
+    # isn't on by default.
+    partial_interval_ms: int = 0
 
 
 @dataclass

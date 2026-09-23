@@ -28,6 +28,15 @@ class SpeechSegmenter:
         self._silence_ms = 0.0
         self._speech_ms = 0.0
 
+    def peek(self) -> np.ndarray | None:
+        """A non-destructive snapshot of the audio buffered so far for the
+        in-progress segment (None if no speech is currently buffered). Lets a
+        caller periodically re-transcribe a growing segment before it closes,
+        without disturbing the VAD's own silence/max-length bookkeeping."""
+        if not self._buffer:
+            return None
+        return np.concatenate(self._buffer)
+
     def _is_speech(self, frame: np.ndarray) -> bool:
         tensor = torch.from_numpy(frame)
         with torch.no_grad():

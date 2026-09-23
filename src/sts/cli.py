@@ -81,6 +81,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Longest a single caption segment may run (seconds) before it is cut regardless of pauses (default 20)",
     )
+    parser.add_argument(
+        "--partial-interval-ms",
+        type=int,
+        default=None,
+        help="Re-transcribe a still-open segment this often (ms) so a multi-sentence segment can have its "
+        "earlier sentences translated while the speaker keeps talking, instead of everything waiting for the "
+        "closing pause. Off by default (0): testing found this can occasionally repeat a sentence, since "
+        "re-transcribing a growing prefix from scratch can reword its start once more context is available "
+        "(see VADConfig.partial_interval_ms's docstring for details). Try e.g. 1200 to see how it behaves "
+        "with your speaker/backend.",
+    )
     return parser
 
 
@@ -102,6 +113,8 @@ def main() -> None:
         cfg.vad.min_silence_ms = args.min_silence_ms
     if args.max_segment_s is not None:
         cfg.vad.max_segment_ms = int(args.max_segment_s * 1000)
+    if args.partial_interval_ms is not None:
+        cfg.vad.partial_interval_ms = args.partial_interval_ms
 
     broadcaster = None
     if args.web:

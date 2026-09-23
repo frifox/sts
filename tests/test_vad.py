@@ -42,3 +42,32 @@ def test_pause_threshold_change_applies_to_the_next_pause():
     seg = make_segmenter(vad)
     vad.min_silence_ms = 1400
     assert feed(seg, "S" * 20 + "." * 30) is None          # 30 frames (~960 ms) is no longer enough
+
+
+def test_peek_snapshots_the_in_progress_buffer_without_disturbing_it():
+    seg = make_segmenter(VADConfig(min_silence_ms=700, min_speech_ms=200))
+    assert seg.peek() is None  # nothing buffered yet
+
+    frame = (np.arange(512, dtype=np.float32) + 1)  # distinct nonzero content, easy to check concatenation
+    n = 10  # well over min_speech_ms (200ms / 32ms per frame = ~7), so the segment won't be dropped as noise
+    seg._script = [True] * n
+    for _ in range(n):
+        assert seg.process(frame) is None  # segment hasn't closed
+
+    snapshot = seg.peek()
+    assert snapshot is not None and snapshot.shape == (512 * n,)
+    assert np.array_equal(snapshot, np.concatenate([frame] * n))
+
+    # peek() must not consume/clear anything - state keeps accumulating, and a
+    # real close later still produces the *whole* segment, snapshot included.
+    assert seg.peek() is not None
+    assert seg._speech_ms == n * seg.audio_cfg.block_ms
+
+    seg._script = [False] * 30  # enough silence to close the segment
+    closed = None
+    for _ in range(30):
+        closed = seg.process(frame)
+        if closed is not None:
+            break
+    assert closed is not None and len(closed) > len(snapshot)  # includes the earlier speech plus trailing silence
+    assert seg.peek() is None  # buffer cleared once the segment closed
