@@ -669,8 +669,8 @@ timeline where the Russian sentence began.
 
 ## Benchmarking hardware
 
-`benchmark.py` times each pipeline stage - ASR (faster-whisper), translation
-(NLLB), and TTS (both backends, whichever are installed) - using the exact
+`benchmark.py` times each pipeline stage - ASR (faster-whisper and Parakeet),
+translation (NLLB), and TTS (both backends), whichever backends are installed - using the exact
 same model configs and device-selection logic `sts` itself runs, so the
 numbers reflect real pipeline performance, not a synthetic benchmark of the
 frameworks in isolation. Point of it: run it on different machines/OSes (an
@@ -682,6 +682,8 @@ options in the church-service deployment this was built for.
 python benchmark.py                       # auto-detect device, benchmark everything installed
 python benchmark.py --device cpu          # force a device
 python benchmark.py --asr-device cpu      # override just ASR (e.g. to match a VRAM-constrained deployment)
+python benchmark.py --asr-device mps --asr-backend parakeet   # Parakeet on the Apple GPU (whisper has no MPS support)
+python benchmark.py --asr-backend parakeet  # only benchmark one ASR backend instead of both
 python benchmark.py --repeats 5           # timed repetitions per stage (default 3, plus 1 untimed warmup call)
 python benchmark.py --tts-backend qwen3   # only benchmark one TTS backend instead of both
 ```

@@ -2,6 +2,7 @@ import pytest
 
 from sts.benchmark import (
     StageResult,
+    benchmark_asr,
     coqui_model_cache_dir,
     coqui_model_is_cached,
     first_line,
@@ -104,3 +105,56 @@ def test_coqui_model_is_cached_true_once_populated(monkeypatch, tmp_path):
     d.mkdir(parents=True)
     (d / "model.pth").write_bytes(b"fake weights")
     assert coqui_model_is_cached("tts_models/multilingual/multi-dataset/xtts_v2")
+
+
+class _FakeAsr:
+    def __init__(self):
+        self.calls = 0
+
+    def transcribe(self, audio):
+        self.calls += 1
+        return "text"
+
+
+def test_benchmark_asr_times_the_backend_it_was_asked_for(monkeypatch):
+    built = []
+    fake = _FakeAsr()
+    monkeypatch.setattr("sts.asr.create_asr", lambda cfg: built.append(cfg.backend) or fake)
+
+    result = benchmark_asr("parakeet", "mps", "large-v3", repeats=2)
+
+    assert built == ["parakeet"]
+    assert result.ok and result.stage == "asr:parakeet" and result.device == "mps"
+    assert fake.calls == 3  # one untimed warmup + 2 timed runs
+    assert len(result.runs_s) == 2
+    assert "parakeet" in result.detail and "RTF" in result.detail
+
+
+def test_benchmark_asr_reports_a_missing_backend_as_not_installed_rather_than_crashing(monkeypatch):
+    def missing(cfg):
+        raise SystemExit("The 'parakeet' ASR backend isn't installed in this environment")
+
+    monkeypatch.setattr("sts.asr.create_asr", missing)
+
+    result = benchmark_asr("parakeet", "cpu", "large-v3", repeats=1)
+
+    assert not result.ok and is_not_installed(result)  # SystemExit isn't an Exception - must not kill the run
+
+
+def test_benchmark_asr_reports_other_load_failures(monkeypatch):
+    def boom(cfg):
+        raise RuntimeError("out of memory")
+
+    monkeypatch.setattr("sts.asr.create_asr", boom)
+
+    result = benchmark_asr("whisper", "cpu", "large-v3", repeats=1)
+
+    assert not result.ok and not is_not_installed(result) and "out of memory" in result.detail
+
+
+def test_whisper_on_mps_is_reported_unsupported_without_trying_to_load_it(monkeypatch):
+    monkeypatch.setattr("sts.asr.create_asr", lambda cfg: pytest.fail("shouldn't even try"))
+
+    result = benchmark_asr("whisper", "mps", "large-v3", repeats=1)
+
+    assert not result.ok and result.stage == "asr:whisper" and "no MPS support" in result.detail

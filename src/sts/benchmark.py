@@ -1,5 +1,6 @@
-"""Benchmarks each pipeline stage - ASR (faster-whisper), translation (NLLB),
-and TTS (both the xtts and qwen3 backends, whichever are installed) - using
+"""Benchmarks each pipeline stage - ASR (faster-whisper and NVIDIA Parakeet),
+translation (NLLB), and TTS (both the xtts and qwen3 backends), whichever
+backends are installed - using
 the exact same sts model configs and device-selection logic (sts.devices)
 that `sts` itself runs, so a number from this script reflects what the live
 pipeline would actually do, not a synthetic benchmark of the frameworks in
@@ -14,8 +15,10 @@ Usage:
   sts-benchmark                       # auto-detect device (cuda > mps > cpu), benchmark everything installed
   sts-benchmark --device cpu          # force a device
   sts-benchmark --asr-device cpu      # override just ASR (e.g. to match a VRAM-constrained deployment)
+  sts-benchmark --asr-device mps --asr-backend parakeet   # Parakeet on the Apple GPU (whisper can't use it)
   sts-benchmark --repeats 5           # timed repetitions per stage (default 3, plus 1 untimed warmup call)
   sts-benchmark --skip-tts            # ASR + translation only
+  sts-benchmark --asr-backend parakeet  # only benchmark one ASR backend instead of both
   sts-benchmark --tts-backend qwen3   # only benchmark one TTS backend instead of both
   sts-benchmark --out results.json
 """
@@ -152,21 +155,36 @@ def system_info() -> dict:
     return info
 
 
-def benchmark_asr(device: str, model_size: str, repeats: int) -> StageResult:
-    from sts.asr.whisper_asr import WhisperASR
+def benchmark_asr(backend: str, device: str, model_size: str, repeats: int) -> StageResult:
+    """Times one ASR backend ("whisper" or "parakeet"), built through
+    create_asr() exactly as `sts` builds it. `model_size` only applies to
+    whisper - Parakeet is a single fixed model."""
+    from sts.asr import create_asr
 
-    cfg = ASRConfig(model_size=model_size, device=device, compute_type="float16" if device == "cuda" else "int8")
+    stage = f"asr:{backend}"
+    if backend == "whisper" and device == "mps":
+        return StageResult(stage, device, False,
+                           detail="not supported: faster-whisper has no MPS support (only cpu/cuda)")
+
+    cfg = ASRConfig(
+        backend=backend, model_size=model_size, device=device,
+        compute_type="float16" if device == "cuda" else "int8",
+    )
     t0 = time.perf_counter()
     try:
-        asr = WhisperASR(cfg)
+        asr = create_asr(cfg)
+    except SystemExit as exc:
+        # create_asr raises SystemExit (not ImportError) with the install hint
+        # when a backend's extra isn't installed - see benchmark_tts.
+        return StageResult(stage, device, False, detail=f"not installed: {exc}")
     except Exception as exc:
-        return StageResult("asr", device, False, detail=repr(exc))
+        return StageResult(stage, device, False, detail=repr(exc))
     model_load_s = time.perf_counter() - t0
 
     audio_s = wav_duration_s(REFERENCE_WAV)
 
     t0 = time.perf_counter()
-    asr.transcribe(str(REFERENCE_WAV))  # warmup: excludes first-call CUDA/CTranslate2 init from the timed runs
+    asr.transcribe(str(REFERENCE_WAV))  # warmup: excludes first-call CUDA/MPS/CTranslate2 init from the timed runs
     warmup_s = time.perf_counter() - t0
 
     runs_s = []
@@ -175,10 +193,11 @@ def benchmark_asr(device: str, model_size: str, repeats: int) -> StageResult:
         asr.transcribe(str(REFERENCE_WAV))
         runs_s.append(time.perf_counter() - t0)
 
+    label = f"whisper {model_size}" if backend == "whisper" else "parakeet tdt-0.6b-v3"
     mean_rtf = rtf(statistics.mean(runs_s), audio_s)
     return StageResult(
-        "asr", device, True,
-        detail=f"whisper {model_size}, {audio_s:.1f}s clip, RTF {format_rtf(mean_rtf)}",
+        stage, device, True,
+        detail=f"{label}, {audio_s:.1f}s clip, RTF {format_rtf(mean_rtf)}",
         model_load_s=model_load_s, warmup_s=warmup_s, runs_s=runs_s,
     )
 
@@ -304,8 +323,8 @@ def first_line(text: str) -> str:
 
 
 def is_not_installed(r: StageResult) -> bool:
-    """True for a skipped stage whose only reason is a missing TTS backend
-    (see benchmark_tts's SystemExit/ModuleNotFoundError handling) - as
+    """True for a skipped stage whose only reason is a missing ASR/TTS backend
+    (see benchmark_asr's and benchmark_tts's SystemExit/ModuleNotFoundError handling) - as
     opposed to a genuine error worth elaborating on in the Details section."""
     return not r.ok and r.detail.startswith("not installed")
 
@@ -375,6 +394,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Compute device for translation/TTS, and ASR unless --asr-device overrides it. "
                         "Default: auto-detect (cuda, then mps, then cpu)")
     parser.add_argument("--asr-device", default=None, help="Override just the ASR device")
+    parser.add_argument("--asr-backend", choices=["whisper", "parakeet"], default=None,
+                        help="Only benchmark this ASR backend (default: try both, skipping whichever isn't installed)")
     parser.add_argument("--whisper-model", default="large-v3", help="faster-whisper model size (default: large-v3, matches sts's default)")
     parser.add_argument("--repeats", type=int, default=3, help="Timed repetitions per stage, after 1 untimed warmup call (default: 3)")
     parser.add_argument("--skip-asr", action="store_true")
@@ -421,8 +442,9 @@ def main() -> None:
     results: list[StageResult] = []
 
     if not args.skip_asr:
-        print(f"Benchmarking ASR (whisper {args.whisper_model} on {asr_device})...", flush=True)
-        results.append(benchmark_asr(asr_device, args.whisper_model, args.repeats))
+        for backend in [args.asr_backend] if args.asr_backend else ["whisper", "parakeet"]:
+            print(f"Benchmarking ASR ({backend} on {asr_device})...", flush=True)
+            results.append(benchmark_asr(backend, asr_device, args.whisper_model, args.repeats))
 
     if not args.skip_translate:
         print(f"Benchmarking translation (NLLB on {translation_device})...", flush=True)
