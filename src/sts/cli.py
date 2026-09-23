@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from sts.audio.capture import list_devices
+from sts.audio.devices import check_input, check_output
 from sts.engine_args import add_engine_arguments, build_engine_config
 from sts.log import vlog
 from sts.persistent_config import PersistentConfig
@@ -104,6 +105,31 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def saved_device(persistent_config, key: str, check) -> int | None:
+    """The audio device index saved under `key`, or None (the system default)
+    if nothing is saved - or if what's saved can no longer be used: devices
+    come and go (a USB interface unplugged, a Bluetooth headset off) and
+    their indices shift, so a saved index can point at nothing at all, or at
+    something that can't capture/play what the pipeline needs. Left
+    unchecked that only surfaced as a PortAudioError from pipeline.start(),
+    after every model had already loaded. The saved value is kept, not
+    cleared, so the device is picked up again once it's back. Only ever used
+    for a *saved* value - an explicit --input-device/--output-device is the
+    operator asking for that exact device, so those still fail loudly."""
+    if persistent_config is None:
+        return None
+    saved = persistent_config.get(key)
+    if not saved:
+        return None
+    try:
+        device = int(saved)
+        check(device)
+    except Exception as exc:
+        print(f"[config] saved {key.replace('_', ' ')} {saved!r} can't be used ({exc}); using the system default")
+        return None
+    return device
+
+
 def main() -> None:
     args = build_parser().parse_args()
 
@@ -126,18 +152,21 @@ def main() -> None:
         print("[config] ASR engine 'parakeet' isn't installed here; starting on 'whisper' instead")
         cfg.asr.backend = "whisper"
 
-    def _restore_device(cli_value, key):
-        if cli_value is not None:
-            return cli_value
-        if persistent_config is None:
-            return None
-        saved = persistent_config.get(key)
-        return None if not saved else int(saved)
-
-    cfg.audio.input_device = _restore_device(args.input_device, "input_device")
+    cfg.audio.input_device = (
+        args.input_device
+        if args.input_device is not None
+        else saved_device(
+            persistent_config, "input_device",
+            lambda device: check_input(device, cfg.audio.sample_rate, cfg.audio.channels),
+        )
+    )
     if args.default_voice or args.clone:
         cfg.tts.startup_voice = None  # an explicit voice choice on the command line wins over the bundled Default
-    cfg.audio.output_device = _restore_device(args.output_device, "output_device")
+    cfg.audio.output_device = (
+        args.output_device
+        if args.output_device is not None
+        else saved_device(persistent_config, "output_device", lambda device: check_output(device, 24_000))
+    )
     if args.pause_s is not None:
         cfg.audio.pause_between_s = args.pause_s
     if args.min_silence_ms is not None:
