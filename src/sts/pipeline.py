@@ -23,6 +23,7 @@ import tempfile
 import threading
 import time
 import wave
+from collections import deque
 
 import numpy as np
 import torch
@@ -45,6 +46,13 @@ from sts.web.server import CaptionBroadcaster
 
 # Bounds for the live pause-threshold slider (milliseconds of silence that end a snippet).
 MIN_SILENCE_RANGE_MS = (200, 1500)
+
+# How far back the header's RTF readings look (seconds) - a single short
+# phrase's processing time can spike a one-shot RTF wildly (e.g. a 0.3s
+# utterance that took 0.4s to transcribe reads as 1.3x even though the stage
+# is nowhere near actually falling behind), so what's shown is smoothed over
+# a rolling window instead of the latest reading alone.
+RTF_WINDOW_S = 30.0
 
 # One binary mic frame from a browser: a 4-byte LE sample-rate header (mirrors
 # the outgoing TTS format in CaptionBroadcaster.broadcast_audio) followed by
@@ -127,6 +135,10 @@ class Pipeline:
         # _translate_segment), since translated text has no duration of its
         # own to measure against.
         self._last_asr_audio_s = 0.0
+        # Rolling per-stage (processing_s, audio_s) readings for the header's
+        # RTF display, each stage's own deque touched only by that stage's
+        # own thread - see _broadcast_rtf.
+        self._rtf_window: dict[str, deque] = {}
         self._translations: queue.Queue = queue.Queue()
         self._audio: queue.Queue = queue.Queue()  # synthesized clips waiting to play
         self._threads: list[threading.Thread] = []
@@ -622,9 +634,26 @@ class Pipeline:
         means that stage is falling behind live speech. `audio_s` <= 0 means
         there's nothing yet to measure against (e.g. translate before the
         first segment is transcribed), so it's skipped rather than dividing
-        by zero."""
-        if self.broadcaster and audio_s > 0:
-            self.broadcaster.broadcast_rtf(stage, processing_s / audio_s)
+        by zero.
+
+        What's broadcast is smoothed over the last RTF_WINDOW_S: total
+        processing time over total audio time across every reading still in
+        the window, not just the one just taken - a single short phrase's
+        processing time can otherwise spike the displayed value wildly even
+        though the stage is nowhere near actually falling behind."""
+        if audio_s <= 0:
+            return
+        now = time.monotonic()
+        window = self._rtf_window.setdefault(stage, deque())
+        window.append((now, processing_s, audio_s))
+        cutoff = now - RTF_WINDOW_S
+        while window and window[0][0] < cutoff:
+            window.popleft()
+        if not self.broadcaster:
+            return
+        windowed_processing = sum(p for _, p, _ in window)
+        windowed_audio = sum(a for _, _, a in window)
+        self.broadcaster.broadcast_rtf(stage, windowed_processing / windowed_audio)
 
     def _broadcast_library(self) -> None:
         if self.broadcaster:
