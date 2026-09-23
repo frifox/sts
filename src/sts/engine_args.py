@@ -130,6 +130,19 @@ def build_engine_config(args: argparse.Namespace, prefer_backend: str = "xtts") 
     """Applies the shared options to a fresh PipelineConfig. Returns it together
     with the resolved (asr, translation, tts) devices."""
     set_verbose(args.verbose)
+
+    # transformers' generation code emits accurate but purely informational
+    # logger.warning_once() calls (a v4.50 deprecation heads-up, an
+    # attention-mask reminder) on every fresh model load and every so often
+    # thereafter (e.g. XTTS's GPT2-based model on each Reset); they add
+    # nothing to the live journal, and this is transformers' own documented
+    # verbosity control rather than a stream-redirection hack.
+    try:
+        import transformers
+
+        transformers.utils.logging.set_verbosity_error()
+    except ImportError:
+        pass
     devices = resolve_devices(args.device or detect_device(), args.asr_device)
     asr_device, translation_device, tts_device = devices
 
