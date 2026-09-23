@@ -163,3 +163,65 @@ def test_switch_asr_backend_survives_the_fallback_itself_failing(monkeypatch):
     assert p.asr.transcribe(None) == ""  # the _NullASR stand-in, not gone entirely
     assert p.cfg.asr.backend == "whisper"  # reports the engine it *meant* to be on
     assert not p._asr_busy
+
+
+class _AsrPresenceLock:
+    """A real lock that records every release that happens while p.asr is
+    missing - i.e. every moment _asr_loop could grab the lock and crash on
+    a deleted self.asr."""
+
+    def __init__(self, pipeline):
+        self._lock = threading.Lock()
+        self._pipeline = pipeline
+        self.released_without_asr = 0
+
+    def __enter__(self):
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        if not hasattr(self._pipeline, "asr"):
+            self.released_without_asr += 1
+        self._lock.release()
+        return False
+
+
+def test_failed_switch_never_releases_the_lock_while_self_asr_is_missing(monkeypatch):
+    """Real crash from live use: switching to parakeet in an environment
+    without nemo. _load_asr deletes self.asr *before* create_asr raises, and
+    the fallback reload used to happen in a *separate* `with _asr_lock` block
+    - so the lock was free in between, _asr_loop (blocked waiting on it)
+    grabbed it, found self.asr gone, and its thread died with an
+    AttributeError, killing captions until restart. The lock has to be held
+    across the attempt *and* the fallback."""
+
+    def create_asr_missing_parakeet(cfg):
+        if cfg.backend == "parakeet":
+            raise SystemExit("the 'parakeet' ASR backend isn't installed in this environment")
+        return "whisper-engine"
+
+    p = _switch_pipeline(monkeypatch, create_asr_missing_parakeet)
+    p.asr = "whisper-engine"
+    p.cfg.asr.backend = "whisper"
+    p._asr_lock = _AsrPresenceLock(p)
+
+    p._switch_asr_backend("parakeet")
+
+    assert p._asr_lock.released_without_asr == 0
+    assert p.asr == "whisper-engine"  # and it did fall back correctly
+    assert p.cfg.asr.backend == "whisper"
+
+
+def test_failed_switch_and_failed_fallback_never_releases_the_lock_without_an_engine(monkeypatch):
+    def always_fails(cfg):
+        raise RuntimeError("CUDA out of memory")
+
+    p = _switch_pipeline(monkeypatch, always_fails)
+    p.asr = "whisper-engine"
+    p.cfg.asr.backend = "whisper"
+    p._asr_lock = _AsrPresenceLock(p)
+
+    p._switch_asr_backend("parakeet")
+
+    assert p._asr_lock.released_without_asr == 0
+    assert p.asr.transcribe(None) == ""  # ended on the _NullASR stand-in, not missing

@@ -499,39 +499,50 @@ class Pipeline:
         load can take tens of seconds. _asr_loop is blocked on _asr_lock for
         the whole swap, so it can never see self.asr as None or half-built -
         a transcription simply waits for the swap to finish, same as it
-        already waits for a slow one from the current engine."""
+        already waits for a slow one from the current engine.
+
+        That has to include the *failure* path too: _load_asr deletes
+        self.asr before building the replacement, so if the lock were
+        released between a failed attempt and the fallback reload,
+        _asr_loop could grab it in that gap, find self.asr gone, and die
+        with an AttributeError - killing captions until a restart. So the
+        attempt and its fallback share one uninterrupted hold of the lock."""
         previous = self.cfg.asr.backend
         if backend == previous:
             self._asr_busy = False
             return
+        switched = False
         try:
             with self._asr_lock:
                 self._stage(f"Switching speech recognition to {backend}…")
-                self._load_asr(backend)
-            vlog("asr", f"switched backend: {previous} -> {backend}")
-            if self._persistent_config is not None:
-                self._persistent_config.set("asr_backend", backend)
-        except (Exception, SystemExit) as exc:
-            # create_asr() raises SystemExit (not Exception) for a missing
-            # optional backend, appropriate for a hard CLI-startup failure
-            # but not for a live webui toggle - caught here too so a missing
-            # dependency falls back cleanly instead of leaving self.asr gone.
-            print(f"[asr] couldn't switch to {backend!r}, reloading {previous!r}: {exc!r}")
-            try:
-                with self._asr_lock:
-                    self._load_asr(previous)
-            except (Exception, SystemExit) as exc2:
-                # The fallback failed too (e.g. the failed switch left GPU
-                # memory fragmented/exhausted) - leaving self.asr undefined
-                # would crash _asr_loop's next transcribe() call outright and
-                # kill that thread. A no-op stand-in keeps every thread alive
-                # so the operator can retry (or restart the service) once
-                # whatever's holding GPU memory clears, instead of losing
-                # captions silently until someone notices and restarts it.
-                print(f"[asr] fallback reload of {previous!r} also failed: {exc2!r}")
-                with self._asr_lock:
-                    self.cfg.asr.backend = previous
-                    self.asr = _NullASR()
+                try:
+                    self._load_asr(backend)
+                    switched = True
+                except (Exception, SystemExit) as exc:
+                    # create_asr() raises SystemExit (not Exception) for a
+                    # missing optional backend, appropriate for a hard
+                    # CLI-startup failure but not for a live webui toggle -
+                    # caught here too so a missing dependency falls back
+                    # cleanly instead of leaving self.asr gone.
+                    print(f"[asr] couldn't switch to {backend!r}, reloading {previous!r}: {exc!r}")
+                    try:
+                        self._load_asr(previous)
+                    except (Exception, SystemExit) as exc2:
+                        # The fallback failed too (e.g. the failed switch left
+                        # GPU memory fragmented/exhausted) - leaving self.asr
+                        # undefined would crash _asr_loop's next transcribe()
+                        # call outright and kill that thread. A no-op stand-in
+                        # keeps every thread alive so the operator can retry
+                        # (or restart the service) once whatever's holding GPU
+                        # memory clears, instead of losing captions silently
+                        # until someone notices and restarts it.
+                        print(f"[asr] fallback reload of {previous!r} also failed: {exc2!r}")
+                        self.cfg.asr.backend = previous
+                        self.asr = _NullASR()
+            if switched:
+                vlog("asr", f"switched backend: {previous} -> {backend}")
+                if self._persistent_config is not None:
+                    self._persistent_config.set("asr_backend", backend)
         finally:
             self._asr_busy = False
             self._stage("Listening", ready=True)
