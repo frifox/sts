@@ -46,19 +46,6 @@
   }
   #idle-message.show { display: flex; }
 
-  .label {
-    position: absolute;
-    top: 0.6vh;
-    left: 1.2vw;
-    font-size: 0.8rem;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: #555;
-    z-index: 1;
-  }
-
-  .label.right { left: auto; right: 1.2vw; }
-
   .lines {
     height: 100%;
     box-sizing: border-box;
@@ -120,15 +107,13 @@
 
   /* Portrait mode has no separate original/translated panels to hide (both
      columns live in one shared panel) - Caption/Translate turning off is
-     applied to just that column instead: its own cells, label, verse banner
+     applied to just that column instead: its own cells, verse banner
      and recall chip, and the grid collapses to a single column so the
      remaining side takes the full width, same as when a whole landscape
      panel is hidden and the other one gets all the space. */
-  #portrait-panel.hide-original .label:not(.right),
   #portrait-panel.hide-original #verse-banner-portrait-ru,
   #portrait-panel.hide-original #verse-chip-portrait-ru,
   #portrait-panel.hide-original .portrait-grid .original,
-  #portrait-panel.hide-translated .label.right,
   #portrait-panel.hide-translated #verse-banner-portrait-en,
   #portrait-panel.hide-translated #verse-chip-portrait-en,
   #portrait-panel.hide-translated .portrait-grid .translated {
@@ -234,13 +219,12 @@
   .verse-banner.en .verse-text { color: #e8c07d; }
 
   /* Small recall button for the most recently detected verse, so it can be
-     brought back after its banner auto-dismisses. Sits just under that
-     panel's "Original"/"Translated" label; hidden until a verse has been
-     detected at least once. */
+     brought back after its banner auto-dismisses. Sits in the top corner of
+     that panel; hidden until a verse has been detected at least once. */
   .verse-chip {
     display: none;
     position: absolute;
-    top: 2.6vh;
+    top: 0.8vh;
     left: 1.2vw;
     z-index: 1;
     box-sizing: border-box;
@@ -503,7 +487,6 @@
     </div>
   </div>
     <div class="panel" id="original-panel">
-      <span class="label">Original</span>
       <button type="button" class="verse-chip" id="verse-chip-ru" title="Show the last detected passage again"></button>
       <div class="verse-banner ru" id="verse-banner-ru">
         <div class="verse-reference"></div>
@@ -512,7 +495,6 @@
       <div class="lines" id="original-lines"></div>
     </div>
     <div class="panel" id="translated-panel">
-      <span class="label">Translated</span>
       <button type="button" class="verse-chip" id="verse-chip-en" title="Show the last detected passage again"></button>
       <div class="verse-banner en" id="verse-banner-en">
         <div class="verse-reference"></div>
@@ -521,8 +503,6 @@
       <div class="lines" id="translated-lines"></div>
     </div>
     <div class="panel" id="portrait-panel" hidden>
-      <span class="label">Original</span>
-      <span class="label right">Translated</span>
       <button type="button" class="verse-chip" id="verse-chip-portrait-ru" title="Show the last detected passage again"></button>
       <button type="button" class="verse-chip right" id="verse-chip-portrait-en" title="Show the last detected passage again"></button>
       <div class="verse-banner ru verse-banner-left" id="verse-banner-portrait-ru">
