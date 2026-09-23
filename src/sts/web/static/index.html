@@ -588,7 +588,11 @@
   function addPortraitTranslated(text) {
     const cell = pendingTranslationCells.shift();
     if (!cell) return;  // more translations than rows currently exist - nothing to pair it with
-    for (const other of portraitGrid.querySelectorAll('.translated')) other.classList.add('old');
+    // cell is already in the grid (created empty alongside its original
+    // back in addPortraitOriginal) - exclude it here or it dims itself.
+    for (const other of portraitGrid.querySelectorAll('.translated')) {
+      if (other !== cell) other.classList.add('old');
+    }
     cell.textContent = text;
     prunePortraitRows();
   }
