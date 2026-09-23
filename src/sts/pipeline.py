@@ -129,6 +129,12 @@ class Pipeline:
         # currently being spoken, via periodic partial re-transcription - see
         # _segment_loop/_asr_loop. Reset to "" whenever a segment closes.
         self._committed_text = ""
+        # A sentence a partial re-run just completed, held back until the
+        # *next* partial re-run reproduces it identically - see
+        # _commit_new_asr_text. None when there's nothing awaiting
+        # confirmation. Reset to None whenever a segment closes/resets,
+        # alongside _committed_text.
+        self._pending_confirmation: str | None = None
         self._frames_since_partial = 0
         # Most recently transcribed segment's audio duration (seconds) - used
         # as translate's own real-time-factor denominator too (see
@@ -261,6 +267,7 @@ class Pipeline:
         self._use_startup_voice()
         self._pending_voice = None
         self._committed_text = ""
+        self._pending_confirmation = None
         self._frames_since_partial = 0
         self._drain(self._segments)
         self._drain(self._transcripts)
@@ -758,6 +765,19 @@ class Pipeline:
         this only trusts what's still a clean extension of what's already
         committed and waits for the next re-run rather than guessing.
 
+        A newly-completed sentence isn't trusted on first sight either:
+        measured against real audio, a partial re-run's first pass at a
+        sentence is sometimes revised once a little more audio context is
+        available on the *next* re-run (e.g. "Вопрос:" becoming "Возникает
+        вопрос," - not just a reworded ending, a different opening), which
+        would otherwise get shown, then shown again differently worded once
+        the next re-run's version is committed on top of it. So a candidate
+        sentence is held in `_pending_confirmation` and only actually
+        committed once a later re-run reproduces it identically - trading a
+        bit of latency (it needs to survive one more partial_interval_ms
+        cycle before it first appears) for not showing a guess that's still
+        likely to change.
+
         The final pass is different: measured against real audio, the model
         occasionally reworded even the very start of a long segment once the
         *entire* segment's audio was available as context - not just near
@@ -771,24 +791,35 @@ class Pipeline:
         the model re-punctuated differently the second time (a period
         becoming a comma, continuing the sentence instead of ending it)
         doesn't make the whole segment look diverged and get resent in full
-        - only whatever's actually new is."""
+        - only whatever's actually new is. The final pass is never held back
+        awaiting confirmation either - the segment is closing now, so
+        whatever it says is authoritative."""
         if final:
             if self._committed_text and not full_text.startswith(self._committed_text):
                 vlog("asr", "final transcript's wording diverged from what's already committed; "
                             "resending only what isn't already covered")
             to_commit = new_text_since(self._committed_text, full_text)
             self._committed_text = ""  # this segment is done; ready for the next one
+            self._pending_confirmation = None
         elif full_text.startswith(self._committed_text):
             new_text = full_text[len(self._committed_text):].strip()
-            to_commit, tail = split_complete(new_text)
-            if to_commit and not tail:
-                # Nothing follows the period *yet* - can't tell a real sentence
-                # boundary from the model just running out of audio to decode.
+            candidate, tail = split_complete(new_text)
+            if not candidate or not tail:
+                # No complete new sentence yet, or nothing follows the period
+                # *yet* - can't tell a real sentence boundary from the model
+                # just running out of audio to decode.
                 return
-            if to_commit:
-                self._committed_text = f"{self._committed_text} {to_commit}".strip()
+            if candidate != self._pending_confirmation:
+                # First time this exact wording has completed a sentence -
+                # wait for the next re-run to reproduce it before trusting it.
+                self._pending_confirmation = candidate
+                return
+            to_commit = candidate
+            self._pending_confirmation = None
+            self._committed_text = f"{self._committed_text} {to_commit}".strip()
         else:
             vlog("asr", "partial re-run revised already-committed text; keeping only what was already sent")
+            self._pending_confirmation = None
             return
 
         if not to_commit:

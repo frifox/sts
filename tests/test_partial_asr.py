@@ -1,17 +1,27 @@
 """Verifies periodic re-transcription of a still-open VAD segment: complete
-sentences are released as soon as they're confirmed, a still-growing trailing
-fragment is held back, and the mechanism throttles itself to the ASR stage's
-own pace instead of building a backlog.
+sentences are released once confirmed, a still-growing trailing fragment is
+held back, and the mechanism throttles itself to the ASR stage's own pace
+instead of building a backlog.
 
-"Confirmed" specifically means: there's real decoded text *after* the
-sentence-ending punctuation too, in the same re-run. Given only a short audio
-prefix, the model will often end its output with a plausible-looking period
-simply because it ran out of audio to decode, not because that's a real
-sentence boundary - a single sentence with nothing after it is exactly that
-ambiguous case, so it's held back rather than committed early (this was found
-by testing against real audio: an early one-sentence guess with an empty tail
-was wrong, and - because committed text is never revised - stuck around
-uncorrected for the rest of the segment)."""
+"Confirmed" means two things, both of which have to hold before a sentence is
+actually released:
+
+1. There's real decoded text *after* the sentence-ending punctuation too, in
+   the same re-run. Given only a short audio prefix, the model will often end
+   its output with a plausible-looking period simply because it ran out of
+   audio to decode, not because that's a real sentence boundary - a single
+   sentence with nothing after it is exactly that ambiguous case (found by
+   testing against real audio: an early one-sentence guess with an empty tail
+   was wrong, and - because committed text is never revised - stuck around
+   uncorrected for the rest of the segment).
+2. The *next* re-run reproduces the same sentence identically. A sentence's
+   first sighting is held in `_pending_confirmation` rather than released
+   immediately, because a re-run's first pass at a sentence is sometimes
+   revised once a little more audio context is available on the next one -
+   not just a reworded ending, occasionally a different opening (found the
+   same way: real audio where a later re-run changed "Вопрос:" to "Возникает
+   вопрос,", which would otherwise have shown, then shown again differently
+   worded once the revision was committed on top of it)."""
 
 import queue
 
@@ -37,6 +47,7 @@ def _stub_pipeline():
     p.broadcaster = Broadcaster()
     p.bible_lookup = None  # find_references() on plain sentences below finds nothing, so this is never touched
     p._committed_text = ""
+    p._pending_confirmation = None
     p._transcripts = queue.Queue()
     return p
 
@@ -56,43 +67,81 @@ def test_a_lone_sentence_with_nothing_after_it_is_held_back():
     assert p._committed_text == ""  # nothing committed yet
 
 
-def test_a_sentence_is_released_once_the_model_has_moved_past_it():
+def test_a_sentence_stays_held_back_on_its_first_sighting():
+    """A sentence that just completed - real text after its period too, so it
+    passes the tail-confirmation check - still isn't released on the very
+    re-run that first produces it: it needs the *next* re-run to reproduce it
+    identically first (see the next test)."""
     p = _stub_pipeline()
     p._commit_new_asr_text("Первое предложение.", final=False)  # held back, no tail yet
     assert p.broadcaster.original == []
 
-    # more audio: the model has now decoded real content *after* the period -
-    # that's what confirms "Первое предложение." really was a full sentence.
     p._commit_new_asr_text("Первое предложение. Второе еще не", final=False)
+
+    assert p.broadcaster.original == []  # first sighting - held pending confirmation
+    assert p._committed_text == ""
+    assert p._pending_confirmation == "Первое предложение."
+
+
+def test_a_sentence_is_released_once_confirmed_by_a_second_re_run():
+    p = _stub_pipeline()
+    p._commit_new_asr_text("Первое предложение. Второе еще не", final=False)  # first sighting - held back
+    assert p.broadcaster.original == []
+
+    # more audio, same sentence reproduced identically - that confirms
+    # "Первое предложение." wasn't itself still subject to revision.
+    p._commit_new_asr_text("Первое предложение. Второе еще не совсем", final=False)
 
     assert p.broadcaster.original == ["Первое предложение."]
     assert p._committed_text == "Первое предложение."
+    assert p._pending_confirmation is None
     assert list(p._transcripts.queue) == ["Первое предложение."]
 
 
-def test_second_sentence_released_once_a_third_confirms_it():
+def test_a_revised_first_sighting_replaces_the_pending_candidate_not_release_it():
+    """The real regression this guards against, seen in live use: a re-run's
+    first pass at a sentence was revised by the very next re-run once a
+    little more audio context became available - releasing on first sighting
+    would have shown the first version, then shown the revision again on top
+    of it once the segment closed. The revised wording simply becomes the new
+    pending candidate, awaiting its own confirmation."""
+    p = _stub_pipeline()
+    p._commit_new_asr_text("Вопрос. Дальше еще не", final=False)
+    assert p._pending_confirmation == "Вопрос."
+
+    p._commit_new_asr_text("Возникает вопрос. Дальше еще не совсем", final=False)
+
+    assert p.broadcaster.original == []  # never released the first, unconfirmed version
+    assert p._pending_confirmation == "Возникает вопрос."
+    assert p._committed_text == ""
+
+
+def test_second_sentence_released_once_confirmed_by_a_later_re_run():
     p = _stub_pipeline()
     p._commit_new_asr_text("Первое предложение. Второе еще не", final=False)
+    p._commit_new_asr_text("Первое предложение. Второе еще не совсем", final=False)  # confirms + releases first
     assert p.broadcaster.original == ["Первое предложение."]
 
-    # "Второе..." now ends in a period, but nothing follows it yet - held back,
-    # same as the first sentence was.
-    p._commit_new_asr_text("Первое предложение. Второе теперь готово.", final=False)
+    # "Второе..." now ends in a period for the first time - held back pending
+    # its own confirmation, same as sentence one was.
+    p._commit_new_asr_text("Первое предложение. Второе теперь готово. Третье начина", final=False)
     assert p.broadcaster.original == ["Первое предложение."]
     assert p._committed_text == "Первое предложение."
 
-    # a third sentence starts: that confirms sentence two.
-    p._commit_new_asr_text("Первое предложение. Второе теперь готово. Третье начина", final=False)
+    # confirmed identically by the next re-run - now released.
+    p._commit_new_asr_text("Первое предложение. Второе теперь готово. Третье начинает", final=False)
     assert p.broadcaster.original == ["Первое предложение.", "Второе теперь готово."]
     assert p._committed_text == "Первое предложение. Второе теперь готово."
 
 
 def test_final_releases_everything_left_over_even_without_a_period():
-    """Unlike a partial, the final pass needs no tail-confirmation - the
-    segment is genuinely done, so whatever's left over (finished sentence or
-    not) is released; there's no "next re-run" left to catch it otherwise."""
+    """Unlike a partial, the final pass needs no tail-confirmation *or*
+    second-re-run confirmation - the segment is genuinely done, so whatever's
+    left over (finished or not, confirmed or not) is released; there's no
+    "next re-run" left to catch it otherwise."""
     p = _stub_pipeline()
-    p._commit_new_asr_text("Первое предложение. Второе тоже", final=False)  # confirms + releases sentence one
+    p._commit_new_asr_text("Первое предложение. Второе тоже", final=False)
+    p._commit_new_asr_text("Первое предложение. Второе тоже сейчас", final=False)  # confirms + releases sentence one
     assert p.broadcaster.original == ["Первое предложение."]
 
     p._commit_new_asr_text("Первое предложение. Второе тоже без точки", final=True)
@@ -118,13 +167,14 @@ def test_final_with_nothing_new_still_resets_for_the_next_segment():
     (re-transcribing the whole, now-closed segment) reproduces exactly what
     was already committed. Must not skip resetting state for the next segment."""
     p = _stub_pipeline()
-    p._commit_new_asr_text("Всё уже сказано. И тут", final=False)  # confirms + releases "Всё уже сказано."
+    p._commit_new_asr_text("Всё уже сказано. И тут", final=False)  # first sighting - held back
+    p._commit_new_asr_text("Всё уже сказано. И тут же", final=False)  # confirms + releases "Всё уже сказано."
     before = list(p.broadcaster.original)
     assert before == ["Всё уже сказано."]
 
-    p._commit_new_asr_text("Всё уже сказано. И тут", final=True)
+    p._commit_new_asr_text("Всё уже сказано. И тут же", final=True)
 
-    assert p.broadcaster.original == before + ["И тут"]
+    assert p.broadcaster.original == before + ["И тут же"]
     assert p._committed_text == ""
 
 
@@ -135,7 +185,8 @@ def test_empty_asr_output_is_a_safe_no_op():
     p._commit_new_asr_text("", final=True)
     assert p.broadcaster.original == [] and p._committed_text == ""
 
-    p._commit_new_asr_text("Кое-что уже есть. И еще", final=False)  # confirms + releases "Кое-что уже есть."
+    p._commit_new_asr_text("Кое-что уже есть. И еще", final=False)  # first sighting - held back
+    p._commit_new_asr_text("Кое-что уже есть. И еще раз", final=False)  # confirms + releases
     p._commit_new_asr_text("", final=True)  # e.g. a transient hiccup on the closing pass
     assert p.broadcaster.original == ["Кое-что уже есть."]
     assert p._committed_text == ""  # still reset, ready for the next segment
@@ -146,7 +197,8 @@ def test_diverged_partial_is_ignored_until_it_resolves():
     differently once more context arrives. Mid-segment this is just skipped
     (wait for the next re-run or the final pass) rather than guessed at."""
     p = _stub_pipeline()
-    p._commit_new_asr_text("Он сказал одно. И еще", final=False)  # confirms + releases "Он сказал одно."
+    p._commit_new_asr_text("Он сказал одно. И еще", final=False)  # first sighting - held back
+    p._commit_new_asr_text("Он сказал одно. И еще раз", final=False)  # confirms + releases "Он сказал одно."
     assert p.broadcaster.original == ["Он сказал одно."]
 
     p._commit_new_asr_text("Он сказал другое. И еще", final=False)  # diverges from what's already committed
@@ -180,7 +232,8 @@ def test_diverged_final_sends_the_full_text_rather_than_risk_dropping_content():
     to miss. Here nothing in the final pass matches the committed text at
     all, so the whole thing is resent."""
     p = _stub_pipeline()
-    p._commit_new_asr_text("Он сказал одно. И еще", final=False)
+    p._commit_new_asr_text("Он сказал одно. И еще", final=False)  # first sighting - held back
+    p._commit_new_asr_text("Он сказал одно. И еще раз", final=False)  # confirms + releases
     assert p.broadcaster.original == ["Он сказал одно."]
 
     p._commit_new_asr_text("Что-то совсем другое было сказано.", final=True)
@@ -197,7 +250,8 @@ def test_diverged_final_only_resends_the_part_not_already_covered():
     heard identically both times - isn't duplicated just because "одно"
     became something else."""
     p = _stub_pipeline()
-    p._commit_new_asr_text("Он сказал одно. И еще", final=False)
+    p._commit_new_asr_text("Он сказал одно. И еще", final=False)  # first sighting - held back
+    p._commit_new_asr_text("Он сказал одно. И еще раз", final=False)  # confirms + releases
     assert p.broadcaster.original == ["Он сказал одно."]
 
     p._commit_new_asr_text("Он сказал на самом деле другое, и продолжил дальше.", final=True)
@@ -216,7 +270,8 @@ def test_diverged_final_ignores_a_repunctuated_boundary():
     genuinely new content. Word-by-word comparison (ignoring punctuation)
     sees through the re-punctuation and only resends what's actually new."""
     p = _stub_pipeline()
-    p._commit_new_asr_text("Первое предложение полностью произнесено. И еще", final=False)
+    p._commit_new_asr_text("Первое предложение полностью произнесено. И еще", final=False)  # first sighting
+    p._commit_new_asr_text("Первое предложение полностью произнесено. И еще раз", final=False)  # confirms
     assert p.broadcaster.original == ["Первое предложение полностью произнесено."]
 
     # Same words up through "произнесено", but a comma instead of a period -
