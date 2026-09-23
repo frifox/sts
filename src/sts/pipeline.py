@@ -618,14 +618,23 @@ class Pipeline:
             if not self.control.translation_enabled.is_set():
                 vlog("translate", "translation is off, skipping")
                 continue
-            t0 = time.monotonic()
-            translated = self.translator.translate(text)
-            vlog("translate", f"translated in {time.monotonic() - t0:.2f}s")
+            self._translate_segment(text)
+
+    def _translate_segment(self, text: str) -> None:
+        """Translates one ASR segment's text and pushes/broadcasts/queues each
+        sentence for TTS the moment it's ready. Yielded, not joined-then-
+        returned: a multi-sentence segment (VAD closes on silence, so it can
+        hold several full sentences) would otherwise have its first sentence
+        wait on the whole block's slowest (usually last) sentence to translate."""
+        t0 = time.monotonic()
+        for translated in self.translator.translate_sentences(text):
+            vlog("translate", f"translated a sentence in {time.monotonic() - t0:.2f}s")
             if translated:
                 print(f"[en] {translated}")
                 if self.broadcaster:
                     self.broadcaster.broadcast_translated(translated)
                 self._translations.put(translated)
+            t0 = time.monotonic()
 
     def _tts_loop(self) -> None:
         while not self._stop.is_set():

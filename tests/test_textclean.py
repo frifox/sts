@@ -90,3 +90,34 @@ def test_known_one_word_replies_are_translated_exactly():
     assert short_phrase("Аминь, аминь.") is None          # not in the table: left to the model
     assert short_phrase("Аминь всем нам.") is None
     assert short_phrase("") is None
+
+
+def test_translate_sentences_yields_incrementally_and_translate_still_joins():
+    """translate_sentences() must be a real generator (not build a list first) so a
+    caller can act on sentence 1 before sentence 2 is even translated; translate()
+    is unchanged for its existing callers - still one joined string."""
+    from sts.translate.translator import Translator
+
+    translator = Translator.__new__(Translator)  # skip __init__: no real NLLB model needed for this
+    calls = []
+
+    def fake_translate_sentence(text):
+        calls.append(text)
+        return text.upper()
+
+    translator._translate_sentence = fake_translate_sentence
+
+    text = "One thing happened. Two more things happened. Three final things happened."
+    generator = translator.translate_sentences(text)
+    assert calls == []  # nothing translated yet - it's lazy until iterated
+
+    first = next(generator)
+    assert first == "ONE THING HAPPENED." and calls == ["One thing happened."]  # only the first sentence ran
+
+    remaining = list(generator)
+    assert remaining == ["TWO MORE THINGS HAPPENED.", "THREE FINAL THINGS HAPPENED."]
+    assert calls == ["One thing happened.", "Two more things happened.", "Three final things happened."]
+
+    assert translator.translate(text) == first + " " + " ".join(remaining)
+    assert translator.translate("  ") == ""
+    assert list(translator.translate_sentences("  ")) == []

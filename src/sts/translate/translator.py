@@ -78,12 +78,22 @@ class Translator:
             self._target_id = self.tokenizer.convert_tokens_to_ids(cfg.target_lang)
 
     def translate(self, text: str) -> str:
-        if not text.strip():
-            return ""
+        return " ".join(self.translate_sentences(text)).strip()
 
-        # NLLB is trained on single sentences and silently drops content when
-        # handed several at once, so a speech segment is translated per sentence.
-        return " ".join(self._translate_sentence(sentence) for sentence in split_sentences(text)).strip()
+    def translate_sentences(self, text: str):
+        """Translates `text` one sentence at a time, yielding each translation
+        the moment it's ready instead of waiting for the whole passage - lets a
+        caller (e.g. the live pipeline) start speaking/showing sentence 1 while
+        later sentences in the same ASR segment are still being translated.
+
+        NLLB is trained on single sentences and silently drops content when
+        handed several at once, so a speech segment is translated per sentence
+        either way; `translate()` above just joins them back into one string.
+        """
+        if not text.strip():
+            return
+        for sentence in split_sentences(text):
+            yield self._translate_sentence(sentence)
 
     def _translate_sentence(self, text: str) -> str:
         known = short_phrase(text)
