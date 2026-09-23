@@ -187,7 +187,6 @@
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
     transform: translateY(-105%);
     transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
-    pointer-events: none;
   }
 
   .verse-banner.show { transform: translateY(0); }
@@ -211,6 +210,36 @@
 
   .verse-banner.ru .verse-text { color: #9cdcfe; }
   .verse-banner.en .verse-text { color: #e8c07d; }
+
+  /* Small recall button for the most recently detected verse, so it can be
+     brought back after its banner auto-dismisses. Sits just under that
+     panel's "Original"/"Translated" label; hidden until a verse has been
+     detected at least once. */
+  .verse-chip {
+    display: none;
+    position: absolute;
+    top: 2.6vh;
+    left: 1.2vw;
+    z-index: 1;
+    box-sizing: border-box;
+    max-width: calc(100% - 2.4vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: inherit;
+    font-size: 0.75rem;
+    letter-spacing: 0.03em;
+    padding: 0.3em 0.8em;
+    border-radius: 999px;
+    border: 1px solid #c9a24b;
+    background: rgba(20, 20, 24, 0.85);
+    color: #c9a24b;
+    cursor: pointer;
+  }
+
+  .verse-chip:hover { background: rgba(201, 162, 75, 0.18); }
+  .verse-chip.show { display: inline-block; }
+  .verse-chip.right { left: auto; right: 1.2vw; }
 
   /* Permanent header: part of the page layout (the caption panels take the
      remaining height), always fully visible, sitting above the verse overlay. */
@@ -453,6 +482,7 @@
   </div>
     <div class="panel" id="original-panel">
       <span class="label">Original</span>
+      <button type="button" class="verse-chip" id="verse-chip-ru" title="Show the last detected passage again"></button>
       <div class="verse-banner ru" id="verse-banner-ru">
         <div class="verse-reference"></div>
         <div class="verse-text"></div>
@@ -461,6 +491,7 @@
     </div>
     <div class="panel" id="translated-panel">
       <span class="label">Translated</span>
+      <button type="button" class="verse-chip" id="verse-chip-en" title="Show the last detected passage again"></button>
       <div class="verse-banner en" id="verse-banner-en">
         <div class="verse-reference"></div>
         <div class="verse-text"></div>
@@ -470,6 +501,8 @@
     <div class="panel" id="portrait-panel" hidden>
       <span class="label">Original</span>
       <span class="label right">Translated</span>
+      <button type="button" class="verse-chip" id="verse-chip-portrait-ru" title="Show the last detected passage again"></button>
+      <button type="button" class="verse-chip right" id="verse-chip-portrait-en" title="Show the last detected passage again"></button>
       <div class="verse-banner ru verse-banner-left" id="verse-banner-portrait-ru">
         <div class="verse-reference"></div>
         <div class="verse-text"></div>
@@ -681,6 +714,7 @@
 
   const VERSE_DISPLAY_MS = 25000;
   let verseHideTimer = null;
+  let lastVerseMsg = null;  // re-shown by the recall chips, below - null until the first verse this session
   // One banner per language per render mode - all four are kept in sync on
   // every "verse" message; only the ones in the currently visible panel(s)
   // are ever actually seen, same as the RTF indicators always update
@@ -691,27 +725,76 @@
     { el: document.getElementById('verse-banner-portrait-ru'), field: 'ru_text' },
     { el: document.getElementById('verse-banner-portrait-en'), field: 'en_text' },
   ];
+  // Small recall buttons - one alongside each banner - that bring the last
+  // detected verse back after it's auto-dismissed (or been manually
+  // dismissed). Unlike the banners, these stay up once shown.
+  const verseChips = [
+    document.getElementById('verse-chip-ru'),
+    document.getElementById('verse-chip-en'),
+    document.getElementById('verse-chip-portrait-ru'),
+    document.getElementById('verse-chip-portrait-en'),
+  ];
 
-  function showVerse(msg) {
+  function applyVerseText(msg) {
     for (const { el, field } of verseBanners) {
       el.querySelector('.verse-reference').textContent = msg.reference;
       el.querySelector('.verse-text').textContent = msg[field] || '';
-      el.classList.add('show');
+    }
+  }
+
+  function dismissVerse() {
+    clearTimeout(verseHideTimer);
+    for (const { el } of verseBanners) el.classList.remove('show');
+  }
+
+  // Brings the last detected verse back with no auto-dismiss timer - only
+  // dismissVerse() (the click-outside handler, below) hides it again.
+  function pinVerse() {
+    if (!lastVerseMsg) return;
+    applyVerseText(lastVerseMsg);
+    for (const { el } of verseBanners) el.classList.add('show');
+    clearTimeout(verseHideTimer);
+  }
+
+  function showVerse(msg) {
+    lastVerseMsg = msg;
+    applyVerseText(msg);
+    for (const { el } of verseBanners) el.classList.add('show');
+    for (const chip of verseChips) {
+      chip.textContent = msg.reference;
+      chip.classList.add('show');
     }
 
     clearTimeout(verseHideTimer);
-    verseHideTimer = setTimeout(() => {
-      for (const { el } of verseBanners) el.classList.remove('show');
-    }, VERSE_DISPLAY_MS);
+    verseHideTimer = setTimeout(dismissVerse, VERSE_DISPLAY_MS);
   }
+
+  for (const chip of verseChips) {
+    chip.addEventListener('click', (event) => {
+      event.stopPropagation();  // don't let this same click reach the outside-click handler below
+      pinVerse();
+    });
+  }
+
+  // Clicking anywhere outside a shown banner (and outside the chips, which
+  // have their own handler above) dismisses it - the "manually click out to
+  // dismiss" behavior a pinned verse needs, but applied whenever a banner is
+  // showing, auto-dismiss pending or not.
+  document.addEventListener('click', (event) => {
+    if (!verseBanners.some(({ el }) => el.classList.contains('show'))) return;
+    if (verseBanners.some(({ el }) => el.contains(event.target))) return;
+    if (verseChips.some((chip) => chip.contains(event.target))) return;
+    dismissVerse();
+  });
 
   function clearCaptions() {
     document.getElementById('original-lines').innerHTML = '';
     document.getElementById('translated-lines').innerHTML = '';
     portraitGrid.innerHTML = '';
     pendingTranslationCells = [];
-    for (const { el } of verseBanners) el.classList.remove('show');
-    clearTimeout(verseHideTimer);
+    dismissVerse();
+    lastVerseMsg = null;
+    for (const chip of verseChips) chip.classList.remove('show');
   }
 
   const asrToggleBtn = document.getElementById('btn-asr-toggle');
