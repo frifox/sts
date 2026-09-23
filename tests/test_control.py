@@ -119,6 +119,52 @@ def test_pause_threshold_changes_live_and_is_clamped():
     assert p.cfg.vad.min_silence_ms == 1500
 
 
+def test_voice_off_cuts_off_already_buffered_audio_instead_of_letting_it_drain():
+    """AudioPlayback.play() only blocks until there's room in the output
+    buffer, not until a clip finishes, so a sentence or two can already be
+    queued in the sound card's buffer by the time the operator unchecks
+    Voice. voice_off must actively cut that off (drain the pipeline's own
+    audio queue and stop/reopen the output stream), not just flip a flag
+    that only stops *new* audio from being queued."""
+    import queue
+
+    from sts.config import PipelineConfig
+    from sts.pipeline import Pipeline
+
+    class Broadcaster:
+        def broadcast_status(self, **kwargs):
+            pass
+
+    class Playback:
+        stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    class Tts:
+        cloned_speaker_wav = None
+
+    p = object.__new__(Pipeline)
+    p.cfg = PipelineConfig()
+    p.broadcaster = Broadcaster()
+    p.playback = Playback()
+    p.tts = Tts()
+    p._pending_voice = None
+    p._active_speaker_id = None
+    p.control = RecognitionControl(16000)
+    p.control.enable_voice()
+    for name in ("_segments", "_transcripts", "_translations", "_audio"):
+        setattr(p, name, queue.Queue())
+    p._audio.put((None, 24000, 0.0))
+    p._audio.put((None, 24000, 0.0))  # a couple of sentences already synthesized ahead of playback
+
+    p.handle_control({"action": "voice_off"})
+
+    assert not p.control.voice_enabled.is_set()
+    assert p._audio.empty()          # nothing left for _playback_loop to still play
+    assert p.playback.stopped         # the output stream itself was cut off, not just gated
+
+
 def _startup_voice_pipeline(tmp_path):
     """A Pipeline stub with a real library (one shipped voice + one of the user's) and a recording TTS."""
     import queue

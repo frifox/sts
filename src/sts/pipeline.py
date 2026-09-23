@@ -133,6 +133,15 @@ class Pipeline:
             self.control.enable_voice()
         elif action == "voice_off":
             self.control.disable_voice()
+            # AudioPlayback.play() only blocks until there's room in the output
+            # buffer, not until the clip finishes - so by the time this fires,
+            # a sentence or two already queued ahead of it may be sitting in
+            # that buffer waiting to play. Drop what's still in our own queue
+            # (already covered by _playback_loop's own voice_enabled check,
+            # but no reason to let it sit there) and cut off whatever's
+            # already been handed to the sound card.
+            self._drain(self._audio)
+            self.playback.stop()
         elif action == "translate_on":
             self.control.enable_translation()
         elif action == "translate_off":
