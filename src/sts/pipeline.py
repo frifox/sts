@@ -38,7 +38,7 @@ from sts.control import RecognitionControl
 from sts.log import vlog
 from sts.persistent_config import PersistentConfig
 from sts.textclean import split_complete
-from sts.translate.translator import Translator
+from sts.translate.translator import Translator, split_sentences
 from sts.tts import create_synthesizer
 from sts.tts.voice_library import BUNDLED_VOICES_DIR, VoiceLibrary
 from sts.web.server import CaptionBroadcaster
@@ -764,7 +764,14 @@ class Pipeline:
             return
         print(f"[ru] {to_commit}")
         if self.broadcaster:
-            self.broadcaster.broadcast_original(to_commit)
+            # One message per sentence, not one for the whole commit: the
+            # caption page's portrait layout pairs each "original" message
+            # with a "translated" one by arrival order, and translation
+            # already broadcasts one message per sentence (see
+            # _translate_segment) - splitting the same way here, with the
+            # same split_sentences(), keeps the two streams in lockstep.
+            for sentence in split_sentences(to_commit):
+                self.broadcaster.broadcast_original(sentence)
             self._broadcast_bible_references(to_commit)
         self._transcripts.put(to_commit)
 

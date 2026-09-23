@@ -155,6 +155,19 @@ def test_diverged_partial_is_ignored_until_it_resolves():
     assert p._committed_text == "Он сказал одно."  # unchanged, not overwritten either
 
 
+def test_final_commit_broadcasts_one_message_per_sentence():
+    """A "final" commit can hold several sentences at once (see
+    test_final_releases_everything_left_over_even_without_a_period). Each one
+    is broadcast as its own "original" message - not the whole commit as one
+    message - so the caption page's portrait layout can pair each with the
+    matching "translated" message (also one per sentence) by arrival order."""
+    p = _stub_pipeline()
+
+    p._commit_new_asr_text("Первое предложение. Второе предложение. Третье предложение.", final=True)
+
+    assert p.broadcaster.original == ["Первое предложение.", "Второе предложение.", "Третье предложение."]
+
+
 def test_diverged_final_sends_the_full_text_rather_than_risk_dropping_content():
     """On the final pass, a divergence from committed text means whatever was
     already shown/spoken for this segment can't be trusted to still be a

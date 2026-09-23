@@ -30,7 +30,8 @@
 
   #original-panel { background: #0b0b0f; border-bottom: 2px solid #222; }
   #translated-panel { background: #000; }
-  #original-panel[hidden], #translated-panel[hidden] { display: none; }
+  #portrait-panel { background: #000; }
+  #original-panel[hidden], #translated-panel[hidden], #portrait-panel[hidden] { display: none; }
 
   #idle-message {
     display: none;
@@ -55,6 +56,8 @@
     color: #555;
     z-index: 1;
   }
+
+  .label.right { left: auto; right: 1.2vw; }
 
   .lines {
     height: 100%;
@@ -88,6 +91,32 @@
     from { opacity: 0; }
     to { opacity: 1; }
   }
+
+  /* Portrait render mode: original/translated side by side, one row per
+     snippet pair instead of one flowing paragraph per panel. #portrait-lines
+     is a plain `.lines` flex wrapper (clips and bottom-aligns, same as the
+     landscape panels); the grid itself is its one auto-height flex child, so
+     its own offsetHeight reflects the *true* content height for pruning -
+     the grid can't measure that itself once its rows overflow upward past
+     `align-content: end` (see prunePortraitRows()'s comment). Grid rows
+     auto-size to their tallest cell and stretch every cell in the row to
+     match (the default `align-items: stretch`), so a short snippet on one
+     side still occupies the same row height as a longer one on the other. */
+  .portrait-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 3vw;
+    row-gap: 0.6em;
+  }
+
+  .portrait-cell {
+    font-size: clamp(1rem, 2.4vw, 2rem);
+    line-height: 1.3;
+    overflow-wrap: break-word;
+  }
+
+  #portrait-lines .original { color: #9cdcfe; }
+  #portrait-lines .translated { color: #e8c07d; }
 
   #indicators {
     flex: 0 0 auto;
@@ -374,6 +403,11 @@
             <div>Model: <b id="translate-info-model">–</b></div>
             <div>Device: <b id="translate-info-device">–</b></div>
           </div>
+          <label for="render-mode-select" title="Landscape: original and translated stacked, each its own flowing paragraph. Portrait: side-by-side columns, each snippet its own row so both languages line up.">Render</label>
+          <select id="render-mode-select">
+            <option value="landscape">Landscape</option>
+            <option value="portrait">Portrait</option>
+          </select>
         </div>
       </div>
       <div class="engine" id="engine-tts">
@@ -418,6 +452,13 @@
     <div class="panel" id="translated-panel">
       <span class="label">Translated</span>
       <div class="lines" id="translated-lines"></div>
+    </div>
+    <div class="panel" id="portrait-panel" hidden>
+      <span class="label">Original</span>
+      <span class="label right">Translated</span>
+      <div class="lines" id="portrait-lines">
+        <div class="portrait-grid" id="portrait-grid"></div>
+      </div>
     </div>
     <div id="idle-message">System Idle</div>
   </div>
@@ -490,6 +531,58 @@
     }
   }
 
+  // -- Portrait render mode: original/translated as paired rows instead of
+  // one flowing paragraph per panel (see addLine above). Each "original"
+  // message starts a new row (both cells created together, the translated
+  // one empty at first); a FIFO queue matches each "translated" message to
+  // the oldest row still waiting for one. That pairing is only reliable
+  // because the server now splits a commit into one "original" message per
+  // sentence (see Pipeline._commit_new_asr_text), the same granularity
+  // translation already used - so the two streams advance sentence for
+  // sentence in the same order, even though they arrive at different times. --
+  const portraitLines = document.getElementById('portrait-lines');  // outer .lines wrapper: clips, bottom-aligns
+  const portraitGrid = document.getElementById('portrait-grid');    // inner, auto-height: what actually holds rows
+  let pendingTranslationCells = [];
+
+  function prunePortraitRows() {
+    // Same idea and the same reason as addLine's own pruning: portraitLines
+    // is bottom-aligned, so once its content overflows, the excess extends
+    // upward, off the top - and scrollHeight only ever reports overflow in
+    // the forward (downward) direction, so it can't see that. Measuring the
+    // grid's own offsetHeight instead (it's un-clipped, sized to its true
+    // content) sidesteps that entirely, exactly as flow.offsetHeight does
+    // for the landscape panels.
+    const style = getComputedStyle(portraitLines);
+    const available = portraitLines.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    while (portraitGrid.children.length > 2 && portraitGrid.offsetHeight > available) {
+      portraitGrid.removeChild(portraitGrid.firstChild);
+      portraitGrid.removeChild(portraitGrid.firstChild);
+    }
+  }
+
+  function addPortraitOriginal(text) {
+    for (const cell of portraitGrid.querySelectorAll('.original')) cell.classList.add('old');
+    const original = document.createElement('p');
+    original.className = 'portrait-cell line original';
+    original.style.margin = '0';
+    original.textContent = text;
+    const translated = document.createElement('p');
+    translated.className = 'portrait-cell line translated';
+    translated.style.margin = '0';
+    portraitGrid.appendChild(original);
+    portraitGrid.appendChild(translated);
+    pendingTranslationCells.push(translated);
+    prunePortraitRows();
+  }
+
+  function addPortraitTranslated(text) {
+    const cell = pendingTranslationCells.shift();
+    if (!cell) return;  // more translations than rows currently exist - nothing to pair it with
+    for (const other of portraitGrid.querySelectorAll('.translated')) other.classList.add('old');
+    cell.textContent = text;
+    prunePortraitRows();
+  }
+
   // The verse overlay hangs from just below the header, whatever its height
   // (it wraps to more rows on narrow screens).
   const headerEl = document.getElementById('header');
@@ -516,6 +609,8 @@
   function clearCaptions() {
     document.getElementById('original-lines').innerHTML = '';
     document.getElementById('translated-lines').innerHTML = '';
+    portraitGrid.innerHTML = '';
+    pendingTranslationCells = [];
     document.getElementById('verse-overlay').classList.remove('show');
     clearTimeout(verseHideTimer);
   }
@@ -559,11 +654,37 @@
   // Idle" shown once neither has anything left to display. --------------------
   const originalPanel = document.getElementById('original-panel');
   const translatedPanel = document.getElementById('translated-panel');
+  const portraitPanel = document.getElementById('portrait-panel');
   const idleMessage = document.getElementById('idle-message');
+  const renderModeSelect = document.getElementById('render-mode-select');
+
+  // Per-viewer display preference, not an operator setting - each connected
+  // screen picks its own (e.g. a portrait-mounted display vs a landscape
+  // one), so this lives in this browser's storage rather than the shared
+  // pipeline config.
+  let renderMode = 'landscape';
+  try {
+    renderMode = localStorage.getItem('sts-render-mode') || 'landscape';
+  } catch { /* private browsing / storage blocked - default stands */ }
+  renderModeSelect.value = renderMode;
+  updatePanelVisibility();  // apply it immediately, before the first status message arrives
+
+  renderModeSelect.addEventListener('change', () => {
+    renderMode = renderModeSelect.value;
+    try { localStorage.setItem('sts-render-mode', renderMode); } catch { /* ignore */ }
+    // The two layouts accumulate captions differently (one flowing paragraph
+    // per panel vs. one row per snippet pair) - switching mid-stream would
+    // need translating history between the two, so it's simpler and safer
+    // to just start the visible transcript fresh in the new layout.
+    clearCaptions();
+    updatePanelVisibility();
+  });
 
   function updatePanelVisibility() {
-    originalPanel.hidden = !lastStatus.active;
-    translatedPanel.hidden = !lastStatus.translation_enabled;
+    const portrait = renderMode === 'portrait';
+    originalPanel.hidden = portrait || !lastStatus.active;
+    translatedPanel.hidden = portrait || !lastStatus.translation_enabled;
+    portraitPanel.hidden = !portrait || (!lastStatus.active && !lastStatus.translation_enabled);
     idleMessage.classList.toggle('show', !lastStatus.active && !lastStatus.translation_enabled);
   }
 
@@ -1044,8 +1165,11 @@
     ws.onmessage = (event) => {
       if (event.data instanceof ArrayBuffer) { playAudioChunk(event.data); return; }
       const msg = JSON.parse(event.data);
-      if (msg.type === 'original') addLine('original-lines', msg.text);
-      else if (msg.type === 'translated') addLine('translated-lines', msg.text);
+      if (msg.type === 'original') {
+        if (renderMode === 'portrait') addPortraitOriginal(msg.text); else addLine('original-lines', msg.text);
+      } else if (msg.type === 'translated') {
+        if (renderMode === 'portrait') addPortraitTranslated(msg.text); else addLine('translated-lines', msg.text);
+      }
       else if (msg.type === 'verse') showVerse(msg);
       else if (msg.type === 'reset') clearCaptions();
       else if (msg.type === 'stage') {
