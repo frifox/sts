@@ -169,42 +169,48 @@
     50% { opacity: 0.3; }
   }
 
-  #verse-overlay {
-    position: fixed;
-    top: var(--header-h, 0px);
-    left: 50%;
-    z-index: 3;
-    width: min(90vw, 60rem);
+  /* A detected Bible reference's text, attached to the top of each panel it
+     belongs in (original/RU, translated/EN) rather than one box overlaying
+     the whole viewport - it slides down from the top of just that panel, on
+     top of whatever's currently scrolled up there, so the newest (bottom-
+     aligned) caption lines stay clear of it as much as possible. */
+  .verse-banner {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 2;
     box-sizing: border-box;
-    padding: 2.2vh 3vw;
+    padding: 1.2vh 1.5vw;
     background: rgba(10, 10, 12, 0.96);
     border-bottom: 3px solid #c9a24b;
-    border-left: 1px solid #333;
-    border-right: 1px solid #333;
-    border-radius: 0 0 12px 12px;
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
-    transform: translate(-50%, -105%);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
+    transform: translateY(-105%);
     transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+    pointer-events: none;
   }
 
-  #verse-overlay.show { transform: translate(-50%, 0); }
+  .verse-banner.show { transform: translateY(0); }
 
-  .verse-reference {
-    font-size: 1rem;
+  /* Portrait mode: one banner per column, side by side instead of full width. */
+  .verse-banner.verse-banner-left { right: 50%; }
+  .verse-banner.verse-banner-right { left: 50%; }
+
+  .verse-banner .verse-reference {
+    font-size: 0.85rem;
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: #c9a24b;
-    margin-bottom: 0.6em;
+    margin-bottom: 0.4em;
   }
 
-  .verse-text {
-    font-size: clamp(1.1rem, 2.6vw, 1.8rem);
-    line-height: 1.4;
-    margin-bottom: 0.5em;
+  .verse-banner .verse-text {
+    font-size: clamp(0.9rem, 2vw, 1.4rem);
+    line-height: 1.35;
   }
 
-  #verse-ru { color: #9cdcfe; }
-  #verse-en { color: #e8c07d; }
+  .verse-banner.ru .verse-text { color: #9cdcfe; }
+  .verse-banner.en .verse-text { color: #e8c07d; }
 
   /* Permanent header: part of the page layout (the caption panels take the
      remaining height), always fully visible, sitting above the verse overlay. */
@@ -447,26 +453,36 @@
   </div>
     <div class="panel" id="original-panel">
       <span class="label">Original</span>
+      <div class="verse-banner ru" id="verse-banner-ru">
+        <div class="verse-reference"></div>
+        <div class="verse-text"></div>
+      </div>
       <div class="lines" id="original-lines"></div>
     </div>
     <div class="panel" id="translated-panel">
       <span class="label">Translated</span>
+      <div class="verse-banner en" id="verse-banner-en">
+        <div class="verse-reference"></div>
+        <div class="verse-text"></div>
+      </div>
       <div class="lines" id="translated-lines"></div>
     </div>
     <div class="panel" id="portrait-panel" hidden>
       <span class="label">Original</span>
       <span class="label right">Translated</span>
+      <div class="verse-banner ru verse-banner-left" id="verse-banner-portrait-ru">
+        <div class="verse-reference"></div>
+        <div class="verse-text"></div>
+      </div>
+      <div class="verse-banner en verse-banner-right" id="verse-banner-portrait-en">
+        <div class="verse-reference"></div>
+        <div class="verse-text"></div>
+      </div>
       <div class="lines" id="portrait-lines">
         <div class="portrait-grid" id="portrait-grid"></div>
       </div>
     </div>
     <div id="idle-message">System Idle</div>
-  </div>
-
-  <div id="verse-overlay">
-    <div class="verse-reference" id="verse-reference"></div>
-    <div class="verse-text" id="verse-ru"></div>
-    <div class="verse-text" id="verse-en"></div>
   </div>
 
 
@@ -663,27 +679,30 @@
     for (const text of translateds) addLine('translated-lines', text, { forceNewBatch: true });
   }
 
-  // The verse overlay hangs from just below the header, whatever its height
-  // (it wraps to more rows on narrow screens).
-  const headerEl = document.getElementById('header');
-  const syncHeaderHeight = () =>
-    document.documentElement.style.setProperty('--header-h', `${headerEl.offsetHeight}px`);
-  new ResizeObserver(syncHeaderHeight).observe(headerEl);
-  syncHeaderHeight();
-
   const VERSE_DISPLAY_MS = 25000;
   let verseHideTimer = null;
+  // One banner per language per render mode - all four are kept in sync on
+  // every "verse" message; only the ones in the currently visible panel(s)
+  // are ever actually seen, same as the RTF indicators always update
+  // regardless of what's on screen.
+  const verseBanners = [
+    { el: document.getElementById('verse-banner-ru'), field: 'ru_text' },
+    { el: document.getElementById('verse-banner-en'), field: 'en_text' },
+    { el: document.getElementById('verse-banner-portrait-ru'), field: 'ru_text' },
+    { el: document.getElementById('verse-banner-portrait-en'), field: 'en_text' },
+  ];
 
   function showVerse(msg) {
-    document.getElementById('verse-reference').textContent = msg.reference;
-    document.getElementById('verse-ru').textContent = msg.ru_text || '';
-    document.getElementById('verse-en').textContent = msg.en_text || '';
-
-    const overlay = document.getElementById('verse-overlay');
-    overlay.classList.add('show');
+    for (const { el, field } of verseBanners) {
+      el.querySelector('.verse-reference').textContent = msg.reference;
+      el.querySelector('.verse-text').textContent = msg[field] || '';
+      el.classList.add('show');
+    }
 
     clearTimeout(verseHideTimer);
-    verseHideTimer = setTimeout(() => overlay.classList.remove('show'), VERSE_DISPLAY_MS);
+    verseHideTimer = setTimeout(() => {
+      for (const { el } of verseBanners) el.classList.remove('show');
+    }, VERSE_DISPLAY_MS);
   }
 
   function clearCaptions() {
@@ -691,7 +710,7 @@
     document.getElementById('translated-lines').innerHTML = '';
     portraitGrid.innerHTML = '';
     pendingTranslationCells = [];
-    document.getElementById('verse-overlay').classList.remove('show');
+    for (const { el } of verseBanners) el.classList.remove('show');
     clearTimeout(verseHideTimer);
   }
 
