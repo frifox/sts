@@ -593,6 +593,44 @@
     prunePortraitRows();
   }
 
+  // -- Switching Render mode: carries the existing transcript over into the
+  // new layout instead of clearing it. -----------------------------------
+  function textOf(el) {
+    return el.textContent.trim();
+  }
+
+  function transformLandscapeToPortrait() {
+    const originalFlow = document.getElementById('original-lines').querySelector('.flow');
+    const translatedFlow = document.getElementById('translated-lines').querySelector('.flow');
+    const originals = originalFlow ? Array.from(originalFlow.children).map(textOf).filter(Boolean) : [];
+    const translateds = translatedFlow ? Array.from(translatedFlow.children).map(textOf).filter(Boolean) : [];
+
+    portraitGrid.innerHTML = '';
+    pendingTranslationCells = [];
+    // Landscape doesn't track which original a translated snippet came from,
+    // and the two panels prune independently, so they can hold different
+    // numbers of retained lines. Pairing the most recent of each by position
+    // is the best available approximation; any extra older lines on the
+    // longer side have no partner to line up with and are dropped.
+    const n = Math.min(originals.length, translateds.length);
+    const recentOriginals = originals.slice(originals.length - n);
+    const recentTranslateds = translateds.slice(translateds.length - n);
+    for (let i = 0; i < n; i++) {
+      addPortraitOriginal(recentOriginals[i]);
+      addPortraitTranslated(recentTranslateds[i]);
+    }
+  }
+
+  function transformPortraitToLandscape() {
+    const originals = Array.from(portraitGrid.querySelectorAll('.original')).map(textOf).filter(Boolean);
+    const translateds = Array.from(portraitGrid.querySelectorAll('.translated')).map(textOf).filter(Boolean);
+
+    document.getElementById('original-lines').querySelector('.flow')?.remove();
+    document.getElementById('translated-lines').querySelector('.flow')?.remove();
+    for (const text of originals) addLine('original-lines', text);
+    for (const text of translateds) addLine('translated-lines', text);
+  }
+
   // The verse overlay hangs from just below the header, whatever its height
   // (it wraps to more rows on narrow screens).
   const headerEl = document.getElementById('header');
@@ -680,14 +718,17 @@
   updatePanelVisibility();  // apply it immediately, before the first status message arrives
 
   renderModeSelect.addEventListener('change', () => {
-    renderMode = renderModeSelect.value;
-    try { localStorage.setItem('sts-render-mode', renderMode); } catch { /* ignore */ }
-    // The two layouts accumulate captions differently (one flowing paragraph
-    // per panel vs. one row per snippet pair) - switching mid-stream would
-    // need translating history between the two, so it's simpler and safer
-    // to just start the visible transcript fresh in the new layout.
-    clearCaptions();
+    const newMode = renderModeSelect.value;
+    if (newMode === renderMode) return;
+    renderMode = newMode;
+    // Reveal the target panel *before* transforming into it - the pruning
+    // inside addPortraitOriginal/addLine measures the container's real
+    // rendered height, which is 0 while it's still `hidden`.
     updatePanelVisibility();
+    // Carry the existing transcript over into the new layout rather than
+    // wiping it - see transformLandscapeToPortrait/transformPortraitToLandscape.
+    if (newMode === 'portrait') transformLandscapeToPortrait(); else transformPortraitToLandscape();
+    try { localStorage.setItem('sts-render-mode', renderMode); } catch { /* ignore */ }
   });
 
   function updatePanelVisibility() {
