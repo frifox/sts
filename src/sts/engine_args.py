@@ -26,6 +26,13 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--whisper-model", default="large-v3", help="faster-whisper model size/name")
     parser.add_argument(
+        "--asr-compute-type",
+        default=None,
+        help="faster-whisper quantization. Default: float16 on GPU, int8 on CPU. 'int8_float16' (GPU only) "
+        "trades a little accuracy for a smaller VRAM footprint and faster inference - useful when ASR has "
+        "to share an 8GB card with translation and TTS.",
+    )
+    parser.add_argument(
         "--tts-backend",
         default=None,
         choices=["xtts", "qwen3"],
@@ -128,7 +135,7 @@ def build_engine_config(args: argparse.Namespace, prefer_backend: str = "xtts") 
 
     cfg = PipelineConfig()
     cfg.asr.device = asr_device
-    cfg.asr.compute_type = "float16" if asr_device == "cuda" else "int8"
+    cfg.asr.compute_type = args.asr_compute_type or ("float16" if asr_device == "cuda" else "int8")
     cfg.asr.model_size = args.whisper_model
     cfg.translation.device = translation_device
     cfg.tts.device = tts_device
