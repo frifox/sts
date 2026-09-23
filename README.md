@@ -1,4 +1,4 @@
-# sts
+# STS: Speech To Speech
 
 Live speech-to-speech pipeline: listens to a sound card feed of a Russian
 speaker (pulpit audio, Baptist Christian sermon context), transcribes,
