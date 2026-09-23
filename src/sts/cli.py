@@ -73,7 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-silence-ms",
         type=int,
         default=None,
-        help="Pause length (ms) that ends a caption segment; lower = shorter, more frequent captions (default 700)",
+        help="Pause length (ms) that ends a caption segment; lower = shorter, more frequent captions (default 500)",
     )
     parser.add_argument(
         "--max-segment-s",

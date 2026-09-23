@@ -28,7 +28,7 @@ class VADConfig:
     # Silero VAD speech probability threshold.
     threshold: float = 0.5
     # How much trailing silence (ms) closes out a speech segment.
-    min_silence_ms: int = 700
+    min_silence_ms: int = 500
     # Segments shorter than this are dropped as noise.
     min_speech_ms: int = 250
     # Hard cap so a run-on speaker doesn't stall translation/TTS.
