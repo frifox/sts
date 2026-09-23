@@ -44,7 +44,7 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "--default-voice",
         default=None,
         help="Built-in (non-cloned) voice used when no trained/cloned voice is active: an XTTS speaker name, "
-        "e.g. 'Craig Gutsy', or male/female (xtts default: Dionisio Schuyler; qwen3: Aiden, Ryan)",
+        "e.g. 'Craig Gutsy', or male/female (xtts default: Adde Michal; qwen3: Aiden, Ryan)",
     )
     parser.add_argument(
         "--accent-voice",
