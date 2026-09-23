@@ -118,6 +118,28 @@
   #portrait-lines .original { color: #9cdcfe; }
   #portrait-lines .translated { color: #e8c07d; }
 
+  /* Portrait mode has no separate original/translated panels to hide (both
+     columns live in one shared panel) - Caption/Translate turning off is
+     applied to just that column instead: its own cells, label, verse banner
+     and recall chip, and the grid collapses to a single column so the
+     remaining side takes the full width, same as when a whole landscape
+     panel is hidden and the other one gets all the space. */
+  #portrait-panel.hide-original .label:not(.right),
+  #portrait-panel.hide-original #verse-banner-portrait-ru,
+  #portrait-panel.hide-original #verse-chip-portrait-ru,
+  #portrait-panel.hide-original .portrait-grid .original,
+  #portrait-panel.hide-translated .label.right,
+  #portrait-panel.hide-translated #verse-banner-portrait-en,
+  #portrait-panel.hide-translated #verse-chip-portrait-en,
+  #portrait-panel.hide-translated .portrait-grid .translated {
+    display: none;
+  }
+
+  #portrait-panel.hide-original .portrait-grid,
+  #portrait-panel.hide-translated .portrait-grid {
+    grid-template-columns: 1fr;
+  }
+
   #indicators {
     flex: 0 0 auto;
     font-size: 0.75rem;
@@ -870,6 +892,8 @@
     originalPanel.hidden = portrait || !lastStatus.active;
     translatedPanel.hidden = portrait || !lastStatus.translation_enabled;
     portraitPanel.hidden = !portrait || (!lastStatus.active && !lastStatus.translation_enabled);
+    portraitPanel.classList.toggle('hide-original', !lastStatus.active);
+    portraitPanel.classList.toggle('hide-translated', !lastStatus.translation_enabled);
     idleMessage.classList.toggle('show', !lastStatus.active && !lastStatus.translation_enabled);
   }
 
