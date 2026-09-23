@@ -118,3 +118,25 @@ def split_complete(text: str) -> tuple[str, str]:
     if not match:
         return "", text.strip()
     return text[: match.end()].strip(), text[match.end() :].strip()
+
+
+# Parakeet's tokenizer has no token for any style of quotation mark - Russian
+# «», German-style „", and curly "" all collapse to the same out-of-vocabulary
+# token, which it renders as U+2047 (⁇) instead of dropping silently. Left
+# alone, that reaches both the caption and the translator as a stray "⁇"
+# rather than a quote, losing whatever emphasis/quoting the speaker intended.
+_UNK_QUOTE = "⁇"
+
+
+def restore_unk_quotes(text: str) -> str:
+    """Turns Parakeet's "unknown token" marker back into a plain '"',
+    alternating which side keeps its surrounding space so it hugs the quoted
+    text (opening: sheds the space after it; closing: sheds the space
+    before it) rather than floating with a gap on the inside."""
+    if _UNK_QUOTE not in text:
+        return text
+    pieces = text.split(_UNK_QUOTE)
+    out = pieces[0]
+    for i, piece in enumerate(pieces[1:]):
+        out = f'{out}"{piece.lstrip()}' if i % 2 == 0 else f'{out.rstrip()}"{piece}'
+    return out

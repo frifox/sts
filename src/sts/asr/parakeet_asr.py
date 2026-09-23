@@ -11,7 +11,7 @@ Whisper has in testing; revisit if that changes.
 import numpy as np
 
 from sts.config import ASRConfig
-from sts.textclean import clean_transcript
+from sts.textclean import clean_transcript, restore_unk_quotes
 
 MODEL_NAME = "nvidia/parakeet-tdt-0.6b-v3"
 
@@ -37,4 +37,7 @@ class ParakeetASR:
         # WhisperASR.transcribe.
         out = self.model.transcribe(audio, verbose=False)
         text = out[0].text if hasattr(out[0], "text") else out[0]
-        return clean_transcript(text.strip())
+        # Its 8192-token vocabulary has no token for any style of quotation
+        # mark, so it emits its "unknown token" placeholder for one instead;
+        # restored to a plain '"' before disfluency cleanup sees it.
+        return clean_transcript(restore_unk_quotes(text.strip()))

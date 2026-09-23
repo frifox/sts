@@ -135,3 +135,21 @@ def test_split_complete():
     assert split_complete("А? Б! В...") == ("А? Б! В...", "")
     # only the LAST terminator matters - everything up to it is "complete"
     assert split_complete("Первое. Второе. третье без точки") == ("Первое. Второе.", "третье без точки")
+
+
+def test_restore_unk_quotes():
+    from sts.textclean import restore_unk_quotes
+
+    assert restore_unk_quotes(
+        "И вот в этом разделе первым пунктом я называю ⁇ Пренесение плода "
+        "свидетельствует о нашей связи со Христом ⁇."
+    ) == (
+        "И вот в этом разделе первым пунктом я называю "
+        '"Пренесение плода свидетельствует о нашей связи со Христом".'
+    )
+    assert restore_unk_quotes("нет кавычек тут") == "нет кавычек тут"
+    assert restore_unk_quotes("") == ""
+    assert restore_unk_quotes("А ⁇ первая ⁇, потом ⁇ вторая ⁇ фраза.") == 'А "первая", потом "вторая" фраза.'
+    # an unpaired marker (e.g. a segment boundary cut mid-quote) still becomes
+    # a quote character rather than staying as the raw placeholder
+    assert restore_unk_quotes("⁇ только открывающая") == '"только открывающая'
