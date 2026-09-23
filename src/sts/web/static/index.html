@@ -505,6 +505,15 @@
   </div>
 
 <script>
+  // How much scrolled-off history is kept around (as a multiple of the
+  // container's own visible height) before the oldest snippets/rows are
+  // actually dropped from the DOM. Only the bottom `1x` is ever visible
+  // (clipped by the container's `overflow: hidden`, still bottom-aligned/
+  // "scrolled up" as new text arrives) - the rest just sits there unseen,
+  // so a page reload or re-render of history isn't limited to only what's
+  // currently on screen.
+  const HISTORY_RETENTION = 2;
+
   function addLine(containerId, text) {
     const container = document.getElementById(containerId);
     let flow = container.querySelector('.flow');
@@ -520,13 +529,14 @@
     for (const previous of flow.children) previous.classList.add('old');
     flow.appendChild(snippet);
 
-    // Drop the oldest snippets once the text no longer fits, so the DOM (and
-    // the visible page) never grows without bound during a long stream.
-    // (The container is bottom-aligned, so overflow extends upward where
-    // scrollHeight can't see it; compare the text block's own height instead.)
+    // Drop the oldest snippets once even the retained (not just visible)
+    // history no longer fits, so the DOM (and the visible page) never grows
+    // without bound during a long stream. (The container is bottom-aligned,
+    // so overflow extends upward where scrollHeight can't see it; compare
+    // the text block's own height instead.)
     const style = getComputedStyle(container);
     const available = container.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-    while (flow.children.length > 1 && flow.offsetHeight > available) {
+    while (flow.children.length > 1 && flow.offsetHeight > available * HISTORY_RETENTION) {
       flow.removeChild(flow.firstChild);
     }
   }
@@ -554,7 +564,7 @@
     // for the landscape panels.
     const style = getComputedStyle(portraitLines);
     const available = portraitLines.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-    while (portraitGrid.children.length > 2 && portraitGrid.offsetHeight > available) {
+    while (portraitGrid.children.length > 2 && portraitGrid.offsetHeight > available * HISTORY_RETENTION) {
       portraitGrid.removeChild(portraitGrid.firstChild);
       portraitGrid.removeChild(portraitGrid.firstChild);
     }
