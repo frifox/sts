@@ -585,11 +585,14 @@
   // currently on screen.
   const HISTORY_RETENTION = 2;
 
-  // True while the "System Idle" state is showing (Caption and Translate both
-  // off): the header's RTF readings are blanked to "–" then, and any reading
-  // still in flight is ignored, rather than leaving the last pre-idle
-  // numbers up as if they were current. See updatePanelVisibility().
-  let rtfIdle = false;
+  // Per-stage: true while that stage's engine is off (Caption -> asr,
+  // Translate -> translate, Voice -> voice), or for all three while the
+  // "System Idle" state is showing. An indicator whose stage is off reads
+  // "–" and ignores any reading still in flight, rather than leaving the
+  // last number up as if it were current - e.g. an engine switched off
+  // mid-speech. See updatePanelVisibility().
+  const rtfOff = { asr: false, translate: false, voice: false };
+  const RTF_ELEMENT_IDS = { asr: 'rtf-asr', translate: 'rtf-translate', voice: 'rtf-voice' };
 
   // A single backend commit can be pushed as several separate "original"/
   // "translated" messages, one per sentence (see Pipeline._commit_new_asr_text
@@ -902,13 +905,15 @@
     portraitPanel.classList.toggle('hide-translated', !lastStatus.translation_enabled);
     const idle = !lastStatus.active && !lastStatus.translation_enabled;
     idleMessage.classList.toggle('show', idle);
-    rtfIdle = idle;
-    if (idle) {
-      for (const el of document.querySelectorAll('.rtf-item')) {
-        el.querySelector('b').textContent = '–';
-        el.classList.remove('slow');
-        el.classList.add('unknown');
-      }
+    rtfOff.asr = idle || !lastStatus.active;
+    rtfOff.translate = idle || !lastStatus.translation_enabled;
+    rtfOff.voice = idle || !lastStatus.voice_enabled;
+    for (const [stage, off] of Object.entries(rtfOff)) {
+      if (!off) continue;
+      const el = document.getElementById(RTF_ELEMENT_IDS[stage]);
+      el.querySelector('b').textContent = '–';
+      el.classList.remove('slow');
+      el.classList.add('unknown');
     }
   }
 
@@ -1050,11 +1055,9 @@
     asrBackendSelect.disabled = false;
   }
 
-  const RTF_ELEMENT_IDS = { asr: 'rtf-asr', translate: 'rtf-translate', voice: 'rtf-voice' };
-
   function applyRtf(msg) {
     const id = RTF_ELEMENT_IDS[msg.stage];
-    if (!id || typeof msg.value !== 'number' || rtfIdle) return;
+    if (!id || typeof msg.value !== 'number' || rtfOff[msg.stage]) return;
     const el = document.getElementById(id);
     el.querySelector('b').textContent = `${msg.value.toFixed(2)}x`;
     el.classList.remove('unknown');
