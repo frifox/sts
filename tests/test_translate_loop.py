@@ -23,6 +23,7 @@ def _stub_pipeline(translate_sentences):
     p.translator = FakeTranslator()
     p.broadcaster = Broadcaster()
     p._translations = queue.Queue()
+    p._last_asr_audio_s = 0.0  # no segment transcribed yet - _broadcast_rtf("translate", ...) is a no-op
     return p
 
 

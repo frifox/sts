@@ -1,0 +1,155 @@
+"""Verifies the live real-time-factor (RTF) readings shown in the caption
+page's header: processing time / audio duration for the ASR, translate, and
+voice stages, so an operator can see whether each stage is keeping up with
+the live speaker (below 1.0x) or falling behind (at/above 1.0x)."""
+
+import queue
+import threading
+import time
+
+import numpy as np
+import pytest
+
+from sts.config import PipelineConfig
+from sts.control import RecognitionControl
+from sts.pipeline import Pipeline
+
+
+class _Broadcaster:
+    def __init__(self):
+        self.rtf = []
+        self.original = []
+
+    def broadcast_rtf(self, stage, value):
+        self.rtf.append((stage, value))
+
+    def broadcast_original(self, text):
+        self.original.append(text)
+
+    def broadcast_translated(self, text):
+        pass
+
+
+def test_broadcast_rtf_sends_processing_over_audio_ratio():
+    p = object.__new__(Pipeline)
+    p.broadcaster = _Broadcaster()
+
+    p._broadcast_rtf("asr", processing_s=1.0, audio_s=2.0)
+
+    assert p.broadcaster.rtf == [("asr", 0.5)]
+
+
+def test_broadcast_rtf_skips_when_audio_duration_is_not_positive():
+    p = object.__new__(Pipeline)
+    p.broadcaster = _Broadcaster()
+
+    p._broadcast_rtf("translate", processing_s=1.0, audio_s=0.0)
+    p._broadcast_rtf("translate", processing_s=1.0, audio_s=-1.0)
+
+    assert p.broadcaster.rtf == []
+
+
+def test_broadcast_rtf_is_a_noop_with_no_broadcaster():
+    p = object.__new__(Pipeline)
+    p.broadcaster = None
+
+    p._broadcast_rtf("voice", processing_s=1.0, audio_s=1.0)  # must not raise
+
+
+def test_asr_loop_tracks_audio_duration_and_broadcasts_rtf():
+    p = object.__new__(Pipeline)
+    p.broadcaster = _Broadcaster()
+    p.bible_lookup = None  # "Привет." has no bible reference, so this is never touched
+    p.cfg = PipelineConfig()
+    p._asr_lock = threading.Lock()
+    p._segments = queue.Queue()
+    p._stop = threading.Event()
+    p._last_asr_audio_s = 0.0
+    p._committed_text = ""
+    p._transcripts = queue.Queue()
+
+    class FakeAsr:
+        def transcribe(self, audio):
+            time.sleep(0.05)
+            return "Привет."
+
+    p.asr = FakeAsr()
+    segment = np.zeros(p.cfg.audio.sample_rate * 2, dtype=np.float32)  # 2s of audio
+    p._segments.put(("final", segment))
+
+    thread = threading.Thread(target=Pipeline._asr_loop, args=(p,), daemon=True)
+    thread.start()
+    thread.join(timeout=0.5)  # loop blocks forever on the next get() - daemon thread is fine to leave running
+
+    assert p._last_asr_audio_s == 2.0
+    assert len(p.broadcaster.rtf) == 1
+    stage, value = p.broadcaster.rtf[0]
+    assert stage == "asr"
+    assert value == pytest.approx(0.025, abs=0.05)  # ~0.05s processing / 2s audio
+    assert p._transcripts.get_nowait() == "Привет."
+
+
+def test_translate_segment_uses_the_last_asr_audio_duration():
+    p = object.__new__(Pipeline)
+    p.broadcaster = _Broadcaster()
+    p._translations = queue.Queue()
+    p._last_asr_audio_s = 4.0
+
+    class FakeTranslator:
+        def translate_sentences(self, text):
+            yield "Translated."
+
+    p.translator = FakeTranslator()
+
+    Pipeline._translate_segment(p, "Text.")
+
+    assert len(p.broadcaster.rtf) == 1
+    stage, value = p.broadcaster.rtf[0]
+    assert stage == "translate"
+    assert 0 <= value < 1.0  # near-instant translation over 4s of source audio
+
+
+def test_translate_segment_skips_rtf_before_any_segment_is_transcribed():
+    p = object.__new__(Pipeline)
+    p.broadcaster = _Broadcaster()
+    p._translations = queue.Queue()
+    p._last_asr_audio_s = 0.0  # nothing transcribed yet this session
+
+    class FakeTranslator:
+        def translate_sentences(self, text):
+            yield "Translated."
+
+    p.translator = FakeTranslator()
+
+    Pipeline._translate_segment(p, "Text.")
+
+    assert p.broadcaster.rtf == []
+
+
+def test_tts_loop_broadcasts_voice_rtf_from_its_own_output_duration():
+    p = object.__new__(Pipeline)
+    p.broadcaster = _Broadcaster()
+    p.cfg = PipelineConfig()
+    p.control = RecognitionControl(16000)
+    p.control.enable_voice()
+    p._translations = queue.Queue()
+    p._audio = queue.Queue()
+    p._stop = threading.Event()
+
+    class FakeTts:
+        def synthesize(self, text):
+            time.sleep(0.05)
+            return np.zeros(24_000, dtype=np.float32), 24_000  # 1s of audio at 24kHz
+
+    p.tts = FakeTts()
+    p._translations.put("Hello.")
+
+    thread = threading.Thread(target=Pipeline._tts_loop, args=(p,), daemon=True)
+    thread.start()
+    thread.join(timeout=0.5)
+
+    assert len(p.broadcaster.rtf) == 1
+    stage, value = p.broadcaster.rtf[0]
+    assert stage == "voice"
+    assert value == pytest.approx(0.05, abs=0.05)  # ~0.05s processing / 1s of synthesized audio
+    assert p._audio.get_nowait()[0].size == 24_000

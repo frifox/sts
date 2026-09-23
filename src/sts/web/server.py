@@ -51,6 +51,11 @@ class CaptionBroadcaster:
         self._last_engines: dict | None = None
         self._last_design: dict = {"type": "design", "state": "idle", "message": "", "has_voice": False}
         self._last_stage: dict = {"type": "stage", "text": "Starting…", "ready": False}
+        # Latest real-time-factor reading per pipeline stage ("asr" |
+        # "translate" | "voice"), so a page that connects mid-session sees
+        # the current numbers immediately instead of blank ones until the
+        # next segment.
+        self._last_rtf: dict[str, dict] = {}
         self._history: dict[str, deque[str]] = {
             "original": deque(maxlen=CAPTION_HISTORY_LINES),
             "translated": deque(maxlen=CAPTION_HISTORY_LINES),
@@ -73,6 +78,8 @@ class CaptionBroadcaster:
             await websocket.send_text(json.dumps(self._last_devices))
         if self._last_engines is not None:
             await websocket.send_text(json.dumps(self._last_engines))
+        for message in self._last_rtf.values():
+            await websocket.send_text(json.dumps(message))
         with self._history_lock:
             history = {kind: list(lines) for kind, lines in self._history.items()}
         for kind, lines in history.items():
@@ -186,6 +193,17 @@ class CaptionBroadcaster:
         if self.loop is None:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all({"type": "reset"}), self.loop)
+
+    def broadcast_rtf(self, stage: str, value: float) -> None:
+        """Real-time factor (processing time / audio duration) for one
+        pipeline stage: "asr", "translate", or "voice". Below 1.0 means that
+        stage is keeping up with live speech; above 1.0 means it's falling
+        behind."""
+        message = {"type": "rtf", "stage": stage, "value": value}
+        self._last_rtf[stage] = message
+        if self.loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
     def broadcast_engines(self, message: dict) -> None:
         """Static ASR/translation/TTS model + device info for the header dropdowns."""

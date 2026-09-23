@@ -122,6 +122,11 @@ class Pipeline:
         # _segment_loop/_asr_loop. Reset to "" whenever a segment closes.
         self._committed_text = ""
         self._frames_since_partial = 0
+        # Most recently transcribed segment's audio duration (seconds) - used
+        # as translate's own real-time-factor denominator too (see
+        # _translate_segment), since translated text has no duration of its
+        # own to measure against.
+        self._last_asr_audio_s = 0.0
         self._translations: queue.Queue = queue.Queue()
         self._audio: queue.Queue = queue.Queue()  # synthesized clips waiting to play
         self._threads: list[threading.Thread] = []
@@ -611,6 +616,16 @@ class Pipeline:
                 active_speaker_id=self._active_speaker_id,
             )
 
+    def _broadcast_rtf(self, stage: str, processing_s: float, audio_s: float) -> None:
+        """Real-time factor (processing time / audio duration) for one
+        pipeline stage - below 1.0 is faster than the speaker, above 1.0
+        means that stage is falling behind live speech. `audio_s` <= 0 means
+        there's nothing yet to measure against (e.g. translate before the
+        first segment is transcribed), so it's skipped rather than dividing
+        by zero."""
+        if self.broadcaster and audio_s > 0:
+            self.broadcaster.broadcast_rtf(stage, processing_s / audio_s)
+
     def _broadcast_library(self) -> None:
         if self.broadcaster:
             speakers = [
@@ -688,8 +703,11 @@ class Pipeline:
             t0 = time.monotonic()
             with self._asr_lock:
                 text = self.asr.transcribe(segment)
-            vlog("asr", f"transcribed {len(segment) / self.cfg.audio.sample_rate:.1f}s of audio "
-                        f"({kind}) in {time.monotonic() - t0:.2f}s")
+            processing_s = time.monotonic() - t0
+            audio_s = len(segment) / self.cfg.audio.sample_rate
+            vlog("asr", f"transcribed {audio_s:.1f}s of audio ({kind}) in {processing_s:.2f}s")
+            self._last_asr_audio_s = audio_s
+            self._broadcast_rtf("asr", processing_s, audio_s)
             self._commit_new_asr_text(text, final=kind == "final")
 
     def _commit_new_asr_text(self, full_text: str, final: bool) -> None:
@@ -780,11 +798,13 @@ class Pipeline:
         wait on the whole block's slowest (usually last) sentence to translate."""
         t0 = time.monotonic()
         for translated in self.translator.translate_sentences(text):
-            vlog("translate", f"translated a sentence in {time.monotonic() - t0:.2f}s")
+            processing_s = time.monotonic() - t0
+            vlog("translate", f"translated a sentence in {processing_s:.2f}s")
             if translated:
                 print(f"[en] {translated}")
                 if self.broadcaster:
                     self.broadcaster.broadcast_translated(translated)
+                self._broadcast_rtf("translate", processing_s, self._last_asr_audio_s)
                 self._translations.put(translated)
             t0 = time.monotonic()
 
@@ -802,8 +822,11 @@ class Pipeline:
                 for audio, sample_rate in self._synthesize_pieces(text):
                     if not audio.size:
                         continue
-                    vlog("tts", f"synthesized {audio.size / sample_rate:.1f}s of speech in "
-                                f"{time.monotonic() - t0:.2f}s ({self._translations.qsize()} sentences waiting)")
+                    processing_s = time.monotonic() - t0
+                    audio_s = audio.size / sample_rate
+                    vlog("tts", f"synthesized {audio_s:.1f}s of speech in {processing_s:.2f}s "
+                                f"({self._translations.qsize()} sentences waiting)")
+                    self._broadcast_rtf("voice", processing_s, audio_s)
                     # A longer pause before a new translated text, a shorter one
                     # between the sentences within it.
                     pause = self.cfg.audio.pause_between_s if first_piece else self.cfg.audio.pause_within_s

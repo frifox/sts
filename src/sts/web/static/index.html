@@ -98,6 +98,17 @@
     gap: 1.2em;
   }
 
+  #rtf-indicators {
+    display: flex;
+    align-items: center;
+    gap: 0.9em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .rtf-item b { color: #4cbb6c; font-weight: 600; }
+  .rtf-item.slow b { color: #e0864c; }
+  .rtf-item.unknown b { color: #888; }
+
   #pause-control {
     display: flex;
     align-items: center;
@@ -404,6 +415,11 @@
       <button id="btn-reset">Reset</button>
     </div>
     <div id="indicators">
+      <div id="rtf-indicators" title="Real-time factor per stage: processing time / audio duration. Below 1.0x keeps up with the speaker; at or above 1.0x, it's falling behind.">
+        <span class="rtf-item unknown" id="rtf-asr">ASR <b>–</b></span>
+        <span class="rtf-item unknown" id="rtf-translate">Translate <b>–</b></span>
+        <span class="rtf-item unknown" id="rtf-voice">Voice <b>–</b></span>
+      </div>
       <div id="stage"></div>
       <div id="status" class="disconnected">Not connected</div>
     </div>
@@ -700,6 +716,17 @@
       asrBackendSelect.value = msg.asr?.backend || 'whisper';
     }
     asrBackendSelect.disabled = false;
+  }
+
+  const RTF_ELEMENT_IDS = { asr: 'rtf-asr', translate: 'rtf-translate', voice: 'rtf-voice' };
+
+  function applyRtf(msg) {
+    const id = RTF_ELEMENT_IDS[msg.stage];
+    if (!id || typeof msg.value !== 'number') return;
+    const el = document.getElementById(id);
+    el.querySelector('b').textContent = `${msg.value.toFixed(2)}x`;
+    el.classList.remove('unknown');
+    el.classList.toggle('slow', msg.value >= 1.0);
   }
 
   // Switching reloads the whole ASR engine (several seconds to about a
@@ -1045,6 +1072,7 @@
       else if (msg.type === 'design') applyDesign(msg);
       else if (msg.type === 'devices') applyDevices(msg);
       else if (msg.type === 'engines') applyEngines(msg);
+      else if (msg.type === 'rtf') applyRtf(msg);
     };
   }
 
