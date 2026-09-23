@@ -119,13 +119,11 @@
   #pause-slider { width: 7.5em; accent-color: #7a8aa0; cursor: pointer; }
   #pause-value { min-width: 4.2em; font-variant-numeric: tabular-nums; }
 
-  #status, #stage {
+  #stage {
     display: flex;
     align-items: center;
     gap: 0.45em;
   }
-
-  #stage:empty { display: none; }
 
   #stage::before {
     content: '';
@@ -141,16 +139,6 @@
   @keyframes pulse {
     50% { opacity: 0.3; }
   }
-
-  #status::before {
-    content: '';
-    width: 0.6em;
-    height: 0.6em;
-    border-radius: 50%;
-    background: #d9534f;
-  }
-
-  #status.connected::before { background: #4cbb6c; }
 
   #verse-overlay {
     position: fixed;
@@ -420,8 +408,7 @@
         <span class="rtf-item unknown" id="rtf-translate">Translate <b>–</b></span>
         <span class="rtf-item unknown" id="rtf-voice">Voice <b>–</b></span>
       </div>
-      <div id="stage"></div>
-      <div id="status" class="disconnected">Not connected</div>
+      <div id="stage">Connecting…</div>
     </div>
   </div>
     <div class="panel" id="original-panel">
@@ -1036,7 +1023,6 @@
   }
 
   function connect() {
-    const status = document.getElementById('status');
     const stage = document.getElementById('stage');
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -1044,16 +1030,15 @@
 
     ws.onopen = () => {
       // The server replays recent captions on connect, so start clean to
-      // avoid duplicates after a reconnect.
+      // avoid duplicates after a reconnect. It also replays the current
+      // stage right away, so "Reconnecting…" below is only visible for the
+      // brief gap until that arrives.
       clearCaptions();
-      status.textContent = 'Connected';
-      status.className = 'connected';
     };
     ws.onerror = () => ws.close();
     ws.onclose = () => {
-      status.textContent = 'Not connected';
-      status.className = 'disconnected';
-      stage.textContent = '';
+      stage.textContent = 'Reconnecting…';
+      stage.className = '';
       setTimeout(connect, 1000);
     };
     ws.onmessage = (event) => {
