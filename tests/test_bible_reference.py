@@ -77,3 +77,36 @@ def test_ordinal_seven_is_parsed():
     the declension tolerance, so no spoken form of "seventh" ever matched."""
     ref = _single("От Иоанна глава пятнадцать стих седьмой.")
     assert (ref.book, ref.chapter, ref.verse) == ("John", 15, 7)
+
+
+def test_first_n_verses_stated_before_the_book():
+    """Regression: "N первых стихов в M главе [Книга]" puts the book name
+    *last*, after the verse count and chapter - the reverse of every other
+    supported phrasing. Means verses 1 through N, not a single verse N."""
+    ref = _single(
+        "В начале своей проповеди я прочитаю 8 первых стихов в 15 главе Евангелия от Иоанна."
+    )
+    assert (ref.book, ref.chapter, ref.verse, ref.verse_end) == ("John", 15, 1, 8)
+
+
+def test_first_n_verses_with_first_word_before_the_count():
+    ref = _single("Я прочитаю первых 8 стихов в 15 главе Иоанна.")
+    assert (ref.book, ref.chapter, ref.verse, ref.verse_end) == ("John", 15, 1, 8)
+
+
+def test_first_n_verses_with_word_numbers():
+    ref = _single("Прочитаю восемь первых стихов в пятнадцатой главе Иоанна.")
+    assert (ref.book, ref.chapter, ref.verse, ref.verse_end) == ("John", 15, 1, 8)
+
+
+def test_first_one_verse_has_no_verse_end():
+    """"1 первый стих" (count of exactly 1) shouldn't render as a "1-1" range."""
+    ref = _single("Прочитаю 1 первый стих 15 главы Иоанна.")
+    assert (ref.book, ref.chapter, ref.verse, ref.verse_end) == ("John", 15, 1, None)
+
+
+def test_bare_verse_count_without_first_is_not_a_reference():
+    """"8 стихов" alone doesn't say which 8 verses are meant (could start
+    anywhere) - showing a guess would risk displaying the wrong passage, so
+    this is deliberately left undetected rather than assumed to mean 1-8."""
+    assert find_references("Прочитаю 8 стихов в 15 главе Иоанна.") == []

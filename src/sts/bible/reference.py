@@ -16,8 +16,8 @@ from sts.bible.numbers import parse_number_words
 
 _TOKEN_RE = re.compile(r"[а-яё]+|\d+")
 
-_CHAPTER_KEYWORDS = {"глава", "гл"}
-_VERSE_KEYWORDS = {"стих", "стиха", "стихи", "ст"}
+_CHAPTER_KEYWORDS = {"глава", "главе", "главы", "гл"}
+_VERSE_KEYWORDS = {"стих", "стиха", "стихи", "стихов", "ст"}
 _RANGE_KEYWORDS = {"по", "до"}
 # "стихи с 5 по 7" - the "с" ("from") before a range's starting number, only
 # ever said right after a verse keyword introducing a range.
@@ -105,57 +105,125 @@ def _match_book_at(tokens: list[str], idx: int) -> BookInfo | None:
     return None
 
 
+def _match_forward_at(tokens: list[str], i: int) -> tuple[BibleReference, int] | None:
+    """The common shape: book name first, chapter and verse(s) after it, e.g.
+    "Матфея 1:15" or "Евангелие от Иоанна, глава 15, стихи с 5 по 7"."""
+    book = _match_book_at(tokens, i)
+    if book is None:
+        return None
+
+    j = i + len(book.stems)
+    if j < len(tokens) and tokens[j] in _CHAPTER_KEYWORDS:
+        j += 1
+
+    chapter_match = _read_number(tokens, j)
+    if chapter_match is None:
+        return None
+    chapter, consumed = chapter_match
+    j += consumed
+
+    if j < len(tokens) and tokens[j] in _VERSE_KEYWORDS:
+        j += 1
+        if j < len(tokens) and tokens[j] in _RANGE_START_KEYWORDS:
+            j += 1
+
+    verse_match = _read_number(tokens, j)
+    if verse_match is None:
+        return None
+    verse, consumed = verse_match
+    j += consumed
+
+    verse_end = None
+    if j < len(tokens) and tokens[j] in _RANGE_KEYWORDS:
+        end_match = _read_number(tokens, j + 1)
+        if end_match is not None:
+            verse_end, consumed = end_match
+            j += 1 + consumed
+    elif j < len(tokens) and tokens[j].isdigit() and int(tokens[j]) > verse:
+        # Written shorthand "22-23" tokenizes as adjacent bare digits (the
+        # hyphen is dropped) with no "по"/"до" between them.
+        verse_end = int(tokens[j])
+        j += 1
+
+    ref = BibleReference(book=book.key, ru_label=book.ru_label, chapter=chapter, verse=verse, verse_end=verse_end)
+    return ref, j
+
+
+def _find_book_ahead(tokens: list[str], start: int, max_ahead: int = 6) -> tuple[BookInfo, int] | None:
+    """Scans forward from `start` for a book name, for the reversed pattern
+    below - filler words in between ("Евангелия", "от") aren't required,
+    just skipped, the same way the forward scan already ignores them before
+    a book name."""
+    for idx in range(start, min(start + max_ahead, len(tokens))):
+        book = _match_book_at(tokens, idx)
+        if book is not None:
+            return book, idx + len(book.stems)
+    return None
+
+
+def _match_first_n_verses_at(tokens: list[str], i: int) -> tuple[BibleReference, int] | None:
+    """"N первых стихов в M главе [Книга]" (also "первых N стихов ..."): the
+    verse count and chapter are said before the book name, as when
+    introducing a reading ("Я прочитаю 8 первых стихов в 15 главе Евангелия
+    от Иоанна"). Only the unambiguous "first N" phrasing is recognized - a
+    bare count with no "первых"/"первые" doesn't say which verses are meant
+    (verse 1 to N? some other range?), so it's left alone rather than
+    guessing and showing the wrong passage."""
+    j = i
+    leading_first = tokens[j].startswith("перв") if j < len(tokens) else False
+    if leading_first:
+        j += 1
+
+    count_match = _read_number(tokens, j)
+    if count_match is None:
+        return None
+    count, consumed = count_match
+    j += consumed
+
+    if not leading_first:
+        if j < len(tokens) and tokens[j].startswith("перв"):
+            j += 1
+        else:
+            return None
+
+    if j >= len(tokens) or tokens[j] not in _VERSE_KEYWORDS:
+        return None
+    j += 1
+    if j < len(tokens) and tokens[j] == "в":  # "стихов в 15 главе" - "in chapter 15"
+        j += 1
+
+    chapter_match = _read_number(tokens, j)
+    if chapter_match is None:
+        return None
+    chapter, consumed = chapter_match
+    j += consumed
+
+    if j >= len(tokens) or tokens[j] not in _CHAPTER_KEYWORDS:
+        return None
+    j += 1
+
+    found = _find_book_ahead(tokens, j)
+    if found is None:
+        return None
+    book, end = found
+
+    ref = BibleReference(
+        book=book.key, ru_label=book.ru_label, chapter=chapter, verse=1, verse_end=count if count > 1 else None
+    )
+    return ref, end
+
+
 def find_references(text: str) -> list[BibleReference]:
     tokens = _tokenize(text)
     references: list[BibleReference] = []
 
     i = 0
     while i < len(tokens):
-        book = _match_book_at(tokens, i)
-        if book is None:
+        match = _match_forward_at(tokens, i) or _match_first_n_verses_at(tokens, i)
+        if match is None:
             i += 1
             continue
-
-        j = i + len(book.stems)
-        if j < len(tokens) and tokens[j] in _CHAPTER_KEYWORDS:
-            j += 1
-
-        chapter_match = _read_number(tokens, j)
-        if chapter_match is None:
-            i += 1
-            continue
-        chapter, consumed = chapter_match
-        j += consumed
-
-        if j < len(tokens) and tokens[j] in _VERSE_KEYWORDS:
-            j += 1
-            if j < len(tokens) and tokens[j] in _RANGE_START_KEYWORDS:
-                j += 1
-
-        verse_match = _read_number(tokens, j)
-        if verse_match is None:
-            i += 1
-            continue
-        verse, consumed = verse_match
-        j += consumed
-
-        verse_end = None
-        if j < len(tokens) and tokens[j] in _RANGE_KEYWORDS:
-            end_match = _read_number(tokens, j + 1)
-            if end_match is not None:
-                verse_end, consumed = end_match
-                j += 1 + consumed
-        elif j < len(tokens) and tokens[j].isdigit() and int(tokens[j]) > verse:
-            # Written shorthand "22-23" tokenizes as adjacent bare digits
-            # (the hyphen is dropped) with no "по"/"до" between them.
-            verse_end = int(tokens[j])
-            j += 1
-
-        references.append(
-            BibleReference(
-                book=book.key, ru_label=book.ru_label, chapter=chapter, verse=verse, verse_end=verse_end
-            )
-        )
-        i = j
+        ref, i = match
+        references.append(ref)
 
     return references
