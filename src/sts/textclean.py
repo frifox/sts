@@ -120,22 +120,33 @@ def split_complete(text: str) -> tuple[str, str]:
     return text[: match.end()].strip(), text[match.end() :].strip()
 
 
-# Parakeet's tokenizer has no token for any style of quotation mark - Russian
-# «», German-style „", and curly "" all collapse to the same out-of-vocabulary
-# token, which it renders as U+2047 (⁇) instead of dropping silently. Left
-# alone, that reaches both the caption and the translator as a stray "⁇"
-# rather than a quote, losing whatever emphasis/quoting the speaker intended.
-_UNK_QUOTE = "⁇"
+# Parakeet's tokenizer has no token for any punctuation mark outside a small
+# basic set (it keeps , . : - ! ?, confirmed against the tokenizer directly) -
+# quotation marks of any style («», „", "") *and* em dashes and semicolons all
+# collapse to the same out-of-vocabulary token, rendered as U+2047 (⁇) instead
+# of dropped silently. Left alone, that reaches both the caption and the
+# translator as a stray "⁇", losing whatever emphasis/connection the speaker's
+# punctuation intended.
+#
+# ⁇ alone doesn't say which punctuation mark it stood for, so this goes by
+# how it's paired, checked against real sermon audio: exactly one ⁇ in a
+# stretch of text is almost always a dash joining two clauses (e.g. "Отец
+# Мой — виноградарь"), since a genuine quotation needs an opening *and* a
+# closing mark; two or more is treated as quotation mark pairs (opening,
+# closing, opening, closing, ...), the far more common shape for a real quote.
+_UNK_MARK = "⁇"
 
 
 def restore_unk_quotes(text: str) -> str:
-    """Turns Parakeet's "unknown token" marker back into a plain '"',
-    alternating which side keeps its surrounding space so it hugs the quoted
-    text (opening: sheds the space after it; closing: sheds the space
-    before it) rather than floating with a gap on the inside."""
-    if _UNK_QUOTE not in text:
+    """Turns Parakeet's "unknown token" marker back into real punctuation:
+    a lone one becomes an em dash, two or more become alternating '"' pairs
+    (opening: sheds the space after it; closing: sheds the space before it),
+    so it hugs the quoted text rather than floating with a gap on the inside."""
+    if _UNK_MARK not in text:
         return text
-    pieces = text.split(_UNK_QUOTE)
+    pieces = text.split(_UNK_MARK)
+    if len(pieces) == 2:  # exactly one marker: a dash, not an unclosed quote
+        return f"{pieces[0].rstrip()} — {pieces[1].lstrip()}".strip()
     out = pieces[0]
     for i, piece in enumerate(pieces[1:]):
         out = f'{out}"{piece.lstrip()}' if i % 2 == 0 else f'{out.rstrip()}"{piece}'

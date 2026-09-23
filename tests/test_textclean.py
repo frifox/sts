@@ -150,6 +150,15 @@ def test_restore_unk_quotes():
     assert restore_unk_quotes("нет кавычек тут") == "нет кавычек тут"
     assert restore_unk_quotes("") == ""
     assert restore_unk_quotes("А ⁇ первая ⁇, потом ⁇ вторая ⁇ фраза.") == 'А "первая", потом "вторая" фраза.'
-    # an unpaired marker (e.g. a segment boundary cut mid-quote) still becomes
-    # a quote character rather than staying as the raw placeholder
-    assert restore_unk_quotes("⁇ только открывающая") == '"только открывающая'
+
+
+def test_restore_unk_quotes_treats_a_lone_marker_as_a_dash():
+    """Confirmed against the tokenizer and real sermon audio: em dashes and
+    semicolons collapse to the same marker as quotation marks, and a genuine
+    quote needs two - so exactly one is read as a dash, not an unclosed quote.
+    Real example: Parakeet's transcription of John 15:1 rendered "Отец Мой —
+    виноградарь" (a dash) as "отец мой ⁇виноградарь" - a single marker."""
+    from sts.textclean import restore_unk_quotes
+
+    assert restore_unk_quotes("а отец мой ⁇виноградарь.") == "а отец мой — виноградарь."
+    assert restore_unk_quotes("⁇ только один маркер") == "— только один маркер"
