@@ -13,7 +13,7 @@ see **Apple Silicon / Metal** below.
 ## Pipeline
 
 ```
-sound card -> VAD segmenter -> Whisper ASR (ru) -> NLLB translation (ru->en) -> XTTS (en) -> sound card out
+sound card -> VAD segmenter -> ASR (ru) -> NLLB translation (ru->en) -> XTTS (en) -> sound card out
                                        |                        |
                                        v                        v
                                   original text          translated text
@@ -26,8 +26,16 @@ sound card -> VAD segmenter -> Whisper ASR (ru) -> NLLB translation (ru->en) -> 
 - **VAD segmentation** (`sts.audio.vad`) — Silero VAD buffers speech and cuts a
   segment on trailing silence, so ASR sees whole utterances instead of
   arbitrary fixed windows.
-- **ASR** (`sts.asr.whisper_asr`) — `faster-whisper`, `large-v3`, Russian,
-  primed with a Baptist/religious-vocabulary prompt to bias decoding.
+- **ASR** — two swappable backends, picked from the Caption dropdown on the
+  live page (switches the running engine without a restart):
+  - `parakeet` (default) — NVIDIA's Parakeet TDT (`sts.asr.parakeet_asr`,
+    via NeMo). Paired with `--partial-interval-ms 2000` (also the default):
+    a still-open segment is periodically re-transcribed so a multi-sentence
+    segment's earlier sentences can be translated while the speaker keeps
+    talking, instead of everything waiting for the segment's closing pause.
+  - `whisper` (`sts.asr.whisper_asr`) — `faster-whisper`, `large-v3`,
+    Russian, primed with a Baptist/religious-vocabulary prompt to bias
+    decoding.
 - **Translation** (`sts.translate.translator`) — NLLB-200 (`ru->en`). A
   glossary (`sts.translate.glossary`) force-substitutes known Baptist/Christian
   terms (grace, repentance, communion, sanctification, ...) so the model

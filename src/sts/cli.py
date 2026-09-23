@@ -89,10 +89,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Re-transcribe a still-open segment this often (ms) so a multi-sentence segment can have its "
         "earlier sentences translated while the speaker keeps talking, instead of everything waiting for the "
-        "closing pause. Off by default (0): testing found this can occasionally repeat a sentence, since "
-        "re-transcribing a growing prefix from scratch can reword its start once more context is available "
-        "(see VADConfig.partial_interval_ms's docstring for details). Try e.g. 1200 to see how it behaves "
-        "with your speaker/backend.",
+        "closing pause (default 2000, confirmed working well with Parakeet; 0 disables it). Re-transcribing a "
+        "growing prefix from scratch can occasionally reword its start once more context is available, which "
+        "can repeat a sentence (see VADConfig.partial_interval_ms's docstring for details) - retune this for "
+        "your own speaker/backend if you see that.",
     )
     parser.add_argument(
         "--config-db",
@@ -116,14 +116,15 @@ def main() -> None:
     persistent_config = PersistentConfig(args.config_db) if args.config_db else None
     if persistent_config is not None:
         saved_backend = persistent_config.get("asr_backend")
-        if saved_backend and saved_backend != cfg.asr.backend:
-            if saved_backend == "parakeet" and importlib.util.find_spec("nemo") is None:
-                # A stale preference from an environment that had the
-                # parakeet extra installed - fall back quietly rather than
-                # crashing a previously-working setup over it.
-                print("[config] saved ASR engine 'parakeet' isn't installed here; starting on 'whisper' instead")
-            else:
-                cfg.asr.backend = saved_backend
+        if saved_backend:
+            cfg.asr.backend = saved_backend
+
+    if cfg.asr.backend == "parakeet" and importlib.util.find_spec("nemo") is None:
+        # Parakeet is the default (or a saved preference), but this
+        # environment doesn't have the extra installed - fall back rather
+        # than crashing a run that would otherwise work fine on Whisper.
+        print("[config] ASR engine 'parakeet' isn't installed here; starting on 'whisper' instead")
+        cfg.asr.backend = "whisper"
 
     def _restore_device(cli_value, key):
         if cli_value is not None:
