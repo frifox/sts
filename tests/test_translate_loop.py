@@ -15,9 +15,11 @@ def _stub_pipeline(translate_sentences):
     class Broadcaster:
         def __init__(self):
             self.translated = []
+            self.seqs = []
 
-        def broadcast_translated(self, text):
+        def broadcast_translated(self, text, seq=None):
             self.translated.append(text)
+            self.seqs.append(seq)
 
     p = object.__new__(Pipeline)
     p.translator = FakeTranslator()
@@ -69,3 +71,63 @@ def test_empty_translated_sentences_are_not_queued_or_broadcast():
 
     assert p.broadcaster.translated == ["Kept.", "Also kept."]
     assert list(p._translations.queue) == ["Kept.", "Also kept."]
+
+
+def test_each_translation_is_broadcast_with_its_originals_sequence_number():
+    """The caption page matches a translation to its original by this number
+    (see Pipeline._commit_new_asr_text), so sentence i of a chunk whose first
+    sentence was numbered `first_seq` must go out as first_seq + i."""
+    p = _stub_pipeline(lambda text: iter(["A.", "B.", "C."]))
+
+    Pipeline._translate_segment(p, "x. y. z.", first_seq=7)
+
+    assert p.broadcaster.seqs == [7, 8, 9]
+
+
+def test_an_empty_translation_leaves_its_number_unused_instead_of_shifting_later_ones():
+    """A sentence that translates to nothing is skipped, but the sentences
+    after it must keep their own numbers - not slide down into its place."""
+    p = _stub_pipeline(lambda text: iter(["A.", "", "C."]))
+
+    Pipeline._translate_segment(p, "x. y. z.", first_seq=0)
+
+    assert p.broadcaster.translated == ["A.", "C."]
+    assert p.broadcaster.seqs == [0, 2]
+
+
+def test_captions_first_then_translation_pairs_by_number_not_by_arrival_order():
+    """The reported bug: Caption runs alone for a few sentences (translation
+    off, so those originals are never translated), then Translate is turned
+    on. Arrival order would pair the first translation with the first, long
+    since untranslated, original - shifting every later pair. Each translation
+    instead carries the number of the original it actually belongs to."""
+    import threading
+
+    from sts.control import RecognitionControl
+
+    p = _stub_pipeline(lambda text: iter([f"EN({text})"]))
+    p.control = RecognitionControl(16000)
+    p.control.disable_translation()
+    p._transcripts = queue.Queue()
+    p._stop = threading.Event()
+    p._committed_text = ""
+    p._pending_confirmation = None
+    p._original_seq = 0
+    p.bible_lookup = None
+    p.broadcaster.broadcast_original = lambda text, seq=None: originals.append((seq, text))
+    originals: list = []
+
+    p._commit_new_asr_text("Первое предложение.", final=True)   # translation off
+    p._commit_new_asr_text("Второе предложение.", final=True)   # translation off
+    p.control.enable_translation()
+    p._commit_new_asr_text("Третье предложение.", final=True)   # translation on
+
+    # Drain the way _translate_loop does: the two skipped ones are dropped,
+    # the third is translated.
+    while not p._transcripts.empty():
+        text, first_seq = p._transcripts.get()
+        if p.control.translation_enabled.is_set() and text.startswith("Третье"):
+            Pipeline._translate_segment(p, text, first_seq)
+
+    assert [seq for seq, _ in originals] == [0, 1, 2]
+    assert p.broadcaster.seqs == [2]  # the translation belongs to original #2, not #0

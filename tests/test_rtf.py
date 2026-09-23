@@ -25,10 +25,10 @@ class _Broadcaster:
     def broadcast_rtf(self, stage, value):
         self.rtf.append((stage, value))
 
-    def broadcast_original(self, text):
+    def broadcast_original(self, text, seq=None):
         self.original.append(text)
 
-    def broadcast_translated(self, text):
+    def broadcast_translated(self, text, seq=None):
         pass
 
 
@@ -112,6 +112,8 @@ def test_asr_loop_tracks_audio_duration_and_broadcasts_rtf():
     p._stop = threading.Event()
     p._last_asr_audio_s = 0.0
     p._committed_text = ""
+    p._pending_confirmation = None
+    p._original_seq = 0
     p._transcripts = queue.Queue()
 
     class FakeAsr:
@@ -132,7 +134,7 @@ def test_asr_loop_tracks_audio_duration_and_broadcasts_rtf():
     stage, value = p.broadcaster.rtf[0]
     assert stage == "asr"
     assert value == pytest.approx(0.025, abs=0.05)  # ~0.05s processing / 2s audio
-    assert p._transcripts.get_nowait() == "Привет."
+    assert p._transcripts.get_nowait() == ("Привет.", 0)
 
 
 def test_translate_segment_uses_the_last_asr_audio_duration():

@@ -614,7 +614,7 @@
     lastAddTime[key] = now;
   }
 
-  function addLine(containerId, text, opts) {
+  function addLine(containerId, text, opts, seq) {
     const container = document.getElementById(containerId);
     let flow = container.querySelector('.flow');
     if (!flow) {
@@ -626,6 +626,7 @@
     const snippet = document.createElement('span');
     snippet.className = 'line';
     snippet.textContent = text + ' ';  // the space keeps consecutive snippets apart on one line
+    snippet.seq = seq;  // kept so a switch to portrait can pair originals with translations exactly
     markOldIfNewBatch(containerId, flow.children, opts);
     flow.appendChild(snippet);
 
@@ -644,15 +645,21 @@
   // -- Portrait render mode: original/translated as paired rows instead of
   // one flowing paragraph per panel (see addLine above). Each "original"
   // message starts a new row (both cells created together, the translated
-  // one empty at first); a FIFO queue matches each "translated" message to
-  // the oldest row still waiting for one. That pairing is only reliable
-  // because the server now splits a commit into one "original" message per
-  // sentence (see Pipeline._commit_new_asr_text), the same granularity
-  // translation already used - so the two streams advance sentence for
-  // sentence in the same order, even though they arrive at different times. --
+  // one empty at first); each "translated" message fills the row whose
+  // original carries the same `seq` (see Pipeline._commit_new_asr_text). It
+  // is matched by that number, not by arrival order, because the two streams
+  // don't stay in step: originals keep arriving while Translate is off (or
+  // lagging) and are never translated, so pairing the next translation with
+  // the oldest row still waiting would shift every pair after it. A
+  // translation whose row is gone (pruned, or its original never seen) is
+  // simply dropped. --
   const portraitLines = document.getElementById('portrait-lines');  // outer .lines wrapper: clips, bottom-aligns
   const portraitGrid = document.getElementById('portrait-grid');    // inner, auto-height: what actually holds rows
-  let pendingTranslationCells = [];
+  // Rows still waiting for their translation: seq -> that row's (empty)
+  // translated cell. Insertion order = oldest first, which is what the
+  // seq-less fallback in addPortraitTranslated relies on.
+  const pendingTranslationCells = new Map();
+  let localRowKey = 0;  // keys for rows built without a server seq (mode-switch rebuilds)
 
   function prunePortraitRows() {
     // Same idea and the same reason as addLine's own pruning: portraitLines
@@ -666,11 +673,13 @@
     const available = portraitLines.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
     while (portraitGrid.children.length > 2 && portraitGrid.offsetHeight > available * HISTORY_RETENTION) {
       portraitGrid.removeChild(portraitGrid.firstChild);
-      portraitGrid.removeChild(portraitGrid.firstChild);
+      const pruned = portraitGrid.firstChild;
+      if (pruned.rowKey !== undefined) pendingTranslationCells.delete(pruned.rowKey);
+      portraitGrid.removeChild(pruned);
     }
   }
 
-  function addPortraitOriginal(text, opts) {
+  function addPortraitOriginal(text, opts, seq) {
     markOldIfNewBatch('portrait-original', portraitGrid.querySelectorAll('.original'), opts);
     const original = document.createElement('p');
     original.className = 'portrait-cell line original';
@@ -679,15 +688,23 @@
     const translated = document.createElement('p');
     translated.className = 'portrait-cell line translated';
     translated.style.margin = '0';
+    const key = seq ?? `local-${localRowKey++}`;
+    original.rowKey = key;
+    translated.rowKey = key;
     portraitGrid.appendChild(original);
     portraitGrid.appendChild(translated);
-    pendingTranslationCells.push(translated);
+    pendingTranslationCells.set(key, translated);
     prunePortraitRows();
   }
 
-  function addPortraitTranslated(text, opts) {
-    const cell = pendingTranslationCells.shift();
-    if (!cell) return;  // more translations than rows currently exist - nothing to pair it with
+  // `seq` is the original's number as sent by the server. Without one
+  // (rebuilding after a mode switch, where each translation is added right
+  // after its own original) it falls back to the oldest row still waiting.
+  function addPortraitTranslated(text, opts, seq) {
+    const key = seq ?? pendingTranslationCells.keys().next().value;
+    const cell = pendingTranslationCells.get(key);
+    if (!cell) return;  // no waiting row for it (pruned, or its original was never seen)
+    pendingTranslationCells.delete(key);
     // Exclude cell itself (already in the grid, created empty alongside its
     // original back in addPortraitOriginal - it would dim itself otherwise)
     // and any other still-empty pending cell: those are later rows in the
@@ -707,40 +724,64 @@
     return el.textContent.trim();
   }
 
+  // Snippets/rows carry the server's `seq` (numbers only - rows built
+  // locally have none), which is what lets a switch pair them exactly.
+  const seqOf = (key) => (typeof key === 'number' ? key : undefined);
+
   function transformLandscapeToPortrait() {
-    const originalFlow = document.getElementById('original-lines').querySelector('.flow');
-    const translatedFlow = document.getElementById('translated-lines').querySelector('.flow');
-    const originals = originalFlow ? Array.from(originalFlow.children).map(textOf).filter(Boolean) : [];
-    const translateds = translatedFlow ? Array.from(translatedFlow.children).map(textOf).filter(Boolean) : [];
+    const readFlow = (id) => {
+      const flow = document.getElementById(id).querySelector('.flow');
+      return flow ? Array.from(flow.children).map((el) => ({ text: textOf(el), seq: el.seq })).filter((x) => x.text) : [];
+    };
+    const originals = readFlow('original-lines');
+    const translateds = readFlow('translated-lines');
 
     portraitGrid.innerHTML = '';
-    pendingTranslationCells = [];
-    // Landscape doesn't track which original a translated snippet came from,
-    // and the two panels prune independently, so they can hold different
-    // numbers of retained lines. Pairing the most recent of each by position
-    // is the best available approximation; any extra older lines on the
-    // longer side have no partner to line up with and are dropped.
-    const n = Math.min(originals.length, translateds.length);
-    const recentOriginals = originals.slice(originals.length - n);
-    const recentTranslateds = translateds.slice(translateds.length - n);
+    pendingTranslationCells.clear();
     // Rebuilding replays distinct, separately-timed historical lines through
     // the same add-functions as live updates - unlike a live burst, each one
     // really is older than the next, so each forces its own batch (dims
     // whatever came before it) rather than joining a shared "just arrived" one.
+    const forced = { forceNewBatch: true };
+    const numbered = [...originals, ...translateds].every((x) => x.seq !== undefined);
+    if (numbered) {
+      // Pair by sequence number: an original whose translation never came
+      // (Translate was off, or lagged) gets an empty cell, and nothing after
+      // it shifts.
+      const translationOf = new Map(translateds.map((t) => [t.seq, t.text]));
+      for (const o of originals) {
+        addPortraitOriginal(o.text, forced, o.seq);
+        if (translationOf.has(o.seq)) addPortraitTranslated(translationOf.get(o.seq), forced, o.seq);
+      }
+      return;
+    }
+    // No numbers to go on: landscape doesn't track which original a
+    // translated snippet came from, and the two panels prune independently,
+    // so they can hold different numbers of retained lines. Pairing the most
+    // recent of each by position is the best available approximation; any
+    // extra older lines on the longer side have no partner to line up with
+    // and are dropped.
+    const n = Math.min(originals.length, translateds.length);
+    const recentOriginals = originals.slice(originals.length - n);
+    const recentTranslateds = translateds.slice(translateds.length - n);
     for (let i = 0; i < n; i++) {
-      addPortraitOriginal(recentOriginals[i], { forceNewBatch: true });
-      addPortraitTranslated(recentTranslateds[i], { forceNewBatch: true });
+      addPortraitOriginal(recentOriginals[i].text, forced);
+      addPortraitTranslated(recentTranslateds[i].text, forced);  // no seq: pairs with the row just added
     }
   }
 
   function transformPortraitToLandscape() {
-    const originals = Array.from(portraitGrid.querySelectorAll('.original')).map(textOf).filter(Boolean);
-    const translateds = Array.from(portraitGrid.querySelectorAll('.translated')).map(textOf).filter(Boolean);
+    const read = (selector) =>
+      Array.from(portraitGrid.querySelectorAll(selector))
+        .map((el) => ({ text: textOf(el), seq: seqOf(el.rowKey) }))
+        .filter((x) => x.text);
+    const originals = read('.original');
+    const translateds = read('.translated');
 
     document.getElementById('original-lines').querySelector('.flow')?.remove();
     document.getElementById('translated-lines').querySelector('.flow')?.remove();
-    for (const text of originals) addLine('original-lines', text, { forceNewBatch: true });
-    for (const text of translateds) addLine('translated-lines', text, { forceNewBatch: true });
+    for (const o of originals) addLine('original-lines', o.text, { forceNewBatch: true }, o.seq);
+    for (const t of translateds) addLine('translated-lines', t.text, { forceNewBatch: true }, t.seq);
   }
 
   const VERSE_DISPLAY_MS = 25000;
@@ -822,7 +863,7 @@
     document.getElementById('original-lines').innerHTML = '';
     document.getElementById('translated-lines').innerHTML = '';
     portraitGrid.innerHTML = '';
-    pendingTranslationCells = [];
+    pendingTranslationCells.clear();
     dismissVerse();
     lastVerseMsg = null;
     for (const chip of verseChips) chip.classList.remove('show');
@@ -1393,9 +1434,9 @@
       if (event.data instanceof ArrayBuffer) { playAudioChunk(event.data); return; }
       const msg = JSON.parse(event.data);
       if (msg.type === 'original') {
-        if (renderMode === 'portrait') addPortraitOriginal(msg.text); else addLine('original-lines', msg.text);
+        if (renderMode === 'portrait') addPortraitOriginal(msg.text, undefined, msg.seq); else addLine('original-lines', msg.text, undefined, msg.seq);
       } else if (msg.type === 'translated') {
-        if (renderMode === 'portrait') addPortraitTranslated(msg.text); else addLine('translated-lines', msg.text);
+        if (renderMode === 'portrait') addPortraitTranslated(msg.text, undefined, msg.seq); else addLine('translated-lines', msg.text, undefined, msg.seq);
       }
       else if (msg.type === 'verse') showVerse(msg);
       else if (msg.type === 'reset') clearCaptions();

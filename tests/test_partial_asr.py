@@ -35,10 +35,12 @@ def _stub_pipeline():
     class Broadcaster:
         def __init__(self):
             self.original = []
+            self.seqs = []
             self.status = None
 
-        def broadcast_original(self, text):
+        def broadcast_original(self, text, seq=None):
             self.original.append(text)
+            self.seqs.append(seq)
 
         def broadcast_status(self, **kwargs):
             self.status = kwargs
@@ -48,6 +50,7 @@ def _stub_pipeline():
     p.bible_lookup = None  # find_references() on plain sentences below finds nothing, so this is never touched
     p._committed_text = ""
     p._pending_confirmation = None
+    p._original_seq = 0
     p._transcripts = queue.Queue()
     return p
 
@@ -95,7 +98,7 @@ def test_a_sentence_is_released_once_confirmed_by_a_second_re_run():
     assert p.broadcaster.original == ["Первое предложение."]
     assert p._committed_text == "Первое предложение."
     assert p._pending_confirmation is None
-    assert list(p._transcripts.queue) == ["Первое предложение."]
+    assert list(p._transcripts.queue) == [("Первое предложение.", 0)]  # (text, first sentence's seq)
 
 
 def test_a_revised_first_sighting_replaces_the_pending_candidate_not_release_it():
@@ -285,6 +288,30 @@ def test_diverged_final_ignores_a_repunctuated_boundary():
         "а затем добавлено что-то новое.",
     ]
     assert p._committed_text == ""
+
+
+def test_each_broadcast_sentence_gets_the_next_sequence_number():
+    """The caption page pairs an original with its translation by this
+    number, so it must be unique and keep counting across commits - and the
+    queued chunk records its *first* sentence's number, so translation can
+    number its own sentences to match."""
+    p = _stub_pipeline()
+
+    p._commit_new_asr_text("Первое предложение. Второе предложение.", final=True)
+    p._commit_new_asr_text("Третье предложение.", final=True)
+
+    assert p.broadcaster.seqs == [0, 1, 2]
+    assert list(p._transcripts.queue) == [("Первое предложение. Второе предложение.", 0), ("Третье предложение.", 2)]
+
+
+def test_sequence_numbers_advance_even_with_no_broadcaster():
+    p = _stub_pipeline()
+    p.broadcaster = None
+
+    p._commit_new_asr_text("Первое предложение. Второе предложение.", final=True)
+    p._commit_new_asr_text("Третье предложение.", final=True)
+
+    assert list(p._transcripts.queue)[1] == ("Третье предложение.", 2)
 
 
 # -- _process_captured_frame (segment loop's per-frame decision) -----------

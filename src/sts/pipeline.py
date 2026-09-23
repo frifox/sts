@@ -124,7 +124,9 @@ class Pipeline:
         self._asr_busy = False  # a switch is already in flight; ignore a repeat click
 
         self._segments: queue.Queue = queue.Queue()
+        # (text, first_seq) per committed chunk - see _commit_new_asr_text.
         self._transcripts: queue.Queue = queue.Queue()
+        self._original_seq = 0  # next sequence number for a broadcast original sentence
         # Text already committed (pushed to translation) for the segment
         # currently being spoken, via periodic partial re-transcription - see
         # _segment_loop/_asr_loop. Reset to "" whenever a segment closes.
@@ -836,17 +838,23 @@ class Pipeline:
         if not to_commit:
             return
         print(f"[ru] {to_commit}")
+        # One message per sentence, not one for the whole commit, each with a
+        # sequence number: the caption page's portrait layout pairs every
+        # "original" with its "translated" by that number, not by arrival
+        # order (which breaks as soon as translation is off, or lags, or a
+        # page reconnects mid-stream - some originals then never get a
+        # translation, shifting every later pair). Translation splits the
+        # same string with the same split_sentences() (see
+        # _translate_segment), so sentence i of this commit is `first_seq + i`
+        # there too. Numbers advance whether or not anything is listening.
+        sentences = split_sentences(to_commit)
+        first_seq = self._original_seq
+        self._original_seq += len(sentences)
         if self.broadcaster:
-            # One message per sentence, not one for the whole commit: the
-            # caption page's portrait layout pairs each "original" message
-            # with a "translated" one by arrival order, and translation
-            # already broadcasts one message per sentence (see
-            # _translate_segment) - splitting the same way here, with the
-            # same split_sentences(), keeps the two streams in lockstep.
-            for sentence in split_sentences(to_commit):
-                self.broadcaster.broadcast_original(sentence)
+            for i, sentence in enumerate(sentences):
+                self.broadcaster.broadcast_original(sentence, first_seq + i)
             self._broadcast_bible_references(to_commit)
-        self._transcripts.put(to_commit)
+        self._transcripts.put((to_commit, first_seq))
 
     def _broadcast_bible_references(self, text: str) -> None:
         for ref in find_references(text):
@@ -864,26 +872,32 @@ class Pipeline:
 
     def _translate_loop(self) -> None:
         while not self._stop.is_set():
-            text = self._transcripts.get()
+            text, first_seq = self._transcripts.get()
             if not self.control.translation_enabled.is_set():
                 vlog("translate", "translation is off, skipping")
                 continue
-            self._translate_segment(text)
+            self._translate_segment(text, first_seq)
 
-    def _translate_segment(self, text: str) -> None:
+    def _translate_segment(self, text: str, first_seq: int | None = None) -> None:
         """Translates one ASR segment's text and pushes/broadcasts/queues each
         sentence for TTS the moment it's ready. Yielded, not joined-then-
         returned: a multi-sentence segment (VAD closes on silence, so it can
         hold several full sentences) would otherwise have its first sentence
-        wait on the whole block's slowest (usually last) sentence to translate."""
+        wait on the whole block's slowest (usually last) sentence to translate.
+
+        `first_seq` is the sequence number _commit_new_asr_text gave the
+        first sentence of `text`; each translation is broadcast with the
+        number of the original sentence it belongs to."""
         t0 = time.monotonic()
-        for translated in self.translator.translate_sentences(text):
+        for i, translated in enumerate(self.translator.translate_sentences(text)):
             processing_s = time.monotonic() - t0
             vlog("translate", f"translated a sentence in {processing_s:.2f}s")
             if translated:
                 print(f"[en] {translated}")
                 if self.broadcaster:
-                    self.broadcaster.broadcast_translated(translated)
+                    self.broadcaster.broadcast_translated(
+                        translated, None if first_seq is None else first_seq + i
+                    )
                 self._broadcast_rtf("translate", processing_s, self._last_asr_audio_s)
                 self._translations.put(translated)
             t0 = time.monotonic()

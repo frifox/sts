@@ -56,7 +56,7 @@ class CaptionBroadcaster:
         # the current numbers immediately instead of blank ones until the
         # next segment.
         self._last_rtf: dict[str, dict] = {}
-        self._history: dict[str, deque[str]] = {
+        self._history: dict[str, deque[dict]] = {
             "original": deque(maxlen=CAPTION_HISTORY_LINES),
             "translated": deque(maxlen=CAPTION_HISTORY_LINES),
         }
@@ -82,9 +82,9 @@ class CaptionBroadcaster:
             await websocket.send_text(json.dumps(message))
         with self._history_lock:
             history = {kind: list(lines) for kind, lines in self._history.items()}
-        for kind, lines in history.items():
-            for text in lines:
-                await websocket.send_text(json.dumps({"type": kind, "text": text}))
+        for messages in history.values():
+            for message in messages:
+                await websocket.send_text(json.dumps(message))
 
     async def unregister(self, websocket: WebSocket) -> None:
         self._clients.discard(websocket)
@@ -117,20 +117,27 @@ class CaptionBroadcaster:
         for client in dead:
             self._clients.discard(client)
 
-    def _broadcast(self, kind: str, text: str) -> None:
+    def _broadcast(self, kind: str, text: str, seq: int | None = None) -> None:
         if not text:
             return
+        message = {"type": kind, "text": text}
+        if seq is not None:
+            message["seq"] = seq
         with self._history_lock:
-            self._history[kind].append(text)
+            self._history[kind].append(message)
         if self.loop is None:
             return
-        asyncio.run_coroutine_threadsafe(self._send_to_all({"type": kind, "text": text}), self.loop)
+        asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
-    def broadcast_original(self, text: str) -> None:
-        self._broadcast("original", text)
+    def broadcast_original(self, text: str, seq: int | None = None) -> None:
+        """`seq` identifies this sentence so its translation - which can
+        arrive much later, or never (translation off) - can be matched back
+        to it exactly by the page's portrait layout, instead of by arrival order."""
+        self._broadcast("original", text, seq)
 
-    def broadcast_translated(self, text: str) -> None:
-        self._broadcast("translated", text)
+    def broadcast_translated(self, text: str, seq: int | None = None) -> None:
+        """`seq` is the `seq` of the original sentence this translates."""
+        self._broadcast("translated", text, seq)
 
     def broadcast_verse(
         self,
