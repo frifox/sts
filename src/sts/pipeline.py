@@ -30,6 +30,7 @@ import torch
 
 from sts.asr import create_asr, parakeet_asr
 from sts.audio.capture import AudioCapture
+from sts.audio.devices import check_input, check_output, reinitialize_audio_system
 from sts.audio.playback import AudioPlayback
 from sts.audio.vad import SpeechSegmenter
 from sts.bible.lookup import BibleLookup
@@ -53,6 +54,13 @@ MIN_SILENCE_RANGE_MS = (200, 1500)
 # is nowhere near actually falling behind), so what's shown is smoothed over
 # a rolling window instead of the latest reading alone.
 RTF_WINDOW_S = 30.0
+
+# How long a local input stream may go without delivering a frame before it's
+# treated as dead (frames arrive every ~32ms even in a silent room), and the
+# least time between two audio-system recoveries - a device that's genuinely
+# gone would otherwise trigger one every check.
+INPUT_STALL_S = 3.0
+AUDIO_RECOVERY_MIN_INTERVAL_S = 5.0
 
 # One binary mic frame from a browser: a 4-byte LE sample-rate header (mirrors
 # the outgoing TTS format in CaptionBroadcaster.broadcast_audio) followed by
@@ -116,6 +124,9 @@ class Pipeline:
         self._design: tuple[str, str] | None = None
         self._design_busy = threading.Lock()
         self._device_lock = threading.Lock()
+        self._audio_recovery_lock = threading.Lock()
+        self._last_audio_recovery = float("-inf")
+        self._last_audio_recovery_ok = True
         self._active_speaker_id: str | None = None
         # Held around every self.asr.transcribe() call and around swapping
         # self.asr out for a different backend, so _asr_loop can never see a
@@ -958,12 +969,89 @@ class Pipeline:
             if self.broadcaster:
                 self.broadcaster.broadcast_audio(audio, sample_rate)
             try:
-                self.playback.play(
-                    audio, sample_rate=sample_rate, pause_before=pause_before,
-                    should_continue=self.control.voice_enabled.is_set,
-                )
+                self._play(audio, sample_rate, pause_before)
             except Exception as exc:
                 print(f"[audio] playback failed: {exc!r}")
+                # Typically the output device went stale (laptop slept, the
+                # default output changed) - re-initialize audio and give this
+                # same clip one more try instead of dropping it, and then
+                # every clip after it.
+                if self._recover_audio("playback failed"):
+                    try:
+                        self._play(audio, sample_rate, pause_before)
+                    except Exception as exc2:
+                        print(f"[audio] playback still failing after re-initializing audio: {exc2!r}")
+
+    def _play(self, audio, sample_rate: int, pause_before: float) -> None:
+        self.playback.play(
+            audio, sample_rate=sample_rate, pause_before=pause_before,
+            should_continue=self.control.voice_enabled.is_set,
+        )
+
+    def _recover_audio(self, reason: str) -> bool:
+        """Re-initializes the audio system and reopens the streams, for when
+        the devices PortAudio knew about have gone stale under it - the
+        laptop slept and woke, a device was plugged in or removed, or the
+        default output changed. Without this, output kept failing with
+        "Internal PortAudio error -9986" and the input could stop delivering
+        until `sts` was restarted.
+
+        Everything is closed first (terminating PortAudio invalidates open
+        streams), PortAudio re-enumerates the machine's devices, a
+        selected device that no longer exists falls back to the system
+        default, and capture is reopened; the output stream reopens itself
+        on the next clip. Safe to call from any thread - callers are
+        serialized, and one arriving right after another recovery just
+        reuses its result instead of doing it again. Returns whether audio
+        looks usable afterwards."""
+        with self._audio_recovery_lock:
+            if time.monotonic() - self._last_audio_recovery < AUDIO_RECOVERY_MIN_INTERVAL_S:
+                return self._last_audio_recovery_ok
+            print(f"[audio] {reason}; re-initializing the audio system")
+            ok = True
+            with self._device_lock:
+                audio = self.cfg.audio
+                was_local = audio.source != "browser"
+                try:
+                    self.capture.stop()
+                    self.playback.forget_devices()
+                    reinitialize_audio_system()
+                    if audio.input_device is not None:
+                        try:
+                            check_input(audio.input_device, audio.sample_rate, audio.channels)
+                        except Exception as exc:
+                            print(f"[audio] input device {audio.input_device} is gone ({exc}); using the system default")
+                            audio.input_device = None
+                    if audio.output_device is not None:
+                        try:
+                            check_output(audio.output_device, 24_000)
+                        except Exception as exc:
+                            print(f"[audio] output device {audio.output_device} is gone ({exc}); using the system default")
+                            audio.output_device = None
+                    if was_local:
+                        self.capture.start()
+                except Exception as exc:
+                    print(f"[audio] couldn't re-initialize audio: {exc!r}")
+                    ok = False
+            self._last_audio_recovery = time.monotonic()
+            self._last_audio_recovery_ok = ok
+        if ok:
+            self._broadcast_devices()
+            self._broadcast_status()
+        return ok
+
+    def _check_audio_health(self) -> None:
+        """One pass of the input watchdog: a local input stream that has gone
+        quiet is dead (see AudioCapture.is_stalled) - recover it."""
+        if self.capture.is_stalled(INPUT_STALL_S):
+            self._recover_audio("input stream stopped delivering audio")
+
+    def _audio_watchdog_loop(self) -> None:
+        while not self._stop.wait(1.0):
+            try:
+                self._check_audio_health()
+            except Exception as exc:  # a health check must never take itself down
+                print(f"[audio] health check failed: {exc!r}")
 
     def start(self) -> None:
         self.capture.start()
@@ -974,6 +1062,7 @@ class Pipeline:
             self._translate_loop,
             self._tts_loop,
             self._playback_loop,
+            self._audio_watchdog_loop,
         ):
             thread = threading.Thread(target=target, daemon=True)
             thread.start()

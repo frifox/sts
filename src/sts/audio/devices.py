@@ -39,3 +39,23 @@ def check_input(device: int | None, sample_rate: int, channels: int) -> None:
 def check_output(device: int | None, sample_rate: int) -> None:
     """Raises if the device can't play mono audio at this rate."""
     sd.check_output_settings(device=device, channels=1, samplerate=sample_rate, dtype="float32")
+
+
+def reinitialize_audio_system() -> None:
+    """Rebuilds PortAudio's view of the machine's audio devices.
+
+    PortAudio enumerates devices once, when sounddevice is imported, and
+    keeps using that snapshot. After the machine sleeps and wakes, or a
+    device is plugged in/removed or the default output changes, the snapshot
+    is stale: streams opened against it fail with errors like
+    "Internal PortAudio error -9986", and an open input stream may just stop
+    delivering. Terminating and re-initializing PortAudio re-enumerates
+    everything (the same thing a restart of the process would do).
+
+    Every stream must be closed *before* this is called - terminating
+    invalidates them, and touching one afterwards can crash. Uses
+    sounddevice's private _initialize/_terminate, which is the standard way
+    to do this (there's no public API for it).
+    """
+    sd._terminate()
+    sd._initialize()

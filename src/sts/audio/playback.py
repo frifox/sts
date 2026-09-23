@@ -76,10 +76,25 @@ class AudioPlayback:
 
     def _close_stream(self) -> None:
         if self._stream is not None:
-            self._stream.abort()
-            self._stream.close()
-            self._stream = None
-            self._stream_rate = None
+            stream, self._stream, self._stream_rate = self._stream, None, None
+            try:
+                stream.abort()
+                stream.close()
+            except Exception as exc:
+                # A stream that went bad (device gone, machine slept) can
+                # raise while being torn down; it's being discarded anyway,
+                # and a fresh one is opened on the next clip.
+                vlog("audio", f"output stream didn't close cleanly ({exc!r}); discarded anyway")
+
+    def forget_devices(self) -> None:
+        """Drops everything learned about the output device - to be called
+        after the audio system is re-initialized (see
+        reinitialize_audio_system), since the accepted-rate probes were made
+        against devices that may no longer be the same. Closes the stream."""
+        with self._lock:
+            self._close_stream()
+            self._resolved_rates.clear()
+            self._scheduled_end = 0.0
 
     def play(
         self,

@@ -2,6 +2,7 @@
 
 import queue
 import threading
+import time
 
 import numpy as np
 import sounddevice as sd
@@ -26,8 +27,27 @@ class AudioCapture:
         self.frames: queue.Queue[np.ndarray] = queue.Queue()
         self._stream: sd.InputStream | None = None
         self._stop = threading.Event()
+        self._last_frame_at = time.monotonic()
+
+    def is_stalled(self, timeout_s: float) -> bool:
+        """True if a local input stream is supposed to be running but has
+        stopped delivering frames for `timeout_s` - what happens to it when
+        the machine sleeps and wakes, or its device goes away. A live stream
+        delivers a frame every block_ms whether or not anyone is speaking, so
+        silence in the room never looks like a stall. Always False for the
+        browser microphone (frames come over the websocket) or when no
+        stream is open."""
+        if self._stream is None or self.cfg.source == "browser":
+            return False
+        try:
+            if not self._stream.active:
+                return True
+        except Exception:
+            return True  # asking a broken stream whether it's running can itself raise
+        return time.monotonic() - self._last_frame_at > timeout_s
 
     def _callback(self, indata, frames, time_info, status):
+        self._last_frame_at = time.monotonic()
         if status:
             # Overflows/underflows show up here; surfaced rather than raised
             # since dropping a frame is preferable to killing capture.
@@ -50,6 +70,7 @@ class AudioCapture:
             callback=self._callback,
         )
         self._stream.start()
+        self._last_frame_at = time.monotonic()
         info = sd.query_devices(self.cfg.input_device, "input")
         vlog("audio", f"listening on input [{info['index']}] {info['name']} "
                       f"({self.cfg.sample_rate} Hz, {self.cfg.block_ms} ms frames)")
@@ -98,7 +119,14 @@ class AudioCapture:
     def stop(self) -> None:
         self._stop.set()
         if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+            stream, self._stream = self._stream, None
+            try:
+                stream.stop()
+                stream.close()
+            except Exception as exc:
+                # A stream whose device vanished (or that the machine slept
+                # under) can raise while being torn down - it's being thrown
+                # away regardless, and this is also how it's cleaned up before
+                # the audio system is re-initialized.
+                vlog("audio", f"input stream didn't close cleanly ({exc!r}); discarded anyway")
             vlog("audio", "stopped listening")
