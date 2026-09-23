@@ -596,22 +596,34 @@
 
   // A single backend commit can be pushed as several separate "original"/
   // "translated" messages, one per sentence (see Pipeline._commit_new_asr_text
-  // and _translate_segment) - they arrive close together but aren't a mix of
-  // fresh + historical, so treating only the very last of that burst as
-  // "current" would wrongly fade out the sentences just before it. Anything
-  // that arrives within BATCH_GAP_MS of the previous one joins the same
-  // still-highlighted batch instead of dimming it; only a real gap (the next
-  // genuinely new commit, which needs actual new speech to produce) starts a
-  // fresh batch and dims the previous one.
+  // and _translate_segment) - they aren't a mix of fresh + historical, so
+  // treating only the very last of them as "current" would wrongly fade out
+  // the sentences just before it. Every message carries the id of the commit
+  // it belongs to (`batch`); a sentence joins the still-highlighted batch when
+  // it has the same id as the previous one in its column, and only a new id
+  // starts a fresh batch and dims the previous one. The id, not timing, is
+  // what decides it: a translation can lag its commit by several seconds
+  // (translation and TTS share one GPU lock on Apple Silicon, so a slow TTS
+  // holds it up), and a timing window then took each late sentence for a new
+  // commit and faded its siblings while the originals stayed bright.
+  //
+  // Messages without an id (an older server) fall back to a time window:
+  // anything within BATCH_GAP_MS of the previous one joins its batch.
   const BATCH_GAP_MS = 2000;
   const lastAddTime = {};
+  const lastBatchId = {};
 
-  function markOldIfNewBatch(key, elements, { forceNewBatch = false } = {}) {
+  function markOldIfNewBatch(key, elements, { forceNewBatch = false, batch } = {}) {
     const now = Date.now();
-    if (forceNewBatch || now - (lastAddTime[key] || 0) > BATCH_GAP_MS) {
+    let startsNewBatch;
+    if (forceNewBatch) startsNewBatch = true;
+    else if (batch !== undefined) startsNewBatch = batch !== lastBatchId[key];
+    else startsNewBatch = now - (lastAddTime[key] || 0) > BATCH_GAP_MS;
+    if (startsNewBatch) {
       for (const el of elements) el.classList.add('old');
     }
     lastAddTime[key] = now;
+    lastBatchId[key] = forceNewBatch ? undefined : batch;
   }
 
   function addLine(containerId, text, opts, seq) {
@@ -1434,9 +1446,9 @@
       if (event.data instanceof ArrayBuffer) { playAudioChunk(event.data); return; }
       const msg = JSON.parse(event.data);
       if (msg.type === 'original') {
-        if (renderMode === 'portrait') addPortraitOriginal(msg.text, undefined, msg.seq); else addLine('original-lines', msg.text, undefined, msg.seq);
+        if (renderMode === 'portrait') addPortraitOriginal(msg.text, { batch: msg.batch }, msg.seq); else addLine('original-lines', msg.text, { batch: msg.batch }, msg.seq);
       } else if (msg.type === 'translated') {
-        if (renderMode === 'portrait') addPortraitTranslated(msg.text, undefined, msg.seq); else addLine('translated-lines', msg.text, undefined, msg.seq);
+        if (renderMode === 'portrait') addPortraitTranslated(msg.text, { batch: msg.batch }, msg.seq); else addLine('translated-lines', msg.text, { batch: msg.batch }, msg.seq);
       }
       else if (msg.type === 'verse') showVerse(msg);
       else if (msg.type === 'reset') clearCaptions();

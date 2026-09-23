@@ -117,27 +117,35 @@ class CaptionBroadcaster:
         for client in dead:
             self._clients.discard(client)
 
-    def _broadcast(self, kind: str, text: str, seq: int | None = None) -> None:
+    def _broadcast(self, kind: str, text: str, seq: int | None = None, batch: int | None = None) -> None:
         if not text:
             return
         message = {"type": kind, "text": text}
         if seq is not None:
             message["seq"] = seq
+        if batch is not None:
+            message["batch"] = batch
         with self._history_lock:
             self._history[kind].append(message)
         if self.loop is None:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
-    def broadcast_original(self, text: str, seq: int | None = None) -> None:
+    def broadcast_original(self, text: str, seq: int | None = None, batch: int | None = None) -> None:
         """`seq` identifies this sentence so its translation - which can
         arrive much later, or never (translation off) - can be matched back
-        to it exactly by the page's portrait layout, instead of by arrival order."""
-        self._broadcast("original", text, seq)
+        to it exactly by the page's portrait layout, instead of by arrival
+        order. `batch` names the ASR commit it came from: the page keeps every
+        sentence of one batch highlighted together and dims the previous batch
+        only when a new one starts."""
+        self._broadcast("original", text, seq, batch)
 
-    def broadcast_translated(self, text: str, seq: int | None = None) -> None:
-        """`seq` is the `seq` of the original sentence this translates."""
-        self._broadcast("translated", text, seq)
+    def broadcast_translated(self, text: str, seq: int | None = None, batch: int | None = None) -> None:
+        """`seq` is the `seq` of the original sentence this translates, and
+        `batch` the batch of the commit it belongs to - so a translation that
+        lags behind (slow TTS or GPU contention) still groups with its own
+        commit instead of looking like a new one."""
+        self._broadcast("translated", text, seq, batch)
 
     def broadcast_verse(
         self,

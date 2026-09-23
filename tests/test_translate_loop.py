@@ -16,10 +16,12 @@ def _stub_pipeline(translate_sentences):
         def __init__(self):
             self.translated = []
             self.seqs = []
+            self.batches = []
 
-        def broadcast_translated(self, text, seq=None):
+        def broadcast_translated(self, text, seq=None, batch=None):
             self.translated.append(text)
             self.seqs.append(seq)
+            self.batches.append(batch)
 
     p = object.__new__(Pipeline)
     p.translator = FakeTranslator()
@@ -114,7 +116,7 @@ def test_captions_first_then_translation_pairs_by_number_not_by_arrival_order():
     p._pending_confirmation = None
     p._original_seq = 0
     p.bible_lookup = None
-    p.broadcaster.broadcast_original = lambda text, seq=None: originals.append((seq, text))
+    p.broadcaster.broadcast_original = lambda text, seq=None, batch=None: originals.append((seq, text))
     originals: list = []
 
     p._commit_new_asr_text("Первое предложение.", final=True)   # translation off
@@ -131,3 +133,14 @@ def test_captions_first_then_translation_pairs_by_number_not_by_arrival_order():
 
     assert [seq for seq, _ in originals] == [0, 1, 2]
     assert p.broadcaster.seqs == [2]  # the translation belongs to original #2, not #0
+
+
+def test_translations_carry_their_commits_batch_id_however_slowly_they_arrive():
+    """A slow translation (GPU contention with a slow TTS, say) must still
+    group with its own commit on the page, so every sentence of the chunk
+    goes out with the chunk's first sequence number as its batch id."""
+    p = _stub_pipeline(lambda text: iter(["A.", "B."]))
+
+    Pipeline._translate_segment(p, "x. y.", first_seq=4)
+
+    assert p.broadcaster.batches == [4, 4]

@@ -25,10 +25,10 @@ class _Broadcaster:
     def broadcast_rtf(self, stage, value):
         self.rtf.append((stage, value))
 
-    def broadcast_original(self, text, seq=None):
+    def broadcast_original(self, text, seq=None, batch=None):
         self.original.append(text)
 
-    def broadcast_translated(self, text, seq=None):
+    def broadcast_translated(self, text, seq=None, batch=None):
         pass
 
 

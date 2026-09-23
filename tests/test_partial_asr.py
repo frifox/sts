@@ -36,11 +36,13 @@ def _stub_pipeline():
         def __init__(self):
             self.original = []
             self.seqs = []
+            self.batches = []
             self.status = None
 
-        def broadcast_original(self, text, seq=None):
+        def broadcast_original(self, text, seq=None, batch=None):
             self.original.append(text)
             self.seqs.append(seq)
+            self.batches.append(batch)
 
         def broadcast_status(self, **kwargs):
             self.status = kwargs
@@ -437,3 +439,16 @@ def test_a_closing_segment_is_pushed_as_final_and_resets_the_partial_timer():
     kind, segment = p._segments.get()
     assert kind == "final" and len(segment) == 10
     assert p._frames_since_partial == 0
+
+
+def test_a_commits_sentences_share_one_batch_id():
+    """The page keeps every sentence of one commit highlighted together and
+    dims the previous commit only when a new one starts - so each commit's
+    sentences must carry the same batch id (its first sequence number), and
+    the next commit a different one."""
+    p = _stub_pipeline()
+
+    p._commit_new_asr_text("Первое предложение. Второе предложение.", final=True)
+    p._commit_new_asr_text("Третье предложение.", final=True)
+
+    assert p.broadcaster.batches == [0, 0, 2]

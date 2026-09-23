@@ -847,12 +847,14 @@ class Pipeline:
         # same string with the same split_sentences() (see
         # _translate_segment), so sentence i of this commit is `first_seq + i`
         # there too. Numbers advance whether or not anything is listening.
+        # The commit's first number doubles as its batch id (see
+        # CaptionBroadcaster.broadcast_original).
         sentences = split_sentences(to_commit)
         first_seq = self._original_seq
         self._original_seq += len(sentences)
         if self.broadcaster:
             for i, sentence in enumerate(sentences):
-                self.broadcaster.broadcast_original(sentence, first_seq + i)
+                self.broadcaster.broadcast_original(sentence, first_seq + i, first_seq)
             self._broadcast_bible_references(to_commit)
         self._transcripts.put((to_commit, first_seq))
 
@@ -887,7 +889,8 @@ class Pipeline:
 
         `first_seq` is the sequence number _commit_new_asr_text gave the
         first sentence of `text`; each translation is broadcast with the
-        number of the original sentence it belongs to."""
+        number of the original sentence it belongs to, and with `first_seq`
+        itself as its batch id (the same one that commit's originals carry)."""
         t0 = time.monotonic()
         for i, translated in enumerate(self.translator.translate_sentences(text)):
             processing_s = time.monotonic() - t0
@@ -896,7 +899,9 @@ class Pipeline:
                 print(f"[en] {translated}")
                 if self.broadcaster:
                     self.broadcaster.broadcast_translated(
-                        translated, None if first_seq is None else first_seq + i
+                        translated,
+                        None if first_seq is None else first_seq + i,
+                        first_seq,
                     )
                 self._broadcast_rtf("translate", processing_s, self._last_asr_audio_s)
                 self._translations.put(translated)
