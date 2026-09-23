@@ -58,3 +58,22 @@ def test_no_reference_in_plain_speech():
 
 def test_book_name_alone_without_numbers_is_not_a_reference():
     assert find_references("Сегодня мы говорим об Иакове и его вере.") == []
+
+
+def test_verse_range_with_spoken_from_keyword():
+    """"стихи с 5 по 7" - the "с" ("from") before the range's starting verse
+    must be skipped, not treated as breaking the number that follows it."""
+    ref = _single("Евангелие от Иоанна, глава 15, стихи с 5 по 7.")
+    assert (ref.book, ref.chapter, ref.verse, ref.verse_end) == ("John", 15, 5, 7)
+
+
+def test_verse_range_with_spoken_from_keyword_and_word_numbers():
+    ref = _single("От Иоанна глава пятнадцать стихи с пятого по седьмое.")
+    assert (ref.book, ref.chapter, ref.verse, ref.verse_end) == ("John", 15, 5, 7)
+
+
+def test_ordinal_seven_is_parsed():
+    """Regression: the "сед" stem alone left "ьмой"/"ьмое" (4 chars) beyond
+    the declension tolerance, so no spoken form of "seventh" ever matched."""
+    ref = _single("От Иоанна глава пятнадцать стих седьмой.")
+    assert (ref.book, ref.chapter, ref.verse) == ("John", 15, 7)

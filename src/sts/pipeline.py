@@ -752,8 +752,14 @@ class Pipeline:
 
     def _broadcast_bible_references(self, text: str) -> None:
         for ref in find_references(text):
+            label = f"{ref.ru_label} {ref.chapter}:{ref.verse}" + (f"-{ref.verse_end}" if ref.verse_end else "")
+            print(f"[bible] detected reference: {label}")
             quote = self.bible_lookup.lookup(ref.book, ref.ru_label, ref.chapter, ref.verse, ref.verse_end)
-            print(f"[verse] {quote.ru_label} {ref.chapter}:{ref.verse}")
+            if not (quote.ru_text or quote.en_text):
+                # broadcast_verse() silently no-ops on this (nothing to show) -
+                # logged here so a detected-but-unfound reference isn't mistaken
+                # for one that was never caught in the first place.
+                print(f"[bible] no verse text found in the bundled Bible data for {label}")
             self.broadcaster.broadcast_verse(
                 quote.ru_label, quote.chapter, quote.verse, quote.verse_end, quote.ru_text, quote.en_text
             )

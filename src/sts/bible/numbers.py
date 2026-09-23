@@ -30,7 +30,8 @@ _UNITS: dict[str, int] = {
     "четверт": 4,
     "пят": 5,
     "шест": 6,
-    "сед": 7,  # седьмой
+    "седьм": 7,  # седьмой, седьмое, седьмых - "сед" alone left too much of the
+                 # word ("ьмой") beyond the 3-char declension tolerance below
     "сем": 7,  # семь
     "восем": 8,
     "восьм": 8,

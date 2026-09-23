@@ -19,6 +19,9 @@ _TOKEN_RE = re.compile(r"[а-яё]+|\d+")
 _CHAPTER_KEYWORDS = {"глава", "гл"}
 _VERSE_KEYWORDS = {"стих", "стиха", "стихи", "ст"}
 _RANGE_KEYWORDS = {"по", "до"}
+# "стихи с 5 по 7" - the "с" ("from") before a range's starting number, only
+# ever said right after a verse keyword introducing a range.
+_RANGE_START_KEYWORDS = {"с", "со"}
 _ORDINAL_STEMS = {"перв": 1, "втор": 2, "трет": 3, "четверт": 4}
 _ORDINAL_SUFFIX_TOLERANCE = 3
 # Words that can sit between an ordinal and the book name it modifies, e.g.
@@ -126,6 +129,8 @@ def find_references(text: str) -> list[BibleReference]:
 
         if j < len(tokens) and tokens[j] in _VERSE_KEYWORDS:
             j += 1
+            if j < len(tokens) and tokens[j] in _RANGE_START_KEYWORDS:
+                j += 1
 
         verse_match = _read_number(tokens, j)
         if verse_match is None:
