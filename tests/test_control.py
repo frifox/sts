@@ -209,6 +209,57 @@ def test_playback_loop_broadcasts_before_playing_locally_not_after():
     assert calls == ["broadcast", "play"]
 
 
+def test_queue_test_output_loads_the_bundled_clip_and_marks_it_forced():
+    """The Test Output button queues the pre-rendered "Testing 1 2 3" clip
+    on the normal playback path, tagged so _playback_loop plays it even with
+    Voice off - this is meant to test the hardware output, not the pipeline."""
+    import queue
+
+    from sts.pipeline import Pipeline
+
+    p = object.__new__(Pipeline)
+    p._audio = queue.Queue()
+
+    p._queue_test_output()
+
+    audio, sample_rate, pause_before, force = p._audio.get_nowait()
+    assert force is True
+    assert pause_before == 0.0
+    assert sample_rate > 0
+    assert audio.dtype == np.float32
+    assert len(audio) > 0
+    assert audio.min() >= -1.0 and audio.max() <= 1.0
+
+
+def test_playback_loop_plays_a_forced_clip_even_with_voice_off():
+    import queue
+    import threading
+
+    from sts.pipeline import Pipeline
+
+    should_continues = []
+
+    class Playback:
+        def play(self, audio, sample_rate, pause_before=0.0, should_continue=None, on_chunk=None):
+            should_continues.append(should_continue() if should_continue else None)
+
+    p = object.__new__(Pipeline)
+    p.playback = Playback()
+    p.broadcaster = None
+    p.control = RecognitionControl(16000)  # voice_enabled left off
+    p._audio = queue.Queue()
+    p._stop = threading.Event()
+    p._audio.put((np.zeros(10, dtype=np.float32), 24000, 0.0, True))
+
+    thread = threading.Thread(target=p._playback_loop, daemon=True)
+    thread.start()
+    thread.join(timeout=2)
+
+    # A forced clip both gets played (not skipped by the voice_enabled gate)
+    # and isn't cut short mid-playback by the should_continue polling either.
+    assert should_continues == [True]
+
+
 def test_broadcast_input_level_sends_the_frames_rms():
     from sts.pipeline import Pipeline
 

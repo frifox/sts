@@ -24,6 +24,7 @@ import threading
 import time
 import wave
 from collections import deque
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -61,6 +62,11 @@ RTF_WINDOW_S = 30.0
 # gone would otherwise trigger one every check.
 INPUT_STALL_S = 3.0
 AUDIO_RECOVERY_MIN_INTERVAL_S = 5.0
+
+# Pre-rendered "Testing 1 2 3" clip for the Output dropdown's Test Output
+# button - a fixed recording rather than synthesized fresh each click, so it
+# plays even when Voice (and its models) are off.
+TEST_OUTPUT_WAV = Path(__file__).resolve().parent / "assets" / "test_output.wav"
 
 # One binary mic frame from a browser: a 4-byte LE sample-rate header (mirrors
 # the outgoing TTS format in CaptionBroadcaster.broadcast_audio) followed by
@@ -232,6 +238,8 @@ class Pipeline:
             self.control.disable_translation()
         elif action == "reset":
             self._reset()
+        elif action == "test_output":
+            self._queue_test_output()
         elif action == "train_start":
             self.control.start_training()
         elif action == "train_stop":
@@ -997,10 +1005,27 @@ class Pipeline:
         else:
             yield self.tts.synthesize(text)
 
+    def _queue_test_output(self) -> None:
+        """Loads the pre-rendered "Testing 1 2 3" clip and queues it on the
+        normal playback path, so it goes out through whatever output device
+        is currently selected - forced to play even if Voice is off, since
+        this is meant to test the hardware, not the translation pipeline."""
+        try:
+            with wave.open(str(TEST_OUTPUT_WAV), "rb") as wav_file:
+                sample_rate = wav_file.getframerate()
+                raw = wav_file.readframes(wav_file.getnframes())
+            audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        except Exception as exc:
+            print(f"[audio] couldn't load the test output clip: {exc!r}")
+            return
+        self._audio.put((audio, sample_rate, 0.0, True))
+
     def _playback_loop(self) -> None:
         while not self._stop.is_set():
-            audio, sample_rate, pause_before = self._audio.get()
-            if not self.control.voice_enabled.is_set():
+            item = self._audio.get()
+            audio, sample_rate, pause_before = item[:3]
+            force = item[3] if len(item) > 3 else False  # test-output clips play even with Voice off
+            if not force and not self.control.voice_enabled.is_set():
                 continue  # voice was switched off while this was queued
             # Broadcast before playing locally, not after: play() blocks for
             # close to the clip's real duration (it paces with the sound
@@ -1013,7 +1038,7 @@ class Pipeline:
             if self.broadcaster:
                 self.broadcaster.broadcast_audio(audio, sample_rate)
             try:
-                self._play(audio, sample_rate, pause_before)
+                self._play(audio, sample_rate, pause_before, force)
             except Exception as exc:
                 print(f"[audio] playback failed: {exc!r}")
                 # Typically the output device went stale (laptop slept, the
@@ -1022,14 +1047,14 @@ class Pipeline:
                 # every clip after it.
                 if self._recover_audio("playback failed"):
                     try:
-                        self._play(audio, sample_rate, pause_before)
+                        self._play(audio, sample_rate, pause_before, force)
                     except Exception as exc2:
                         print(f"[audio] playback still failing after re-initializing audio: {exc2!r}")
 
-    def _play(self, audio, sample_rate: int, pause_before: float) -> None:
+    def _play(self, audio, sample_rate: int, pause_before: float, force: bool = False) -> None:
         self.playback.play(
             audio, sample_rate=sample_rate, pause_before=pause_before,
-            should_continue=self.control.voice_enabled.is_set,
+            should_continue=(lambda: True) if force else self.control.voice_enabled.is_set,
             on_chunk=self._broadcast_output_level,
         )
 

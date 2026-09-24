@@ -52,6 +52,7 @@ where = ["src"]
 "sts.web" = ["static/*"]
 "sts.bible.data" = ["*.json.gz"]
 "sts.bundled_voices" = ["*/reference.wav", "*/meta.json"]
+"sts.assets" = ["*.wav"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

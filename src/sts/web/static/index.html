@@ -514,6 +514,9 @@
           <div class="mic-row">
             <button type="button" id="stream-toggle" title="Play the synthesized voice in this browser too">🔊 Stream voice to this browser</button>
           </div>
+          <div class="mic-row">
+            <button type="button" id="btn-test-output" title="Play a short pre-recorded clip through the selected output device, even with Voice off">🔈 Test Output</button>
+          </div>
         </div>
       </div>
       <button id="btn-reset">Reset</button>
@@ -1506,6 +1509,8 @@
     }
     updateStreamButton();
   });
+
+  document.getElementById('btn-test-output').addEventListener('click', () => send('test_output'));
 
   // Each binary frame: 4-byte LE sample rate header + raw float32 LE mono PCM
   // (see CaptionBroadcaster.broadcast_audio). Chunks are scheduled back to
