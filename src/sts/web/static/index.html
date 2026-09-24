@@ -69,9 +69,10 @@
     animation: fade-in 0.25s ease-out;
   }
 
-  /* Original captions: final (locked) sentences are "historic" - faded, like
-     older lines; the text that isn't final yet (.recent) stays bright, in
-     its own paragraph below them (the last row in portrait). */
+  /* In each column the newest line stays bright and older ones are faded.
+     For the original captions that means the newest final sentence; the
+     text that isn't final yet (.recent) is bright too, in its own paragraph
+     below them (the last row in portrait), and doesn't count as a line. */
   .line.old { opacity: 0.4; transition: opacity 0.6s ease; }
 
   #original-lines .line { color: #9cdcfe; }
@@ -628,10 +629,10 @@
   const rtfOff = { asr: false, translate: false, voice: false };
   const RTF_ELEMENT_IDS = { asr: 'rtf-asr', translate: 'rtf-translate', voice: 'rtf-voice' };
 
-  // Translated captions: the newest one stays bright and a new one dims
-  // the rest. (Original captions don't use this: a final original is faded
-  // from the start - see `historic` in addLine - and only the live caption
-  // is bright.) Every message carries a batch id (`batch`, currently the
+  // In each column - final originals and translations alike - the newest
+  // line stays bright and a new one dims the rest. (The live, not-yet-final
+  // original text isn't a line here: it's kept apart and never dims or
+  // counts.) Every message carries a batch id (`batch`, currently the
   // sentence's own number); a line joins the still-highlighted batch when
   // it has the same id as the previous one in its column, and only a new id
   // starts a fresh batch and dims the previous one. The id, not timing, is
@@ -671,8 +672,6 @@
     return flow;
   }
 
-  // `opts.historic`: shown faded from the start (a final original caption)
-  // instead of by batch.
   function addLine(containerId, text, opts, seq) {
     const container = document.getElementById(containerId);
     const flow = flowOf(containerId);
@@ -680,8 +679,7 @@
     snippet.className = 'line';
     snippet.textContent = text + ' ';  // the space keeps consecutive snippets apart on one line
     snippet.seq = seq;  // kept so a switch to portrait can pair originals with translations exactly
-    if (opts?.historic) snippet.classList.add('old');
-    else markOldIfNewBatch(containerId, flow.children, opts);
+    markOldIfNewBatch(containerId, flow.children, opts);  // the live caption isn't in `flow`
     flow.appendChild(snippet);
 
     // Drop the oldest snippets once even the retained (not just visible)
@@ -738,8 +736,7 @@
   function addPortraitOriginal(text, opts, seq) {
     const original = document.createElement('p');
     original.className = 'portrait-cell line original';
-    if (opts?.historic) original.classList.add('old');
-    else markOldIfNewBatch('portrait-original', portraitGrid.querySelectorAll('.original:not(.recent)'), opts);
+    markOldIfNewBatch('portrait-original', portraitGrid.querySelectorAll('.original:not(.recent)'), opts);
     original.style.margin = '0';
     original.textContent = text;
     const translated = document.createElement('p');
@@ -864,7 +861,7 @@
       // it shifts.
       const translationOf = new Map(translateds.map((t) => [t.seq, t.text]));
       for (const o of originals) {
-        addPortraitOriginal(o.text, { historic: true }, o.seq);
+        addPortraitOriginal(o.text, forced, o.seq);
         if (translationOf.has(o.seq)) addPortraitTranslated(translationOf.get(o.seq), forced, o.seq);
       }
       return;
@@ -879,7 +876,7 @@
     const recentOriginals = originals.slice(originals.length - n);
     const recentTranslateds = translateds.slice(translateds.length - n);
     for (let i = 0; i < n; i++) {
-      addPortraitOriginal(recentOriginals[i].text, { historic: true });
+      addPortraitOriginal(recentOriginals[i].text, forced);
       addPortraitTranslated(recentTranslateds[i].text, forced);  // no seq: pairs with the row just added
     }
   }
@@ -894,7 +891,7 @@
 
     document.getElementById('original-lines').querySelector('.flow')?.remove();
     document.getElementById('translated-lines').querySelector('.flow')?.remove();
-    for (const o of originals) addLine('original-lines', o.text, { historic: true }, o.seq);
+    for (const o of originals) addLine('original-lines', o.text, { forceNewBatch: true }, o.seq);
     for (const t of translateds) addLine('translated-lines', t.text, { forceNewBatch: true }, t.seq);
   }
 
@@ -1635,7 +1632,7 @@
       if (event.data instanceof ArrayBuffer) { playAudioChunk(event.data); return; }
       const msg = JSON.parse(event.data);
       if (msg.type === 'original') {
-        if (renderMode === 'portrait') addPortraitOriginal(msg.text, { historic: true }, msg.seq); else addLine('original-lines', msg.text, { historic: true }, msg.seq);
+        if (renderMode === 'portrait') addPortraitOriginal(msg.text, { batch: msg.batch }, msg.seq); else addLine('original-lines', msg.text, { batch: msg.batch }, msg.seq);
       } else if (msg.type === 'original_recent') {
         setRecentOriginal(msg.text);
       } else if (msg.type === 'translated') {
