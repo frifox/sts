@@ -592,6 +592,10 @@ With XTTS, each sentence starts playing about one second of audio after
 synthesis begins, and the rest is generated while it plays, instead of the
 whole sentence being rendered first.
 
+**Currently disabled** (`catchup_max_rate = 1.0` in `AudioConfig`): all
+speech plays at normal speed. Set it back to `1.35` to re-enable what
+follows.
+
 If the voice runs late - sentences start being spoken long after their
 captions became final - playback speeds up, keeping the pitch, until it has
 caught up, then returns to normal speed. Lateness is measured in seconds

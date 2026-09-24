@@ -55,9 +55,11 @@ class _Playback:
         return self.pending
 
 
-def _pipeline(pending=0.0):
+def _pipeline(pending=0.0, catch_up=True):
     p = object.__new__(Pipeline)
     p.cfg = PipelineConfig()
+    if catch_up:  # off by default for now (catchup_max_rate 1.0); these tests cover it switched on
+        p.cfg.audio.catchup_max_rate = 1.35
     p.playback = _Playback(pending)
     p._audio = queue.Queue()
     return p
@@ -88,9 +90,17 @@ def test_a_long_sentence_waiting_its_turn_is_not_lateness():
     assert not p._catching_up
 
 
+def test_speed_up_is_off_by_default_for_now():
+    p = _pipeline(catch_up=False)
+    _queue(p, 30.0)
+    clip = _sentence(3.0, late_s=40.0)
+    assert p._catch_up(clip) is clip  # however late, normal speed
+    assert not p._catching_up
+
+
 def test_speeds_up_while_sentences_start_late_then_returns_to_normal():
-    cfg = PipelineConfig().audio
     p = _pipeline()
+    cfg = p.cfg.audio
 
     late = _sentence(3.0, late_s=10.0)
     faster = p._catch_up(late)

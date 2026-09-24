@@ -36,7 +36,9 @@ class AudioConfig:
     catchup_stop_s: float = 3.0
     catchup_full_s: float = 20.0
     catchup_min_rate: float = 1.1
-    catchup_max_rate: float = 1.35
+    # Temporarily disabled (1.0 = never speed up): all speech at normal speed.
+    # 1.35 re-enables it with the thresholds above.
+    catchup_max_rate: float = 1.0
     # Last resort, for when even full speed-up can't keep up (the English
     # runs much longer than the Russian for a long stretch): once this many
     # seconds of synthesized speech are waiting to play, the oldest waiting
