@@ -128,6 +128,11 @@ class _Clip:
     # A streamed chunk continuing the previous clip mid-piece: no pause
     # before it, and it may be merged with that clip before speeding up.
     seamless: bool = False
+    # The first clip of a translated sentence, and when (time.monotonic())
+    # that sentence's caption became final - what playback lateness is
+    # measured from (see Pipeline._catch_up).
+    sentence_start: bool = False
+    finalized_at: float | None = None
 
     @property
     def seconds(self) -> float:
@@ -195,7 +200,7 @@ class Pipeline:
         self.transcript = Transcript(
             self.asr, cfg.asr.final_after_sentences, cfg.asr.final_after_seconds, cfg.audio.sample_rate
         )
-        # (text, seq, spoken seconds, continues) per locked sentence, for translation.
+        # (text, seq, spoken seconds, continues, finalized at) per final sentence, for translation.
         self._transcripts: queue.Queue = queue.Queue()
         self._original_seq = 0  # next sequence number for a broadcast original sentence
         self._last_final_end: float | None = None  # when the last locked sentence ended
@@ -872,7 +877,7 @@ class Pipeline:
             if self.broadcaster:
                 self.broadcaster.broadcast_original(sentence.text, seq, seq)
                 self._broadcast_bible_references(sentence.text)
-            self._transcripts.put((sentence.text, seq, sentence.end - sentence.start, continues))
+            self._transcripts.put((sentence.text, seq, sentence.end - sentence.start, continues, time.monotonic()))
         recent = " ".join(still_open)
         if recent != self._recent_text:
             self._recent_text = recent
@@ -897,19 +902,20 @@ class Pipeline:
         self._run_stage("translate", self._translate_step)
 
     def _translate_step(self) -> None:
-        text, seq, spoken_s, continues = self._transcripts.get(timeout=QUEUE_POLL_S)
+        text, seq, spoken_s, continues, finalized_at = self._transcripts.get(timeout=QUEUE_POLL_S)
         if not self.control.translation_enabled.is_set():
             vlog("translate", "translation is off, skipping")
             return
-        self._translate_sentence(text, seq, spoken_s, continues)
+        self._translate_sentence(text, seq, spoken_s, continues, finalized_at)
 
     def _translate_sentence(self, text: str, seq: int | None = None, spoken_s: float = 0.0,
-                            continues: bool = False) -> None:
+                            continues: bool = False, finalized_at: float | None = None) -> None:
         """Translates one locked caption sentence, broadcasts it with the
         original's sequence number (the page pairs them by it), and queues
         it for TTS. `spoken_s` - how long the original took to say - is the
         translation real-time factor's denominator. `continues` rides along
-        so _tts_step gives it the short within-a-thought pause."""
+        so _tts_step gives it the short within-a-thought pause, and
+        `finalized_at` so playback can tell how late it's spoken."""
         generation = self._reset_generation
         t0 = time.monotonic()
         translated = " ".join(self.translator.translate_sentences(text)).strip()
@@ -924,13 +930,13 @@ class Pipeline:
         if self.broadcaster:
             self.broadcaster.broadcast_translated(translated, seq, seq)
         self._broadcast_rtf("translate", processing_s, spoken_s)
-        self._translations.put((translated, continues))
+        self._translations.put((translated, continues, finalized_at))
 
     def _tts_loop(self) -> None:
         self._run_stage("tts", self._tts_step)
 
     def _tts_step(self) -> None:
-        text, continues = self._translations.get(timeout=QUEUE_POLL_S)
+        text, continues, finalized_at = self._translations.get(timeout=QUEUE_POLL_S)
         if not self.control.voice_enabled.is_set():
             vlog("tts", "voice is off, skipping synthesis")
             return
@@ -963,7 +969,9 @@ class Pipeline:
                 pause = self.cfg.audio.pause_within_s if continues else self.cfg.audio.pause_between_s
             else:
                 pause = self.cfg.audio.pause_within_s
-            self._audio.put(_Clip(audio, sample_rate, pause, seamless=seamless))
+            self._audio.put(_Clip(
+                audio, sample_rate, pause, seamless=seamless, sentence_start=first_piece, finalized_at=finalized_at,
+            ))
             first_piece = False
             t0 = time.monotonic()
 
@@ -1048,28 +1056,29 @@ class Pipeline:
         return queued + self.playback.pending_s()
 
     def _catch_up(self, clip: _Clip) -> _Clip:
-        """Speeds `clip` up (pitch preserved) while playback is lagging - see
-        AudioConfig.catchup_*. Only *playback* lag counts: speech already
-        synthesized and waiting its turn, which is what makes the English
-        drift further and further behind the speaker during a long stretch
-        of continuous talking. Hysteresis keeps it from flapping: it starts
-        at catchup_start_s of backlog and keeps going until the backlog is
-        down to catchup_stop_s, then speech is back to normal speed."""
+        """Speeds `clip` up (pitch preserved) while the voice is running late
+        - see AudioConfig.catchup_*.
+
+        Late means: a sentence starts being spoken long after its caption
+        became final. Only that counts - not the time the text spent
+        un-finalized before (a delay captions have by design, not playback
+        falling behind), and not how much audio is queued (one long
+        sentence waiting its turn isn't lateness if it will still start on
+        time). It's judged at the start of each sentence, and every piece
+        of that sentence plays at the speed chosen then. Hysteresis keeps it
+        from flapping: speed-up starts once a sentence is catchup_start_s
+        late and keeps going until one starts within catchup_stop_s."""
         if clip.force:
             return clip
         cfg = self.cfg.audio
-        if cfg.catchup_max_rate <= 1.0:
-            return clip
         backlog = self._playback_backlog_s()
         if cfg.max_backlog_s is not None and backlog > cfg.max_backlog_s:
             clip, backlog = self._skip_backlog(clip, backlog)
-        if not self._catching_up and backlog >= cfg.catchup_start_s:
-            self._catching_up = True
-            print(f"[audio] speech playback is {backlog:.0f}s behind; speeding it up to catch up")
-        elif self._catching_up and backlog <= cfg.catchup_stop_s:
-            self._catching_up = False
-            print("[audio] speech playback caught up; back to normal speed")
-        if not self._catching_up:
+        if clip.sentence_start:
+            late_s = time.monotonic() - clip.finalized_at if clip.finalized_at is not None else 0.0
+            self._rate = self._catch_up_rate(late_s)
+        rate = self._rate
+        if rate <= 1.0:
             return clip
 
         # Streamed chunks of the same piece that are already waiting are
@@ -1079,15 +1088,33 @@ class Pipeline:
         with self._audio.mutex:
             while self._audio.queue and self._audio.queue[0].seamless:
                 parts.append(self._audio.queue.popleft())
-        if len(parts) > 1:
-            clip = _Clip(
-                np.concatenate([part.audio for part in parts]), clip.sample_rate, clip.pause_before, seamless=clip.seamless
-            )
+        audio = np.concatenate([part.audio for part in parts]) if len(parts) > 1 else clip.audio
+        vlog("audio", f"playing the next {audio.size / clip.sample_rate:.1f}s at {rate:.2f}x")
+        return _Clip(
+            time_stretch(audio, clip.sample_rate, rate), clip.sample_rate, clip.pause_before / rate,
+            seamless=clip.seamless, sentence_start=clip.sentence_start, finalized_at=clip.finalized_at,
+        )
+
+    # Playback speed for the sentence now playing, chosen at its start - see _catch_up.
+    _rate = 1.0
+
+    def _catch_up_rate(self, late_s: float) -> float:
+        """Playback speed for a sentence starting `late_s` after it became
+        final, updating the catching-up state (with hysteresis)."""
+        cfg = self.cfg.audio
+        if cfg.catchup_max_rate <= 1.0:
+            return 1.0
+        if not self._catching_up and late_s >= cfg.catchup_start_s:
+            self._catching_up = True
+            print(f"[audio] voice is starting sentences {late_s:.0f}s after they're final; speeding it up to catch up")
+        elif self._catching_up and late_s <= cfg.catchup_stop_s:
+            self._catching_up = False
+            print("[audio] voice caught up; back to normal speed")
+        if not self._catching_up:
+            return 1.0
         span = max(cfg.catchup_full_s - cfg.catchup_stop_s, 1e-6)
-        rate = cfg.catchup_min_rate + (cfg.catchup_max_rate - cfg.catchup_min_rate) * (backlog - cfg.catchup_stop_s) / span
-        rate = min(cfg.catchup_max_rate, max(cfg.catchup_min_rate, rate))
-        vlog("audio", f"playback {backlog:.1f}s behind; playing the next {clip.seconds:.1f}s at {rate:.2f}x")
-        return _Clip(time_stretch(clip.audio, clip.sample_rate, rate), clip.sample_rate, clip.pause_before / rate, seamless=clip.seamless)
+        rate = cfg.catchup_min_rate + (cfg.catchup_max_rate - cfg.catchup_min_rate) * (late_s - cfg.catchup_stop_s) / span
+        return min(cfg.catchup_max_rate, max(cfg.catchup_min_rate, rate))
 
     def _skip_backlog(self, clip: _Clip, backlog: float) -> tuple[_Clip, float]:
         """Drops the oldest waiting speech, whole sentences at a time (a

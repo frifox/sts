@@ -24,21 +24,23 @@ class AudioConfig:
     # Silence between the sentences of one spoken text (each sentence is
     # synthesized separately so it gets its own natural intonation).
     pause_within_s: float = 0.35
-    # Catch-up: when synthesized speech is waiting to play (queued clips plus
-    # whatever is still playing) for at least `catchup_start_s`, playback is
-    # sped up - pitch preserved - until that drops to `catchup_stop_s`, then
-    # returns to normal speed. The speed-up grows with the backlog, from
-    # `catchup_min_rate` up to `catchup_max_rate` at `catchup_full_s` of
-    # backlog or more. `catchup_max_rate` of 1.0 disables it.
+    # Catch-up: when a sentence starts being spoken `catchup_start_s` or more
+    # after its caption became final, playback is sped up - pitch preserved -
+    # until a sentence starts within `catchup_stop_s`, then returns to normal
+    # speed. (Seconds, not sentences; the time before a caption is final
+    # doesn't count.) The speed-up grows with the lateness, from
+    # `catchup_min_rate` up to `catchup_max_rate` at `catchup_full_s` late
+    # or more, and is chosen once per sentence. `catchup_max_rate` of 1.0
+    # disables it.
     catchup_start_s: float = 8.0
     catchup_stop_s: float = 3.0
     catchup_full_s: float = 20.0
     catchup_min_rate: float = 1.1
     catchup_max_rate: float = 1.35
     # Last resort, for when even full speed-up can't keep up (the English
-    # runs much longer than the Russian for a long stretch): once this much
-    # is waiting, the oldest waiting sentences are skipped - speech a minute
-    # behind the speaker is no use to anyone. None never skips.
+    # runs much longer than the Russian for a long stretch): once this many
+    # seconds of synthesized speech are waiting to play, the oldest waiting
+    # sentences are skipped. None never skips.
     max_backlog_s: float | None = 60.0
     block_ms: int = 32  # frame fed to the VAD; Silero needs exactly 512 samples at 16 kHz (32 ms)
 

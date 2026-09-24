@@ -3,6 +3,7 @@ Bible references, and translated in order; the still-open text goes to the
 page as one live line (see Pipeline._publish_captions / _translate_sentence)."""
 
 import queue
+import time
 
 from sts.pipeline import Pipeline
 from sts.transcript import Sentence
@@ -50,11 +51,13 @@ def test_locked_sentences_are_numbered_shown_and_queued_for_translation():
 
     assert p.broadcaster.original == [("Первое.", 0), ("Второе.", 1), ("Третье.", 2)]
     queued = [p._transcripts.get_nowait() for _ in range(3)]
-    assert [(text, seq) for text, seq, _, _ in queued] == [("Первое.", 0), ("Второе.", 1), ("Третье.", 2)]
-    assert [spoken for _, _, spoken, _ in queued] == [1.0, 0.7, 1.0]
+    assert [(text, seq) for text, seq, *_ in queued] == [("Первое.", 0), ("Второе.", 1), ("Третье.", 2)]
+    assert [spoken for _, _, spoken, *_ in queued] == [1.0, 0.7, 1.0]
     # Straight on from the one before -> spoken as the same thought; after a
     # real pause (3 s here) -> the longer between-thoughts gap.
-    assert [continues for _, _, _, continues in queued] == [False, True, False]
+    assert [continues for _, _, _, continues, _ in queued] == [False, True, False]
+    # Stamped with when it became final - what playback lateness is measured from.
+    assert all(abs(finalized_at - time.monotonic()) < 5 for *_, finalized_at in queued)
 
 
 def test_the_live_line_is_the_open_sentences_joined_and_only_resent_when_it_changes():
@@ -78,9 +81,9 @@ def _translating_pipeline(translate):
 
 def test_a_locked_sentence_is_translated_whole_and_paired_by_its_number():
     p = _translating_pipeline(lambda text: iter(["He said so.", "Then left."]))  # split by NLLB's sentence splitter
-    p._translate_sentence("Он так сказал. И ушёл.", seq=7, spoken_s=2.0, continues=True)
+    p._translate_sentence("Он так сказал. И ушёл.", seq=7, spoken_s=2.0, continues=True, finalized_at=123.0)
     assert p.broadcaster.translated == [("He said so. Then left.", 7)]
-    assert p._translations.get_nowait() == ("He said so. Then left.", True)
+    assert p._translations.get_nowait() == ("He said so. Then left.", True, 123.0)
 
 
 def test_an_empty_translation_is_neither_shown_nor_spoken():
@@ -96,6 +99,6 @@ def test_translations_pair_with_their_originals_whatever_order_they_finish_in():
     p = _translating_pipeline(lambda text: iter([text.upper()]))
     p._publish_captions([Sentence(f"s{i}.", i, i + 0.5, True) for i in range(3)], [])
     items = [p._transcripts.get_nowait() for _ in range(3)]
-    for text, seq, spoken, continues in reversed(items):
-        p._translate_sentence(text, seq, spoken, continues)
+    for item in reversed(items):
+        p._translate_sentence(*item)
     assert p.broadcaster.translated == [("S2.", 2), ("S1.", 1), ("S0.", 0)]

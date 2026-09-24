@@ -1,6 +1,7 @@
 """Speeding speech playback up when it falls behind, and back down once caught up."""
 
 import queue
+import time
 
 import numpy as np
 import pytest
@@ -67,57 +68,66 @@ def _queue(p, *seconds, seamless=False):
         p._audio.put(_Clip(_tone(s), SR, 0.0, seamless=seamless))
 
 
-def test_no_speed_up_while_playback_keeps_pace():
-    p = _pipeline(pending=1.0)
-    _queue(p, 2.0)
-    clip = _Clip(_tone(2.0), SR, 1.0)
+def _sentence(seconds, late_s, freq=150.0):
+    """The first clip of a sentence whose caption became final `late_s` ago."""
+    return _Clip(_tone(seconds, freq), SR, 0.35, sentence_start=True, finalized_at=time.monotonic() - late_s)
+
+
+def _rate(original, played):
+    return len(original.audio) / len(played.audio)
+
+
+def test_a_long_sentence_waiting_its_turn_is_not_lateness():
+    """What went wrong before: one long sentence queued behind the one
+    playing counted as "8 s behind" and sped the voice up, though nothing
+    was running late."""
+    p = _pipeline(pending=6.0)
+    _queue(p, 15.0)  # a long sentence already synthesized, waiting
+    clip = _sentence(3.0, late_s=1.5)
     assert p._catch_up(clip) is clip
     assert not p._catching_up
 
 
-def test_speeds_up_when_behind_then_returns_to_normal_once_caught_up():
+def test_speeds_up_while_sentences_start_late_then_returns_to_normal():
     cfg = PipelineConfig().audio
     p = _pipeline()
-    _queue(p, 4.0, 4.0, 4.0)  # 12s waiting: past catchup_start_s
-    clip = _Clip(_tone(3.0), SR, 1.0)
 
-    faster = p._catch_up(clip)
-
+    late = _sentence(3.0, late_s=10.0)
+    faster = p._catch_up(late)
     assert p._catching_up
-    assert len(faster.audio) < len(clip.audio)
-    assert faster.pause_before < clip.pause_before  # pauses shrink too
-    rate = len(clip.audio) / len(faster.audio)
-    assert cfg.catchup_min_rate - 0.01 <= rate <= cfg.catchup_max_rate + 0.01
+    assert cfg.catchup_min_rate - 0.01 <= _rate(late, faster) <= cfg.catchup_max_rate + 0.01
+    assert faster.pause_before < late.pause_before  # pauses shrink too
 
-    # Still behind, but under the start threshold: keeps catching up (hysteresis).
-    p._audio = queue.Queue()
-    _queue(p, 5.0)
-    assert len(p._catch_up(_Clip(_tone(3.0), SR)).audio) < 3.0 * SR
-    assert p._catching_up
+    # The rest of the same sentence keeps the speed chosen at its start,
+    # however long it has been since the sentence became final by now.
+    rest = _Clip(_tone(3.0), SR, 0.35, finalized_at=late.finalized_at)
+    assert _rate(rest, p._catch_up(rest)) == pytest.approx(_rate(late, faster), rel=0.01)
 
-    # Down to catchup_stop_s: normal speed again.
-    p._audio = queue.Queue()
-    _queue(p, 1.0)
-    clip = _Clip(_tone(3.0), SR)
-    assert p._catch_up(clip) is clip
+    # Next sentence 5 s late: under the start threshold, over the stop one - keeps going (hysteresis).
+    assert _rate(late, p._catch_up(_sentence(3.0, late_s=5.0))) > 1.0
+
+    # One that starts within catchup_stop_s: normal speed again, for it and the rest of it.
+    on_time = _sentence(3.0, late_s=1.0)
+    assert p._catch_up(on_time) is on_time
     assert not p._catching_up
+    rest = _Clip(_tone(3.0), SR, 0.35)
+    assert p._catch_up(rest) is rest
 
 
-def test_speed_up_grows_with_the_backlog():
-    small, large = _pipeline(), _pipeline()
-    _queue(small, 9.0)
-    _queue(large, 30.0)
-    clip = _Clip(_tone(3.0), SR)
-    assert len(large._catch_up(clip).audio) < len(small._catch_up(clip).audio)
+def test_speed_up_grows_with_how_late_a_sentence_starts():
+    a, b = _pipeline(), _pipeline()
+    slightly = a._catch_up(_sentence(3.0, late_s=9.0))
+    very = b._catch_up(_sentence(3.0, late_s=30.0))
+    assert len(very.audio) < len(slightly.audio)
 
 
 def test_waiting_chunks_of_the_same_piece_are_stretched_together():
     p = _pipeline()
     _queue(p, 1.0, 1.0, seamless=True)  # the rest of the piece, already synthesized
     _queue(p, 8.0)  # the next sentence
-    out = p._catch_up(_Clip(_tone(1.0), SR, 0.35))
+    out = p._catch_up(_sentence(1.0, late_s=12.0))
     assert p._audio.qsize() == 1  # both chunks merged into this clip
-    assert len(out.audio) < 3.0 * SR and len(out.audio) > 2.0 * SR
+    assert 2.0 * SR < len(out.audio) < 3.0 * SR
 
 
 def test_skips_the_oldest_speech_when_hopelessly_behind():
