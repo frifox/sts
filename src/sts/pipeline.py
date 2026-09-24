@@ -686,6 +686,16 @@ class Pipeline:
         windowed_audio = sum(a for _, _, a in window)
         self.broadcaster.broadcast_rtf(stage, windowed_processing / windowed_audio)
 
+    def _broadcast_input_level(self, frame: np.ndarray) -> None:
+        """RMS of one raw capture frame, for the volume-bar meter next to the
+        Caption button. Sent regardless of VAD state or the Caption toggle -
+        it reflects whatever is arriving from the selected input (ALSA or a
+        browser mic), not whether the pipeline is currently doing anything
+        with it, throttled by the caller to about every 100ms."""
+        if self.broadcaster and frame.size:
+            rms = float(np.sqrt(np.mean(np.square(frame))))
+            self.broadcaster.broadcast_input_level(rms)
+
     def _broadcast_library(self) -> None:
         if self.broadcaster:
             speakers = [
@@ -714,10 +724,22 @@ class Pipeline:
 
     # -- pipeline stages -----------------------------------------------
 
+    # Frames arrive in fixed block_ms (32ms) chunks, so a plain ">= 0.1s"
+    # gate would fire on the first boundary *past* 100ms (128ms: 4 frames),
+    # not the closest one (96ms: 3 frames, only 4ms off) - this trims the
+    # threshold just under 3 frames' worth so it catches that one instead.
+    _INPUT_LEVEL_INTERVAL_S = 0.095
+
     def _segment_loop(self) -> None:
         self._frames_since_partial = 0
+        last_level_broadcast = 0.0
         while not self._stop.is_set():
-            self._process_captured_frame(self.capture.frames.get())
+            frame = self.capture.frames.get()
+            now = time.monotonic()
+            if now - last_level_broadcast >= self._INPUT_LEVEL_INTERVAL_S:
+                self._broadcast_input_level(frame)
+                last_level_broadcast = now
+            self._process_captured_frame(frame)
 
     def _process_captured_frame(self, frame: np.ndarray) -> None:
         """One frame's worth of VAD/segmentation bookkeeping: closes and

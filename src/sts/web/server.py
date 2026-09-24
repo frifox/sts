@@ -220,6 +220,15 @@ class CaptionBroadcaster:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
+    def broadcast_input_level(self, level: float) -> None:
+        """RMS (0..~1) of the most recent input frame, throttled by the
+        caller to about every 100ms - drives the volume-bar meter. Not
+        cached/replayed on connect like the others: a fresh value arrives
+        within 100ms anyway, and a stale level would be actively misleading."""
+        if self.loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_to_all({"type": "input_level", "level": level}), self.loop)
+
     def broadcast_engines(self, message: dict) -> None:
         """Static ASR/translation/TTS model + device info for the header dropdowns."""
         self._last_engines = {"type": "engines", **message}

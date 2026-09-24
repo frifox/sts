@@ -201,6 +201,39 @@ def test_playback_loop_broadcasts_before_playing_locally_not_after():
     assert calls == ["broadcast", "play"]
 
 
+def test_broadcast_input_level_sends_the_frames_rms():
+    from sts.pipeline import Pipeline
+
+    levels = []
+
+    class Broadcaster:
+        def broadcast_input_level(self, level):
+            levels.append(level)
+
+    p = object.__new__(Pipeline)
+    p.broadcaster = Broadcaster()
+
+    # A full-scale square wave has RMS 1.0 - a clean, exact value to assert on.
+    p._broadcast_input_level(np.array([1.0, -1.0, 1.0, -1.0], dtype=np.float32))
+    assert levels == [1.0]
+
+    p._broadcast_input_level(np.zeros(10, dtype=np.float32))
+    assert levels == [1.0, 0.0]
+
+
+def test_broadcast_input_level_skips_an_empty_frame():
+    from sts.pipeline import Pipeline
+
+    class Broadcaster:
+        def broadcast_input_level(self, level):
+            raise AssertionError("should never be called for an empty frame")
+
+    p = object.__new__(Pipeline)
+    p.broadcaster = Broadcaster()
+
+    p._broadcast_input_level(np.array([], dtype=np.float32))  # no crash, no broadcast
+
+
 def _startup_voice_pipeline(tmp_path):
     """A Pipeline stub with a real library (one shipped voice + one of the user's) and a recording TTS."""
     import queue

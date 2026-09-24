@@ -269,6 +269,37 @@
     gap: 0.6em;
   }
 
+  /* Live input-level meter: 10 bars, tallest on the right, colored by
+     position (not by whether the current level reaches them) - bars 1-5
+     read as "quiet", 6-10 as "good", same idea as a hardware VU meter's
+     fixed color zones. How many are actually lit is the only thing that
+     changes as the level moves. */
+  #volume-meter {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 1.5em;
+    padding: 0 0.2em;
+  }
+  .volume-bar {
+    width: 0.3em;
+    background: #2a2a30;
+    border-radius: 1px;
+    transition: background-color 0.08s linear;
+  }
+  .volume-bar:nth-child(1) { height: 22%; }
+  .volume-bar:nth-child(2) { height: 32%; }
+  .volume-bar:nth-child(3) { height: 42%; }
+  .volume-bar:nth-child(4) { height: 52%; }
+  .volume-bar:nth-child(5) { height: 62%; }
+  .volume-bar:nth-child(6) { height: 72%; }
+  .volume-bar:nth-child(7) { height: 82%; }
+  .volume-bar:nth-child(8) { height: 91%; }
+  .volume-bar:nth-child(9) { height: 100%; }
+  .volume-bar:nth-child(10) { height: 100%; }
+  .volume-bar.lit-quiet { background: #c9a24b; }
+  .volume-bar.lit-good { background: #4cbb6c; }
+
   #controls button {
     font: inherit;
     font-size: 0.9rem;
@@ -409,6 +440,18 @@
   <div id="app">
   <div id="header">
     <div id="controls">
+      <div id="volume-meter" title="Input level (whichever source is currently selected)">
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+      </div>
       <div class="engine" id="engine-asr">
         <button class="engine-toggle" id="btn-asr-toggle">Caption</button>
         <button class="engine-caret" id="caret-asr" aria-label="Caption settings">▾</button>
@@ -1097,6 +1140,31 @@
     el.classList.toggle('slow', msg.value >= 1.0);
   }
 
+  // -- Input level meter (10 bars, left of the Caption button) ----------------
+  // The server sends raw RMS (0..~1) of the currently selected input,
+  // throttled to ~100ms; everything about turning that into a bar count and
+  // coloring lives here so it's tunable without touching the backend.
+  const volumeBars = Array.from(document.querySelectorAll('#volume-meter .volume-bar'));
+  const VOLUME_FLOOR_DB = -50;  // at/below this: silence, no bars lit
+  const VOLUME_CEILING_DB = -6; // at/above this: all 10 bars lit
+
+  function levelToBarCount(rms) {
+    if (!(rms > 0)) return 0;
+    const db = 20 * Math.log10(rms);
+    if (db <= VOLUME_FLOOR_DB) return 0;
+    const frac = Math.min(1, (db - VOLUME_FLOOR_DB) / (VOLUME_CEILING_DB - VOLUME_FLOOR_DB));
+    return Math.round(frac * volumeBars.length);
+  }
+
+  function applyInputLevel(msg) {
+    const lit = levelToBarCount(msg.level);
+    volumeBars.forEach((bar, i) => {
+      const position = i + 1;
+      bar.classList.toggle('lit-quiet', position <= lit && position <= 5);
+      bar.classList.toggle('lit-good', position <= lit && position > 5);
+    });
+  }
+
   // Switching reloads the whole ASR engine (several seconds to about a
   // minute for a cold Parakeet load), during which the #stage indicator
   // shows "Switching speech recognition to ..." via the existing stage
@@ -1429,6 +1497,7 @@
     ws.onclose = () => {
       stage.textContent = 'Reconnecting…';
       stage.className = '';
+      volumeBars.forEach((bar) => bar.classList.remove('lit-quiet', 'lit-good'));
       setTimeout(connect, 1000);
     };
     ws.onmessage = (event) => {
@@ -1451,6 +1520,7 @@
       else if (msg.type === 'devices') applyDevices(msg);
       else if (msg.type === 'engines') applyEngines(msg);
       else if (msg.type === 'rtf') applyRtf(msg);
+      else if (msg.type === 'input_level') applyInputLevel(msg);
     };
   }
 
