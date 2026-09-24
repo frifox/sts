@@ -368,7 +368,9 @@
   /* Landscape / Portrait: two buttons side by side, the current one lit. */
   .engine-dropdown .render-mode { display: flex; gap: 0.5rem; }
   .engine-dropdown .render-mode button { flex: 1 1 0; }
-  .render-mode button.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
+  /* #controls, like the other "on" rules: it has to outrank the general
+     #controls button rule, or its background wins and the button never turns green. */
+  #controls .render-mode button.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   /* Dark styling for the modal dialogs' own buttons and fields (the header's are styled via #controls). */
   #design-dialog button, #save-dialog button {
     font: inherit;
