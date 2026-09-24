@@ -70,8 +70,8 @@
   }
 
   /* Original captions: final (locked) sentences are "historic" - faded, like
-     older lines; the text that isn't final yet (.recent) stays bright, as
-     one running line at the end. */
+     older lines; the text that isn't final yet (.recent) stays bright, in
+     its own paragraph below them (the last row in portrait). */
   .line.old { opacity: 0.4; transition: opacity 0.6s ease; }
 
   #original-lines .line { color: #9cdcfe; }
@@ -113,7 +113,7 @@
      doesn't scale with its container (the landscape paragraph's font is
      already large; em would double it). After .portrait-cell so it wins
      there too (same specificity - order decides). */
-  .recent { font-size: 2rem; }
+  .recent { font-size: 2rem; line-height: 1.25; }
 
   /* Portrait mode has no separate original/translated panels to hide (both
      columns live in one shared panel) - Caption/Translate turning off is
@@ -665,7 +665,8 @@
       flow = document.createElement('p');
       flow.className = 'flow';
       flow.style.margin = '0';
-      container.appendChild(flow);
+      // Above the live caption's own paragraph, if that's already there.
+      container.insertBefore(flow, container.querySelector(':scope > .recent'));
     }
     return flow;
   }
@@ -681,7 +682,7 @@
     snippet.seq = seq;  // kept so a switch to portrait can pair originals with translations exactly
     if (opts?.historic) snippet.classList.add('old');
     else markOldIfNewBatch(containerId, flow.children, opts);
-    flow.insertBefore(snippet, flow.querySelector('.recent'));  // before the live caption, if any
+    flow.appendChild(snippet);
 
     // Drop the oldest snippets once even the retained (not just visible)
     // history no longer fits, so the DOM (and the visible page) never grows
@@ -689,7 +690,9 @@
     // so overflow extends upward where scrollHeight can't see it; compare
     // the text block's own height instead.)
     const style = getComputedStyle(container);
-    const available = container.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    const live = container.querySelector(':scope > .recent');  // the live caption's paragraph takes room too
+    const available = container.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
+      - (live ? live.offsetHeight : 0);
     while (flow.children.length > 1 && flow.offsetHeight > available * HISTORY_RETENTION) {
       flow.removeChild(flow.firstChild);
     }
@@ -775,10 +778,9 @@
 
   // -- The live caption: the original text that isn't final yet (see
   // Pipeline._publish_captions), replaced as a whole on every update. It's
-  // kept after the final sentences - one bright span at the end of the
-  // landscape paragraph, or the last row in portrait - and updated in
-  // place rather than re-created, so it doesn't re-run the fade-in on
-  // every update. --
+  // kept after the final sentences - its own paragraph below theirs in
+  // landscape, the last row in portrait - and updated in place rather than
+  // re-created, so it doesn't re-run the fade-in on every update. --
   let recentOriginal = '';
   let recentRow = null;  // portrait: [original cell, translated cell] of the live row
 
@@ -813,18 +815,20 @@
       prunePortraitRows();
       return;
     }
-    const flow = flowOf('original-lines');
-    let span = flow.querySelector('.recent');
+    // Landscape: a paragraph of its own, below the final sentences' one.
+    const container = document.getElementById('original-lines');
+    let para = container.querySelector(':scope > .recent');
     if (!recentOriginal) {
-      span?.remove();
+      para?.remove();
       return;
     }
-    if (!span) {
-      span = document.createElement('span');
-      span.className = 'line recent';
-      flow.appendChild(span);
+    if (!para) {
+      para = document.createElement('p');
+      para.className = 'line recent';
+      para.style.margin = '0';
+      container.appendChild(para);
     }
-    span.textContent = recentOriginal + ' ';
+    para.textContent = recentOriginal;
   }
 
   // -- Switching Render mode: carries the existing transcript over into the
@@ -840,10 +844,7 @@
   function transformLandscapeToPortrait() {
     const readFlow = (id) => {
       const flow = document.getElementById(id).querySelector('.flow');
-      return flow
-        ? Array.from(flow.children).filter((el) => !el.classList.contains('recent'))
-            .map((el) => ({ text: textOf(el), seq: el.seq })).filter((x) => x.text)
-        : [];
+      return flow ? Array.from(flow.children).map((el) => ({ text: textOf(el), seq: el.seq })).filter((x) => x.text) : [];
     };
     const originals = readFlow('original-lines');
     const translateds = readFlow('translated-lines');
