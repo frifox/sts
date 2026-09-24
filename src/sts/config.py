@@ -45,40 +45,30 @@ class AudioConfig:
 
 @dataclass
 class VADConfig:
+    """Silero VAD, which only collects the live speaker's speech for "Train
+    voice" (captions don't depend on pauses - see ASRConfig)."""
+
     # Silero VAD speech probability threshold.
     threshold: float = 0.5
     # How much trailing silence (ms) closes out a speech segment.
     min_silence_ms: int = 500
     # Segments shorter than this are dropped as noise.
     min_speech_ms: int = 250
-    # Hard cap so a run-on speaker doesn't stall translation/TTS.
+    # Hard cap on one segment's length.
     max_segment_ms: int = 20_000
-    # How often (ms) to re-transcribe a still-open segment before it closes,
-    # so a multi-sentence segment can have its earlier sentences translated
-    # while the speaker is still talking, instead of everything waiting for
-    # the segment's closing pause. 0 disables it: only the final, closed
-    # segment is transcribed. Only fires when the ASR stage has caught up
-    # from the previous one (see Pipeline._segment_loop), so a slow backend
-    # naturally falls back to this behavior rather than building a backlog.
-    #
-    # Re-transcribing a growing prefix from scratch (no cache/streaming
-    # decoder) can occasionally produce a *different* wording for the same
-    # early audio once more of the segment is available as context - not
-    # just near chunk edges - so a partial commit could in principle end up
-    # repeated by the final pass (see Pipeline._commit_new_asr_text, which
-    # always favors that over silently dropping content). 2000ms with
-    # Parakeet is confirmed working well in real use (a parameter sweep of
-    # 800-4000ms against a real sermon recording backed this value); it may
-    # need retuning for a different backend/speaker via --partial-interval-ms.
-    partial_interval_ms: int = 2000
 
 
 @dataclass
 class ASRConfig:
-    # "parakeet" (NVIDIA Parakeet TDT, via NeMo - the live pipeline's), or "gigaam"
-    # (Sber GigaAM-v3 e2e_rnnt, Russian-only - its own virtualenv; see sts.asr.gigaam_asr)
-    backend: str = "parakeet"
     device: str = "cuda"
+    # Live captions (sts.transcript): what isn't locked yet is re-transcribed
+    # every `interval_ms`. A sentence is locked - sent on to translation and
+    # voicing, and never changed again - once `final_after_sentences` more
+    # sentences have followed it, or `final_after_seconds` after it ended
+    # (0 turns either rule off).
+    interval_ms: int = 500
+    final_after_sentences: int = 2
+    final_after_seconds: float = 30.0
 
 
 @dataclass

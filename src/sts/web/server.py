@@ -61,6 +61,7 @@ class CaptionBroadcaster:
             "translated": deque(maxlen=CAPTION_HISTORY_LINES),
         }
         self._history_lock = threading.Lock()
+        self._last_recent: dict | None = None  # see broadcast_original_recent
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
@@ -85,6 +86,8 @@ class CaptionBroadcaster:
         for messages in history.values():
             for message in messages:
                 await websocket.send_text(json.dumps(message))
+        if self._last_recent is not None:
+            await websocket.send_text(json.dumps(self._last_recent))
 
     async def unregister(self, websocket: WebSocket) -> None:
         self._clients.discard(websocket)
@@ -136,13 +139,21 @@ class CaptionBroadcaster:
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
     def broadcast_original(self, text: str, seq: int | None = None, batch: int | None = None) -> None:
-        """`seq` identifies this sentence so its translation - which can
-        arrive much later, or never (translation off) - can be matched back
-        to it exactly by the page's portrait layout, instead of by arrival
-        order. `batch` names the ASR commit it came from: the page keeps every
-        sentence of one batch highlighted together and dims the previous batch
-        only when a new one starts."""
+        """A caption sentence that's final (locked - see sts.transcript).
+        `seq` identifies it so its translation - which can arrive much
+        later, or never (translation off) - can be matched back to it exactly
+        by the page's portrait layout, instead of by arrival order."""
         self._broadcast("original", text, seq, batch)
+
+    def broadcast_original_recent(self, text: str) -> None:
+        """The caption text that isn't final yet - replaces whatever the page
+        showed as such before ("" clears it). Remembered, so a page that
+        connects mid-sentence shows it too."""
+        message = {"type": "original_recent", "text": text}
+        self._last_recent = message
+        if self.loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
     def broadcast_translated(self, text: str, seq: int | None = None, batch: int | None = None) -> None:
         """`seq` is the `seq` of the original sentence this translates, and
@@ -209,6 +220,7 @@ class CaptionBroadcaster:
         with self._history_lock:
             for lines in self._history.values():
                 lines.clear()
+        self._last_recent = None
         if self.loop is None:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all({"type": "reset"}), self.loop)
@@ -260,7 +272,6 @@ class CaptionBroadcaster:
         cloned: bool,
         active_speaker_id: str | None = None,
         can_save: bool = False,
-        min_silence_ms: int | None = None,
         output_volume: int | None = None,
         audio_source: str = "alsa",
         can_design: bool = False,
@@ -278,7 +289,6 @@ class CaptionBroadcaster:
             "cloned": cloned,
             "active_speaker_id": active_speaker_id,
             "can_save": can_save,
-            "min_silence_ms": min_silence_ms,
             "output_volume": output_volume,
             "audio_source": audio_source,
             "can_design": can_design,

@@ -1,6 +1,12 @@
-"""Wires capture -> VAD -> ASR -> translation -> TTS -> playback into one
+"""Wires capture -> captions -> translation -> TTS -> playback into one
 streaming pipeline, each stage on its own thread connected by queues so a
 slow stage (translation, TTS) doesn't stall audio capture.
+
+Captions (sts.transcript): the audio that isn't settled yet is
+re-transcribed every ASRConfig.interval_ms; a sentence is locked once it
+has settled (enough sentences after it, or long enough ago), and only then
+sent on to translation and voicing. The not-yet-locked text is pushed to
+the caption page as it changes, as one running line.
 
 Recognition/captions run by default (`self.control.active` set); an operator
 can still pause them (e.g. during a long musical number) via Start/Stop.
@@ -10,10 +16,9 @@ skips translation (and, as a consequence, TTS, since there is no translated
 text to speak). TTS *voicing* is its own switch and starts **off**
 (`self.control.voice_enabled` unset) - captions are silent and harmless to
 leave running, but audio spoken over the speakers during music or an
-announcement would not be, so that's opt-in via its own button. Capture and
-VAD segmentation always run regardless of any of these switches, both because
-they're cheap and because voice-clone training needs segmented audio
-independently of whether recognition/translation/voicing is on.
+announcement would not be, so that's opt-in via its own button. Capture
+always runs, and so does Silero VAD while "Train voice" is collecting the
+speaker's speech.
 """
 
 import gc
@@ -31,7 +36,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from sts.asr import create_asr, estimate_vram_bytes, parakeet_asr
+from sts.asr import create_asr
+from sts.asr.gigaam_asr import MODEL_NAME as ASR_MODEL_NAME
 from sts.audio.capture import AudioCapture
 from sts.audio.devices import check_input, check_output, reinitialize_audio_system
 from sts.audio.playback import AudioPlayback
@@ -43,19 +49,11 @@ from sts.config import PipelineConfig
 from sts.control import RecognitionControl
 from sts.log import vlog
 from sts.persistent_config import PersistentConfig
-from sts.textclean import new_text_since, split_complete
-from sts.translate.translator import Translator, split_sentences
+from sts.translate.translator import Translator
 from sts.tts import create_synthesizer
+from sts.transcript import Sentence, Transcript
 from sts.tts.voice_library import BUNDLED_VOICES_DIR, VoiceLibrary
 from sts.web.server import CaptionBroadcaster
-
-# The ASR engines the Caption dropdown can switch between live (see
-# _switch_asr_backend). GigaAM isn't one: its model code needs newer torch/
-# transformers than the TTS backends allow in the same virtualenv.
-LIVE_ASR_BACKENDS = ("parakeet",)
-
-# Bounds for the live pause-threshold slider (milliseconds of silence that end a snippet).
-MIN_SILENCE_RANGE_MS = (200, 1500)
 
 # How far back the header's RTF readings look (seconds) - a single short
 # phrase's processing time can spike a one-shot RTF wildly (e.g. a 0.3s
@@ -95,6 +93,11 @@ DESIGN_REFERENCE_TEXT = (
 # the pipeline is stopping - so stop() can actually join the stage threads.
 QUEUE_POLL_S = 0.5
 
+# Silence between two locked sentences (seconds) above which the voice
+# treats the second as a fresh thought - the longer pause_between_s before
+# it - rather than the next sentence of the same one (pause_within_s).
+SPEECH_PAUSE_S = 1.0
+
 # Pause after a stage step raises before taking the next item, so an error
 # that repeats on every item (a broken model, a device gone) logs at a
 # readable rate instead of spinning a CPU core.
@@ -113,27 +116,6 @@ def _free_gpu_memory() -> None:
         torch.cuda.empty_cache()
 
 
-def _strip_repeated_prefix(translated: str, previous: str | None) -> str:
-    """`translated` was produced with `previous` as leading context (see
-    Translator.translate_sentences and _commit_new_asr_text) - given as
-    grammatical lead-in, not meant to be shown again. NLLB sometimes restates
-    it verbatim before continuing instead of picking up mid-thought (observed
-    against real transcripts: the whole previous sentence repeated, then the
-    new content tacked on) - a duplicate that reads as a broken repeat next
-    to the caption that already showed it. Detected (case-insensitively,
-    ignoring `previous`'s own trailing punctuation) and removed, so the
-    caption reads as a continuation of it instead. Falls back to `translated`
-    unchanged if there's nothing recognizable to strip, or if stripping would
-    leave nothing at all (better a duplicate than empty content)."""
-    if not previous:
-        return translated
-    lead = previous.rstrip(".!?… ")
-    if not lead or not translated.lower().startswith(lead.lower()):
-        return translated
-    remainder = translated[len(lead):].lstrip(" ,.;:-–—")
-    return remainder or translated
-
-
 @dataclass
 class _Clip:
     """One piece of synthesized speech waiting in the playback queue."""
@@ -150,17 +132,6 @@ class _Clip:
     @property
     def seconds(self) -> float:
         return self.pause_before + self.audio.size / self.sample_rate
-
-
-class _NullASR:
-    """Last-resort stand-in when a live ASR backend switch fails and the
-    fallback reload of the previous engine fails too (see
-    Pipeline._switch_asr_backend) - keeps _asr_loop's thread alive instead of
-    crashing on a missing self.asr, at the cost of transcribing nothing until
-    the operator retries or restarts the service."""
-
-    def transcribe(self, audio) -> str:
-        return ""
 
 
 class Pipeline:
@@ -184,7 +155,7 @@ class Pipeline:
     ):
         self.cfg = cfg
         self.broadcaster = broadcaster
-        # Remembers the operator's ASR engine/device/voice choices across
+        # Remembers the operator's device/volume/voice choices across
         # restarts - see the persist-on-change calls below and
         # _restore_persisted_voice(). None (the default) just means nothing
         # is persisted, e.g. in tests that build a Pipeline stub directly.
@@ -192,9 +163,8 @@ class Pipeline:
         self.capture = AudioCapture(cfg.audio)
         self.playback = AudioPlayback(cfg.audio)
         self._stage("Loading speech detector…")
-        self.segmenter = SpeechSegmenter(cfg.audio, cfg.vad)
-        asr_label = cfg.asr.backend
-        self._stage(f"Loading speech recognition ({asr_label})…")
+        self.segmenter = SpeechSegmenter(cfg.audio, cfg.vad)  # for "Train voice" only
+        self._stage("Loading speech recognition…")
         self.asr = create_asr(cfg.asr)
         self._stage("Loading translation model…")
         self.translator = Translator(cfg.translation)
@@ -215,40 +185,22 @@ class Pipeline:
         self._last_audio_recovery = float("-inf")
         self._last_audio_recovery_ok = True
         self._active_speaker_id: str | None = None
-        # Held around every self.asr.transcribe() call and around swapping
-        # self.asr out for a different backend, so _asr_loop can never see a
-        # None/half-built ASR object mid-swap (see _switch_asr_backend).
+        # Held around every use of self.asr: captions and a voice-training
+        # transcription can otherwise run on the one model at the same time.
         self._asr_lock = threading.Lock()
-        self._asr_busy = False  # a switch is already in flight; ignore a repeat click
         self._last_output_level_broadcast = 0.0
 
-        self._segments: queue.Queue = queue.Queue()
-        # (text, first_seq, context) per committed chunk - see _commit_new_asr_text.
+        # Live captions: capture feeds this while Caption is on, and
+        # _caption_step re-transcribes what isn't locked yet.
+        self.transcript = Transcript(
+            self.asr, cfg.asr.final_after_sentences, cfg.asr.final_after_seconds, cfg.audio.sample_rate
+        )
+        # (text, seq, spoken seconds, continues) per locked sentence, for translation.
         self._transcripts: queue.Queue = queue.Queue()
         self._original_seq = 0  # next sequence number for a broadcast original sentence
-        # The most recently committed sentence's original-language text and
-        # its own translation (any segment, not just the current one) - see
-        # _commit_new_asr_text's use of the former as translation context for
-        # a sentence that continues it, and _strip_repeated_prefix's use of
-        # the latter to catch NLLB restating that context verbatim.
-        self._last_sentence_original: str | None = None
-        self._last_sentence_translated: str | None = None
-        # Text already committed (pushed to translation) for the segment
-        # currently being spoken, via periodic partial re-transcription - see
-        # _segment_loop/_asr_loop. Reset to "" whenever a segment closes.
-        self._committed_text = ""
-        # A sentence a partial re-run just completed, held back until the
-        # *next* partial re-run reproduces it identically - see
-        # _commit_new_asr_text. None when there's nothing awaiting
-        # confirmation. Reset to None whenever a segment closes/resets,
-        # alongside _committed_text.
-        self._pending_confirmation: str | None = None
-        self._frames_since_partial = 0
-        # Most recently transcribed segment's audio duration (seconds) - used
-        # as translate's own real-time-factor denominator too (see
-        # _translate_segment), since translated text has no duration of its
-        # own to measure against.
-        self._last_asr_audio_s = 0.0
+        self._last_final_end: float | None = None  # when the last locked sentence ended
+        self._recent_text = ""  # the not-yet-locked caption text the page last got
+        self._last_caption_step = time.monotonic()
         # Rolling per-stage (processing_s, audio_s) readings for the header's
         # RTF display, each stage's own deque touched only by that stage's
         # own thread - see _broadcast_rtf.
@@ -309,8 +261,8 @@ class Pipeline:
     # pressed meanwhile wait behind it.
     _INSTANT_ACTIONS = frozenset({
         "start", "stop", "voice_on", "voice_off", "translate_on", "translate_off", "reset",
-        "test_output", "train_start", "train_stop", "set_min_silence", "set_output_volume",
-        "refresh_devices", "set_audio_devices", "mic_start", "mic_stop", "set_asr_backend",
+        "test_output", "train_start", "train_stop", "set_output_volume",
+        "refresh_devices", "set_audio_devices", "mic_start", "mic_stop",
         "design_generate", "design_play",
     })
 
@@ -341,6 +293,9 @@ class Pipeline:
             self.control.start()
         elif action == "stop":
             self.control.stop()
+            # Whatever was heard but not locked yet counts as final now - it
+            # would otherwise never be translated, and is dropped from the page.
+            self._publish_captions(self.transcript.flush(), [])
         elif action == "voice_on":
             self.control.enable_voice()
         elif action == "voice_off":
@@ -388,21 +343,6 @@ class Pipeline:
         elif action in ("refresh_devices", "set_audio_devices", "mic_start", "mic_stop"):
             threading.Thread(target=self._handle_device_action, args=(action, data), daemon=True).start()
             return
-        elif action == "set_asr_backend":
-            backend = str(data.get("backend") or "")
-            if backend not in LIVE_ASR_BACKENDS or self._asr_busy:
-                return
-            self._asr_busy = True
-            threading.Thread(target=self._switch_asr_backend, args=(backend,), daemon=True).start()
-            return
-        elif action == "set_min_silence":
-            try:
-                ms = int(data.get("ms"))
-            except (TypeError, ValueError):
-                return
-            # Read by the voice detector on every frame, so this applies to the very next pause.
-            self.cfg.vad.min_silence_ms = max(MIN_SILENCE_RANGE_MS[0], min(MIN_SILENCE_RANGE_MS[1], ms))
-            vlog("vad", f"pause threshold set to {self.cfg.vad.min_silence_ms} ms")
         elif action == "set_output_volume":
             try:
                 percent = int(data.get("percent"))
@@ -436,13 +376,10 @@ class Pipeline:
         # After anything already queued - a voice being trained or picked
         # just before Reset must not become active again after it.
         self._on_control_thread(self._reset_voice)
-        self._committed_text = ""
-        self._pending_confirmation = None
-        self._last_sentence_original = None
-        self._last_sentence_translated = None
-        self._frames_since_partial = 0
         self._reset_generation += 1
-        self._drain(self._segments)
+        self.transcript.clear()
+        self._recent_text = ""
+        self._last_final_end = None
         self._drain(self._transcripts)
         self._drain(self._translations)
         self._drain(self._audio)
@@ -456,7 +393,6 @@ class Pipeline:
         self._playback_generation += 1
         if self.broadcaster:
             self.broadcaster.broadcast_output_level(0.0)
-        if self.broadcaster:
             self.broadcaster.broadcast_reset()
 
     def _reset_voice(self) -> None:
@@ -548,8 +484,7 @@ class Pipeline:
 
     def _transcribe_or_none(self, audio) -> str | None:
         try:
-            # The lock: an ASR engine switch may be swapping self.asr out
-            # right now, and _asr_loop may be mid-transcribe on it.
+            # The lock: the caption stage may be mid-transcribe on the same model.
             with self._asr_lock:
                 return self.asr.transcribe(audio) or None
         except Exception as exc:  # a failed transcript just means a lower-quality clone, not a lost one
@@ -671,111 +606,6 @@ class Pipeline:
             return
         self.capture.push_browser_frame(samples.copy())  # copy: payload's buffer is reused by the socket
 
-    def _load_asr(self, backend: str, check_memory: bool = True) -> None:
-        """(Re)builds self.asr for `backend`, freeing whatever GPU memory the
-        current one holds first - releasing it and collecting before building
-        the replacement, rather than briefly holding both, since two ASR
-        engines resident at once doesn't fit an 8GB card alongside
-        translation/TTS. Refuses up front (raising, so the caller falls back)
-        when what's free once the old engine is gone clearly can't hold the
-        new one, rather than finding out halfway through the load with the
-        card left full of a half-built model (`check_memory`; skipped for a
-        fallback to the engine that was running a moment ago, which is
-        simply worth trying). Must be called with _asr_lock held."""
-        self._unload_asr()
-        self.cfg.asr.backend = backend
-        device = self.cfg.asr.device
-        if check_memory and device.startswith("cuda") and torch.cuda.is_available():
-            free, _total = torch.cuda.mem_get_info(torch.device(device))
-            needed = estimate_vram_bytes(self.cfg.asr)
-            if free < needed:
-                raise RuntimeError(
-                    f"not enough GPU memory for {backend}: about {needed / 2**30:.1f} GB needed, "
-                    f"{free / 2**30:.1f} GB free"
-                )
-        self.asr = create_asr(self.cfg.asr)
-
-    def _unload_asr(self) -> None:
-        asr = getattr(self, "asr", None)
-        if asr is None:
-            return
-        del self.asr
-        close = getattr(asr, "close", None)
-        if close is not None:
-            try:
-                close()
-            except Exception as exc:
-                print(f"[asr] couldn't release the old engine cleanly: {exc!r}")
-        del asr
-        _free_gpu_memory()
-
-    def _switch_asr_backend(self, backend: str) -> None:
-        """Swaps the ASR engine live (one of LIVE_ASR_BACKENDS, from the
-        Caption dropdown). Runs off the web server's event loop since a cold
-        load can take tens of seconds. _asr_loop is blocked on _asr_lock for
-        the whole swap, so it can never see self.asr as None or half-built -
-        a transcription simply waits for the swap to finish, same as it
-        already waits for a slow one from the current engine.
-
-        That has to include the *failure* path too: _load_asr deletes
-        self.asr before building the replacement, so if the lock were
-        released between a failed attempt and the fallback reload,
-        _asr_loop could grab it in that gap, find self.asr gone, and die
-        with an AttributeError - killing captions until a restart. So the
-        attempt and its fallback share one uninterrupted hold of the lock.
-
-        The fallback runs only after the `except` block has ended: while
-        it's still open, the exception's traceback keeps the failed load's
-        frames - and the partly built model in them - alive, pinning its
-        GPU memory. Reloading the previous engine from inside it ran out of
-        memory for exactly that reason in real use."""
-        previous = self.cfg.asr.backend
-        if backend == previous:
-            self._asr_busy = False
-            return
-        switched = False
-        try:
-            with self._asr_lock:
-                self._stage(f"Switching speech recognition to {backend}…")
-                failure = None
-                try:
-                    self._load_asr(backend)
-                    switched = True
-                except (Exception, SystemExit) as exc:
-                    # create_asr() raises SystemExit (not Exception) for a
-                    # missing optional backend, appropriate for a hard
-                    # CLI-startup failure but not for a live webui toggle -
-                    # caught here too so a missing dependency falls back
-                    # cleanly instead of leaving self.asr gone.
-                    failure = repr(exc)
-                if not switched:
-                    print(f"[asr] couldn't switch to {backend!r}, reloading {previous!r}: {failure}")
-                    _free_gpu_memory()
-                    fallback_failure = None
-                    try:
-                        self._load_asr(previous, check_memory=False)
-                    except (Exception, SystemExit) as exc2:
-                        fallback_failure = repr(exc2)
-                    if fallback_failure is not None:
-                        # The fallback failed too - leaving self.asr undefined
-                        # would crash _asr_loop's next transcribe() call. A
-                        # no-op stand-in keeps every thread alive so the
-                        # operator can retry (or restart the service) once
-                        # whatever's holding GPU memory clears, instead of
-                        # losing captions silently until someone notices.
-                        print(f"[asr] fallback reload of {previous!r} also failed: {fallback_failure}")
-                        self.cfg.asr.backend = previous
-                        self.asr = _NullASR()
-            if switched:
-                vlog("asr", f"switched backend: {previous} -> {backend}")
-                if self._persistent_config is not None:
-                    self._persistent_config.set("asr_backend", backend)
-        finally:
-            self._asr_busy = False
-            self._stage("Listening", ready=True)
-            self._broadcast_engines()
-            self._broadcast_status()
-
     # -- "Create Voice" dialog (Qwen3 voice design) ---------------------------
 
     def _design_state(self, state: str, message: str = "") -> None:
@@ -865,7 +695,6 @@ class Pipeline:
                 training_target_seconds=self.control.target_seconds,
                 cloned=self.tts.cloned_speaker_wav is not None,
                 can_save=self._pending_voice is not None,
-                min_silence_ms=self.cfg.vad.min_silence_ms,
                 output_volume=round(self.cfg.audio.volume * 100),
                 audio_source=self.cfg.audio.source,
                 can_design=hasattr(self.tts, "design_reference"),
@@ -934,19 +763,15 @@ class Pipeline:
             self.broadcaster.broadcast_library(speakers)
 
     def _broadcast_engines(self) -> None:
-        """Model/device info for the header dropdowns. Translation and TTS
-        are fixed for the life of the process (set from CLI flags at
-        startup); ASR isn't - its backend can change live via the Caption
-        dropdown (see _switch_asr_backend) - so this is re-sent after every
-        switch, not just once."""
+        """Model/device info for the header dropdowns - fixed for the life
+        of the process (set from CLI flags at startup)."""
         if self.broadcaster:
-            asr_model = parakeet_asr.MODEL_NAME if self.cfg.asr.backend == "parakeet" else self.cfg.asr.backend
             tts_model = (
                 self.cfg.tts.qwen3_model_name if self.cfg.tts.backend == "qwen3" else self.cfg.tts.model_name
             )
             self.broadcaster.broadcast_engines(
                 {
-                    "asr": {"model": asr_model, "device": self.cfg.asr.device, "backend": self.cfg.asr.backend},
+                    "asr": {"model": ASR_MODEL_NAME, "device": self.cfg.asr.device},
                     "translation": {"model": self.cfg.translation.model_name, "device": self.cfg.translation.device},
                     "tts": {"model": tts_model, "device": self.cfg.tts.device},
                 }
@@ -983,9 +808,8 @@ class Pipeline:
                 self._stop.wait(STAGE_ERROR_BACKOFF_S)
 
     def _segment_loop(self) -> None:
-        self._frames_since_partial = 0
         self._last_level_broadcast = 0.0
-        self._run_stage("vad", self._segment_step)
+        self._run_stage("capture", self._segment_step)
 
     def _segment_step(self) -> None:
         frame = self.capture.frames.get(timeout=QUEUE_POLL_S)
@@ -996,179 +820,64 @@ class Pipeline:
         self._process_captured_frame(frame)
 
     def _process_captured_frame(self, frame: np.ndarray) -> None:
-        """One frame's worth of VAD/segmentation bookkeeping: closes and
-        queues a finished segment, or - if the segment is still open -
-        periodically queues what's been spoken so far. Split out from
-        _segment_loop so it's callable (and testable) frame by frame without
-        the blocking queue/infinite-loop scaffolding around it."""
+        """Hands one captured frame to the captions (while Caption is on),
+        and - while "Train voice" is collecting - to Silero VAD, whose
+        segments are the speaker's actual speech, pauses left out."""
+        if self.control.active.is_set():
+            self.transcript.add(frame)
+        if not self.control.training.is_set():
+            return
         segment = self.segmenter.process(frame)
         if segment is not None:
-            self._frames_since_partial = 0
-            if self.control.training.is_set():
-                reached_target = self.control.accumulate_training_segment(segment)
-                self._broadcast_status()
-                if reached_target:
-                    self._finish_training()
-            if self.control.active.is_set():
-                self._segments.put(("final", segment))
-            return
+            reached_target = self.control.accumulate_training_segment(segment)
+            self._broadcast_status()
+            if reached_target:
+                self._finish_training()
 
-        # Segment hasn't closed yet - periodically hand the ASR stage what's
-        # been spoken so far, so a segment with several sentences (VAD only
-        # cuts on a long enough pause) doesn't make the first of them wait
-        # for the last. Only when caught up (queue empty): a slow backend
-        # then just falls back to today's behavior instead of building a backlog.
-        self._frames_since_partial += 1
-        interval = self.cfg.vad.partial_interval_ms
-        if not (self.control.active.is_set() and interval > 0):
-            return
-        if self._frames_since_partial * self.cfg.audio.block_ms < interval:
-            return
-        if self._segments.qsize() > 0:
-            return
-        partial_audio = self.segmenter.peek()
-        if partial_audio is None:
-            return
-        self._frames_since_partial = 0
-        self._segments.put(("partial", partial_audio))
+    def _caption_loop(self) -> None:
+        self._run_stage("asr", self._caption_step)
 
-    def _asr_loop(self) -> None:
-        self._run_stage("asr", self._asr_step)
-
-    def _asr_step(self) -> None:
-        kind, segment = self._segments.get(timeout=QUEUE_POLL_S)
+    def _caption_step(self) -> None:
+        """One caption update: re-transcribes what isn't locked yet, sends
+        newly locked sentences on (see _publish_captions), and pushes the
+        still-open text to the page."""
+        if self._stop.wait(self.cfg.asr.interval_ms / 1000) or not self.transcript.has_audio:
+            return
         generation = self._reset_generation
         t0 = time.monotonic()
-        try:
-            with self._asr_lock:
-                text = self.asr.transcribe(segment)
-        except Exception:
-            if kind == "final":
-                # The segment's already-committed sentences stay committed;
-                # the next segment has to start from a clean slate, or it'd be
-                # compared against this one's leftover _committed_text.
-                self._committed_text = ""
-                self._pending_confirmation = None
-            raise
+        with self._asr_lock:
+            final, still_open = self.transcript.step()
         processing_s = time.monotonic() - t0
-        audio_s = len(segment) / self.cfg.audio.sample_rate
-        vlog("asr", f"transcribed {audio_s:.1f}s of audio ({kind}) in {processing_s:.2f}s")
-        self._last_asr_audio_s = audio_s
-        self._broadcast_rtf("asr", processing_s, audio_s)
+        # Real-time factor: the time a step took over the audio that arrived
+        # since the previous one - above 1.0, captions fall behind the speaker.
+        self._broadcast_rtf("asr", processing_s, t0 - self._last_caption_step)
+        self._last_caption_step = t0
         if generation != self._reset_generation:
-            vlog("asr", "dropping a transcript of audio from before Reset")
-            return
-        self._commit_new_asr_text(text, final=kind == "final")
+            return  # Reset landed mid-step; this is the previous speaker's text
+        self._publish_captions(final, still_open)
 
-    def _commit_new_asr_text(self, full_text: str, final: bool) -> None:
-        """Pushes whatever part of `full_text` - the growing (partial) or
-        whole (final) segment's transcript - hasn't already been committed
-        for this segment. A partial re-run only releases complete sentences,
-        and only when there's real text *after* the sentence-ending
-        punctuation too: given only a short audio prefix, the model will
-        often end its output with a plausible-looking period simply because
-        it ran out of audio, not because that's a real sentence boundary -
-        seeing it keep going past that point is what distinguishes a genuine
-        boundary from that. A trailing fragment (real or not yet confirmed)
-        is left for the next re-run to catch.
-
-        Each re-run re-transcribes the growing audio from scratch (no
-        cache/streaming decoder), so in rare cases more context changes how an
-        earlier part was heard - this isn't purely a short-prefix problem
-        (see below), so it can't be assumed away. Mid-segment (not `final`)
-        this only trusts what's still a clean extension of what's already
-        committed and waits for the next re-run rather than guessing.
-
-        A newly-completed sentence isn't trusted on first sight either:
-        measured against real audio, a partial re-run's first pass at a
-        sentence is sometimes revised once a little more audio context is
-        available on the *next* re-run (e.g. "Вопрос:" becoming "Возникает
-        вопрос," - not just a reworded ending, a different opening), which
-        would otherwise get shown, then shown again differently worded once
-        the next re-run's version is committed on top of it. So a candidate
-        sentence is held in `_pending_confirmation` and only actually
-        committed once a later re-run reproduces it identically - trading a
-        bit of latency (it needs to survive one more partial_interval_ms
-        cycle before it first appears) for not showing a guess that's still
-        likely to change.
-
-        The final pass is different: measured against real audio, the model
-        occasionally reworded even the very start of a long segment once the
-        *entire* segment's audio was available as context - not just near
-        chunk edges - so requiring the final transcript to still start with
-        the committed prefix (character for character) would, in that case,
-        silently drop every sentence after the divergence instead of just
-        duplicating a couple of already-shown words. Content loss is the
-        worse failure of the two, so a divergence is never allowed to drop
-        anything - but it's compared *word by word, ignoring punctuation*
-        (see new_text_since()) rather than as one raw string, so a boundary
-        the model re-punctuated differently the second time (a period
-        becoming a comma, continuing the sentence instead of ending it)
-        doesn't make the whole segment look diverged and get resent in full
-        - only whatever's actually new is. The final pass is never held back
-        awaiting confirmation either - the segment is closing now, so
-        whatever it says is authoritative."""
-        if final:
-            if self._committed_text and not full_text.startswith(self._committed_text):
-                vlog("asr", "final transcript's wording diverged from what's already committed; "
-                            "resending only what isn't already covered")
-            to_commit = new_text_since(self._committed_text, full_text)
-            self._committed_text = ""  # this segment is done; ready for the next one
-            self._pending_confirmation = None
-        elif full_text.startswith(self._committed_text):
-            new_text = full_text[len(self._committed_text):].strip()
-            candidate, tail = split_complete(new_text)
-            if not candidate or not tail:
-                # No complete new sentence yet, or nothing follows the period
-                # *yet* - can't tell a real sentence boundary from the model
-                # just running out of audio to decode.
-                return
-            if candidate != self._pending_confirmation:
-                # First time this exact wording has completed a sentence -
-                # wait for the next re-run to reproduce it before trusting it.
-                self._pending_confirmation = candidate
-                return
-            to_commit = candidate
-            self._pending_confirmation = None
-            self._committed_text = f"{self._committed_text} {to_commit}".strip()
-        else:
-            vlog("asr", "partial re-run revised already-committed text; keeping only what was already sent")
-            self._pending_confirmation = None
-            return
-
-        if not to_commit:
-            return
-        print(f"[ru] {to_commit}")
-        # One message per sentence, not one for the whole commit, each with a
-        # sequence number: the caption page's portrait layout pairs every
-        # "original" with its "translated" by that number, not by arrival
-        # order (which breaks as soon as translation is off, or lags, or a
-        # page reconnects mid-stream - some originals then never get a
-        # translation, shifting every later pair). Translation splits the
-        # same string with the same split_sentences() (see
-        # _translate_segment), so sentence i of this commit is `first_seq + i`
-        # there too. Numbers advance whether or not anything is listening.
-        # The commit's first number doubles as its batch id (see
-        # CaptionBroadcaster.broadcast_original).
-        sentences = split_sentences(to_commit)
-        # A lowercase first letter is the ASR model's own signal that this
-        # sentence isn't a fresh one - it's the tail of a thought VAD's pause
-        # threshold cut off mid-utterance, re-transcribed from scratch with no
-        # memory of what preceded it (see the class docstring). Translating it
-        # alone, as if it were self-contained, reliably reads as a disconnected
-        # non-sequitur - so it's translated together with the last sentence
-        # actually committed (any segment, not just this one) as surrounding
-        # context, in _translate_segment.
-        context = self._last_sentence_original if sentences and sentences[0][:1].islower() else None
-        first_seq = self._original_seq
-        self._original_seq += len(sentences)
-        if self.broadcaster:
-            for i, sentence in enumerate(sentences):
-                self.broadcaster.broadcast_original(sentence, first_seq + i, first_seq)
-            self._broadcast_bible_references(to_commit)
-        self._transcripts.put((to_commit, first_seq, context))
-        if sentences:
-            self._last_sentence_original = sentences[-1]
+    def _publish_captions(self, final: list[Sentence], still_open: list[str]) -> None:
+        """Locked sentences: shown as final, checked for Bible references,
+        and queued for translation (and so voicing). The still-open text
+        replaces the page's live caption line."""
+        for sentence in final:
+            seq = self._original_seq
+            self._original_seq += 1
+            print(f"[ru] {sentence.text}")
+            # Spoken right on from the previous sentence (no real pause) -> the
+            # voice runs them together like one thought; after a pause, it
+            # leaves the longer between-thoughts gap.
+            continues = self._last_final_end is not None and sentence.start - self._last_final_end < SPEECH_PAUSE_S
+            self._last_final_end = sentence.end
+            if self.broadcaster:
+                self.broadcaster.broadcast_original(sentence.text, seq, seq)
+                self._broadcast_bible_references(sentence.text)
+            self._transcripts.put((sentence.text, seq, sentence.end - sentence.start, continues))
+        recent = " ".join(still_open)
+        if recent != self._recent_text:
+            self._recent_text = recent
+            if self.broadcaster:
+                self.broadcaster.broadcast_original_recent(recent)
 
     def _broadcast_bible_references(self, text: str) -> None:
         for ref in find_references(text):
@@ -1188,59 +897,34 @@ class Pipeline:
         self._run_stage("translate", self._translate_step)
 
     def _translate_step(self) -> None:
-        text, first_seq, context = self._transcripts.get(timeout=QUEUE_POLL_S)
+        text, seq, spoken_s, continues = self._transcripts.get(timeout=QUEUE_POLL_S)
         if not self.control.translation_enabled.is_set():
             vlog("translate", "translation is off, skipping")
             return
-        self._translate_segment(text, first_seq, context)
+        self._translate_sentence(text, seq, spoken_s, continues)
 
-    def _translate_segment(self, text: str, first_seq: int | None = None, context: str | None = None) -> None:
-        """Translates one ASR segment's text and pushes/broadcasts/queues each
-        sentence for TTS the moment it's ready. Yielded, not joined-then-
-        returned: a multi-sentence segment (VAD closes on silence, so it can
-        hold several full sentences) would otherwise have its first sentence
-        wait on the whole block's slowest (usually last) sentence to translate.
-
-        `first_seq` is the sequence number _commit_new_asr_text gave the
-        first sentence of `text`; each translation is broadcast with the
-        number of the original sentence it belongs to, and with `first_seq`
-        itself as its batch id (the same one that commit's originals carry).
-
-        `context`, if given, is the previous sentence committed - passed
-        through to Translator.translate_sentences so it can be given as
-        leading context for `text`'s own first sentence (see
-        _commit_new_asr_text for when/why). NLLB sometimes restates that
-        context verbatim before continuing rather than picking up mid-thought;
-        _strip_repeated_prefix catches and removes it from the first
-        sentence's translation, since the context sentence's own translation
-        was already shown on its own line."""
+    def _translate_sentence(self, text: str, seq: int | None = None, spoken_s: float = 0.0,
+                            continues: bool = False) -> None:
+        """Translates one locked caption sentence, broadcasts it with the
+        original's sequence number (the page pairs them by it), and queues
+        it for TTS. `spoken_s` - how long the original took to say - is the
+        translation real-time factor's denominator. `continues` rides along
+        so _tts_step gives it the short within-a-thought pause."""
         generation = self._reset_generation
         t0 = time.monotonic()
-        for i, translated in enumerate(self.translator.translate_sentences(text, context=context)):
-            if generation != self._reset_generation:
-                vlog("translate", "dropping the rest of a segment from before Reset")
-                return
-            processing_s = time.monotonic() - t0
-            vlog("translate", f"translated a sentence in {processing_s:.2f}s")
-            continues = i == 0 and bool(context)
-            if continues:
-                translated = _strip_repeated_prefix(translated, self._last_sentence_translated)
-            if translated:
-                print(f"    [en] {translated}")
-                if self.broadcaster:
-                    self.broadcaster.broadcast_translated(
-                        translated,
-                        None if first_seq is None else first_seq + i,
-                        first_seq,
-                    )
-                self._broadcast_rtf("translate", processing_s, self._last_asr_audio_s)
-                # `continues` rides along so _tts_loop can give this sentence
-                # the short within-a-segment pause instead of the long
-                # between-segments one - it's spoken as the continuation it
-                # actually is, not introduced as a fresh new utterance.
-                self._translations.put((translated, continues))
-                self._last_sentence_translated = translated
-            t0 = time.monotonic()
+        translated = " ".join(self.translator.translate_sentences(text)).strip()
+        if generation != self._reset_generation:
+            vlog("translate", "dropping a translation from before Reset")
+            return
+        processing_s = time.monotonic() - t0
+        vlog("translate", f"translated a sentence in {processing_s:.2f}s")
+        if not translated:
+            return
+        print(f"    [en] {translated}")
+        if self.broadcaster:
+            self.broadcaster.broadcast_translated(translated, seq, seq)
+        self._broadcast_rtf("translate", processing_s, spoken_s)
+        self._translations.put((translated, continues))
 
     def _tts_loop(self) -> None:
         self._run_stage("tts", self._tts_step)
@@ -1268,14 +952,11 @@ class Pipeline:
             vlog("tts", f"synthesized {audio_s:.1f}s of speech in {processing_s:.2f}s "
                         f"({self._translations.qsize()} sentences waiting)")
             self._broadcast_rtf("voice", processing_s, audio_s)
-            # A longer pause before a new translated text, a shorter one
-            # between the sentences within it - and also for the first
-            # piece of a sentence ASR itself flagged as continuing the
-            # previous one (see _translate_segment): VAD split it into
-            # a separate segment, but it's still one spoken thought, so
-            # it's paced like a continuation, not introduced fresh. A
-            # streamed chunk that continues the same piece mid-word gets
-            # no pause at all.
+            # A longer pause before a sentence the speaker started after a
+            # real pause, a shorter one before one they ran straight on to
+            # (`continues` - see _publish_captions) and between the pieces
+            # of one sentence. A streamed chunk that continues the same
+            # piece mid-word gets no pause at all.
             if seamless:
                 pause = 0.0
             elif first_piece:
@@ -1536,8 +1217,8 @@ class Pipeline:
         self._stage("Listening", ready=True)
         for name, target in (
             ("control", lambda: self._run_stage("control", self._control_step)),
-            ("vad", self._segment_loop),
-            ("asr", self._asr_loop),
+            ("capture", self._segment_loop),
+            ("asr", self._caption_loop),
             ("translate", self._translate_loop),
             ("tts", self._tts_loop),
             ("playback", self._playback_loop),

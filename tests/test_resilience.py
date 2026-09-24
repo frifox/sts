@@ -11,6 +11,7 @@ import pytest
 from sts.config import PipelineConfig
 from sts.control import RecognitionControl
 from sts.pipeline import Pipeline
+from sts.transcript import Transcript
 
 
 def _stub():
@@ -22,7 +23,6 @@ def _stub():
     p._threads = {}
     p._rtf_window = {}
     p._last_asr_audio_s = 0.0
-    p._last_sentence_translated = None
     return p
 
 
@@ -36,14 +36,14 @@ def test_a_failing_item_is_skipped_and_the_stage_keeps_going(monkeypatch):
     p._translations = queue.Queue()
 
     class Translator:
-        def translate_sentences(self, text, context=None):
+        def translate_sentences(self, text):
             if text == "boom":
                 raise RuntimeError("CUDA out of memory")
             yield text.upper()
 
     p.translator = Translator()
     for text in ("boom", "fine"):
-        p._transcripts.put((text, 0, None))
+        p._transcripts.put((text, 0, 1.0, False))
 
     thread = threading.Thread(target=p._translate_loop, daemon=True)
     thread.start()
@@ -82,35 +82,56 @@ def test_translation_in_flight_during_reset_is_dropped():
     p._translations = queue.Queue()
 
     class Translator:
-        def translate_sentences(self, text, context=None):
-            yield "first"
-            p._reset_generation += 1  # the operator hits Reset mid-segment
-            yield "second"
+        def translate_sentences(self, text):
+            p._reset_generation += 1  # the operator hits Reset mid-translation
+            yield "old speaker"
 
     p.translator = Translator()
-    p._translate_segment("x. y.")
+    p._translate_sentence("Старое.", seq=0)
 
-    assert p._translations.get_nowait() == ("first", False)
     assert p._translations.empty()
 
 
-def test_a_transcript_finished_after_reset_is_not_committed():
+def test_captions_finished_after_reset_are_not_published():
     p = _stub()
-    p._segments = queue.Queue()
     p._asr_lock = threading.Lock()
-    committed = []
-    p._commit_new_asr_text = lambda text, final: committed.append(text)
+    p._last_caption_step = 0.0
+    p.cfg.asr.interval_ms = 1
+    published = []
+    p._publish_captions = lambda final, still_open: published.append(final)
 
-    class Asr:
-        def transcribe(self, audio):
+    class Transcript:
+        has_audio = True
+
+        def step(self):
             p._reset_generation += 1  # Reset lands while this is transcribing
-            return "old speaker"
+            return [], ["old speaker"]
 
-    p.asr = Asr()
-    p._segments.put(("final", np.zeros(1600, dtype=np.float32)))
-    p._asr_step()
+    p.transcript = Transcript()
+    p._caption_step()
 
-    assert committed == []
+    assert published == []
+
+
+def test_stop_finalizes_what_was_heard_so_it_is_still_translated():
+    from sts.transcript import Sentence
+
+    p = _stub()
+    p._transcripts = queue.Queue()
+    p._original_seq = 0
+    p._last_final_end = None
+    p._recent_text = "Недосказанное"
+
+    class Transcript:
+        def flush(self):
+            return [Sentence("Недосказанное", 3.0, 4.0, False)]
+
+    p.transcript = Transcript()
+    p.handle_control({"action": "stop"})
+
+    assert not p.control.active.is_set()
+    assert p._transcripts.get_nowait()[0] == "Недосказанное"
+    assert p._recent_text == ""  # the live line is cleared too
 
 
 def test_tts_stops_synthesizing_a_sentence_once_voice_is_turned_off():
@@ -176,8 +197,9 @@ def test_reset_restores_the_voice_after_anything_already_queued():
     """A voice picked just before Reset must not come back after it."""
     p = _stub()
     p._commands = queue.Queue()
-    for name in ("_segments", "_transcripts", "_translations", "_audio"):
+    for name in ("_transcripts", "_translations", "_audio"):
         setattr(p, name, queue.Queue())
+    p.transcript = Transcript(None, 2, 30)
     p._playback_generation = 0
     order = []
     p._select_speaker = lambda speaker_id: order.append(("select", speaker_id))

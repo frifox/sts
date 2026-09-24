@@ -202,7 +202,7 @@ def _words(*items):
 
 
 def test_sentences_are_cut_at_end_marks_and_the_open_tail_is_incomplete():
-    from sts.caption import sentences_from_words
+    from sts.transcript import sentences_from_words
 
     sentences = sentences_from_words(_words(
         ("Я", 0.0, 0.2), ("есмь", 0.3, 0.6), ("лоза.", 0.7, 1.0),
@@ -216,9 +216,16 @@ def test_sentences_are_cut_at_end_marks_and_the_open_tail_is_incomplete():
     ]
 
 
+def test_a_sentence_never_starts_with_punctuation():
+    from sts.transcript import sentences_from_words
+
+    sentences = sentences_from_words(_words((".способны", 0.0, 0.5), ("приносить.", 0.6, 1.0), (".", 1.2, 1.3), ("Ну", 1.5, 1.7)))
+    assert [x.text for x in sentences] == ["способны приносить.", "Ну"]
+
+
 def test_a_lowercase_sentence_continues_the_previous_one():
     """The reported case: "...он начал." + "с ними беседовать." is one sentence."""
-    from sts.caption import Sentence, join_continuations
+    from sts.transcript import Sentence, join_continuations
 
     joined = join_continuations([
         Sentence("Я думаю, все читающие знают это, он начал.", 0.0, 9.0, True),
@@ -233,7 +240,7 @@ def test_a_lowercase_sentence_continues_the_previous_one():
 
 
 def test_final_by_position_and_by_age():
-    from sts.caption import Sentence, count_final
+    from sts.transcript import Sentence, count_final
 
     s = [Sentence(f"S{i}.", i * 10.0, i * 10.0 + 5, True) for i in range(4)] + [Sentence("open", 40, 41, False)]
     # 5 sentences: the first three have 2+ after them.
@@ -269,6 +276,11 @@ class _ScriptedAsr:
                 for w in self.script if w.start >= begin - 0.01 and w.end <= end]
 
 
+def _texts(step_result):
+    final, still_open = step_result
+    return [sentence.text for sentence in final], still_open
+
+
 def _feed(transcript, until_s, fed):
     import numpy as np
 
@@ -278,7 +290,7 @@ def _feed(transcript, until_s, fed):
 
 
 def test_transcript_locks_sentences_once_and_stops_rehearing_their_audio():
-    from sts.caption import Transcript
+    from sts.transcript import Transcript
 
     script = _words(
         ("Первое.", 0.5, 1.5), ("Второе", 2.0, 2.5), ("предложение.", 2.6, 3.5),
@@ -291,20 +303,20 @@ def test_transcript_locks_sentences_once_and_stops_rehearing_their_audio():
     _feed(t, 5.5, fed)
     # "Первое." is locked, but shown as final only once the next one is
     # locked too (it could still turn out to continue).
-    assert t.step() == ([], ["Первое.", "Второе предложение.", "Третье."])
+    assert _texts(t.step()) == ([], ["Первое.", "Второе предложение.", "Третье."])
     _feed(t, 9.0, fed)
-    assert t.step() == (["Первое.", "Второе предложение."], ["Третье.", "Четвёртое.", "Пятое"])
-    # The second pass heard audio from shortly before the first cut, not the whole recording.
-    assert asr.heard[1][0] == pytest.approx(max(0.0, 1.5 - Transcript.CONTEXT_S))
+    assert _texts(t.step()) == (["Первое.", "Второе предложение."], ["Третье.", "Четвёртое.", "Пятое"])
+    # The second pass heard audio from shortly before the first open word, not the whole recording.
+    assert asr.heard[1][0] == pytest.approx(2.0 - Transcript.CONTEXT_S)
     _feed(t, 45.0, fed)
-    assert t.step() == (["Третье."], ["Четвёртое.", "Пятое"])  # 30+ s after it ended; the open tail stays open
+    assert _texts(t.step()) == (["Третье."], ["Четвёртое.", "Пятое"])  # 30+ s after it ended; the open tail stays open
 
 
 def test_a_continuation_heard_only_after_the_lock_still_joins_the_locked_sentence():
     """The reported case: locked while the model heard "Для чего..." as a new
     sentence; with only the end of the locked one left as context, it came
     back as "для чего..." - which belongs on the end of the locked one."""
-    from sts.caption import Transcript
+    from sts.transcript import Transcript
 
     script = _words(
         ("Мы", 0.5, 0.7), ("об", 0.8, 0.9), ("этом", 1.0, 1.3), ("рассуждаем.", 1.4, 2.4),
@@ -319,22 +331,22 @@ def test_a_continuation_heard_only_after_the_lock_still_joins_the_locked_sentenc
     fed = [0]
 
     _feed(t, 6.5, fed)
-    assert t.step() == ([], ["Мы об этом рассуждаем.", "Для чего Христос приходил.", "Мы обычно"])
+    assert _texts(t.step()) == ([], ["Мы об этом рассуждаем.", "Для чего Христос приходил.", "Мы обычно"])
     _feed(t, 10.5, fed)
-    final, still_open = t.step()
+    final, still_open = _texts(t.step())
     assert final == ["Мы об этом рассуждаем для чего Христос приходил."]
     assert still_open == ["Мы обычно такие.", "Тогда.", "Потом"]
 
 
 def test_transcript_by_age_only():
-    from sts.caption import Transcript
+    from sts.transcript import Transcript
 
     script = _words(("Одно.", 0.5, 1.5), ("Другое.", 2.0, 3.0))
     t = Transcript(_ScriptedAsr(script), after_sentences=0, after_seconds=5)
     fed = [0]
     _feed(t, 4.0, fed)
-    assert t.step() == ([], ["Одно.", "Другое."])
+    assert _texts(t.step()) == ([], ["Одно.", "Другое."])
     _feed(t, 7.0, fed)
-    assert t.step() == ([], ["Одно.", "Другое."])  # "Одно." is locked, held until the next one is
+    assert _texts(t.step()) == ([], ["Одно.", "Другое."])  # "Одно." is locked, held until the next one is
     _feed(t, 9.0, fed)
-    assert t.step() == (["Одно."], ["Другое."])
+    assert _texts(t.step()) == (["Одно."], ["Другое."])

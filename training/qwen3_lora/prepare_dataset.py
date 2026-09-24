@@ -1,5 +1,5 @@
 """Turns one recorded-speaker audio file into a Qwen3-TTS LoRA training set:
-VAD-segmented into utterances, transcribed with NVIDIA Parakeet (the same
+VAD-segmented into utterances, transcribed with Sber's GigaAM-v3 (the same
 model the live pipeline uses), resampled to
 the 24kHz mono the Qwen3-TTS codec pipeline requires, and written out as
 train/val JSONL in the official finetuning schema (`audio`, `text`,
@@ -27,8 +27,8 @@ import torchaudio
 
 SAMPLE_RATE = 24_000  # Qwen3-TTS codec pipeline requires exactly this
 VAD_SAMPLE_RATE = 16_000  # what Silero VAD actually supports
-ASR_SAMPLE_RATE = 16_000  # what Parakeet expects
-ASR_MODEL = "nvidia/parakeet-tdt-0.6b-v3"
+ASR_SAMPLE_RATE = 16_000  # what GigaAM expects
+ASR_MODEL, ASR_REVISION = "ai-sage/GigaAM-v3", "e2e_rnnt"
 
 
 def convert_to_wav(input_path: Path, output_path: Path) -> None:
@@ -64,21 +64,36 @@ def find_speech_segments(master_wav_24k: Path, min_seconds: float, max_seconds: 
     return audio_24k, timestamps_24k
 
 
-def transcribe_clips(clips: list, device: str, batch_size: int = 16) -> list[str]:
-    """Transcripts of 24kHz clips (float arrays), in order. Parakeet detects
-    the language itself and emits punctuation/capitalization."""
-    import nemo.collections.asr as nemo_asr
+def load_asr(device: str):
+    """GigaAM-v3 e2e_rnnt (Russian, punctuated). transformers won't load its
+    model code while an import in it is missing - `pyannote`, used only by
+    its long-audio mode (not needed here: clips are at most
+    --max-clip-seconds, within its 25 s limit) - so that one import is left
+    out of the check, the same way sts.asr.gigaam_asr does it."""
+    import transformers.dynamic_module_utils as dmu
+    from transformers import AutoModel
 
-    # Loaded on the CPU and then moved, so the fp32 checkpoint never sits on
-    # the GPU next to an fp16 copy (see sts.asr.parakeet_asr).
-    model = nemo_asr.models.ASRModel.from_pretrained(model_name=ASR_MODEL, map_location=torch.device("cpu"))
-    model = (model.half() if device.startswith("cuda") else model.float()).to(device).eval()
-    audio_16k = [
-        torchaudio.functional.resample(torch.as_tensor(clip, dtype=torch.float32), SAMPLE_RATE, ASR_SAMPLE_RATE).numpy()
-        for clip in clips
-    ]
-    out = model.transcribe(audio_16k, batch_size=batch_size, verbose=False)
-    return [(hyp.text if hasattr(hyp, "text") else hyp).strip() for hyp in out]
+    get_imports = dmu.get_imports
+    dmu.get_imports = lambda filename: [name for name in get_imports(filename) if name != "pyannote"]
+    try:
+        model = AutoModel.from_pretrained(ASR_MODEL, revision=ASR_REVISION, trust_remote_code=True)
+    finally:
+        dmu.get_imports = get_imports
+    return model.to(device).eval()
+
+
+@torch.inference_mode()
+def transcribe_clips(clips: list, device: str) -> list[str]:
+    """Transcripts of 24kHz clips (float arrays), in order."""
+    inner = load_asr(device).model
+    texts = []
+    for clip in clips:
+        audio = torchaudio.functional.resample(torch.as_tensor(clip, dtype=torch.float32), SAMPLE_RATE, ASR_SAMPLE_RATE)
+        wav = audio.to(device).unsqueeze(0)
+        length = torch.full([1], wav.shape[-1], device=device)
+        encoded, encoded_len = inner(wav, length)  # what GigaAM's own transcribe() does after reading a file
+        texts.append(inner.decoding.decode(inner.head, encoded, encoded_len)[0].strip())
+    return texts
 
 
 def main() -> None:

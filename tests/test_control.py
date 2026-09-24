@@ -1,6 +1,7 @@
 import numpy as np
 
 from sts.control import RecognitionControl
+from sts.transcript import Transcript
 
 
 def test_recognition_starts_on():
@@ -85,40 +86,6 @@ def test_manual_stop_before_target_uses_whatever_was_captured():
     assert len(audio) == 16_000
 
 
-def test_pause_threshold_changes_live_and_is_clamped():
-    import queue
-
-    from sts.config import PipelineConfig
-    from sts.pipeline import Pipeline, _Clip
-
-    class Broadcaster:
-        status = None
-
-        def broadcast_status(self, **kwargs):
-            self.status = kwargs
-
-    class Tts:
-        cloned_speaker_wav = None
-
-    p = object.__new__(Pipeline)
-    p.cfg = PipelineConfig()
-    p.broadcaster = Broadcaster()
-    p.tts = Tts()
-    p.control = RecognitionControl(16000)
-    p._pending_voice = None
-    p._active_speaker_id = None
-
-    p.handle_control({"action": "set_min_silence", "ms": 400})
-    assert p.cfg.vad.min_silence_ms == 400
-    assert p.broadcaster.status["min_silence_ms"] == 400          # other open pages follow along
-    p.handle_control({"action": "set_min_silence", "ms": 5})
-    assert p.cfg.vad.min_silence_ms == 200                        # clamped to the slider's range
-    p.handle_control({"action": "set_min_silence", "ms": 999999})
-    assert p.cfg.vad.min_silence_ms == 1500
-    p.handle_control({"action": "set_min_silence", "ms": "abc"})  # junk is ignored
-    assert p.cfg.vad.min_silence_ms == 1500
-
-
 def test_output_volume_changes_live_is_clamped_and_persisted():
     from sts.config import PipelineConfig
     from sts.pipeline import Pipeline, _Clip
@@ -195,8 +162,9 @@ def test_voice_off_drops_already_synthesized_but_unplayed_sentences():
     p._active_speaker_id = None
     p.control = RecognitionControl(16000)
     p.control.enable_voice()
-    for name in ("_segments", "_transcripts", "_translations", "_audio"):
+    for name in ("_transcripts", "_translations", "_audio"):
         setattr(p, name, queue.Queue())
+    p.transcript = Transcript(None, 2, 30)
     p._audio.put((None, 24000, 0.0))
     p._audio.put((None, 24000, 0.0))  # a couple of sentences already synthesized ahead of playback
 
@@ -246,16 +214,12 @@ def test_reset_stops_playback_without_touching_the_stream_directly():
     p.tts = Tts()
     p._pending_voice = None
     p._active_speaker_id = None
-    p._committed_text = ""
-    p._pending_confirmation = None
-    p._last_sentence_original = None
-    p._last_sentence_translated = None
-    p._frames_since_partial = 0
     p._playback_generation = 0
     p.control = RecognitionControl(16000)
     p.control.enable_voice()
-    for name in ("_segments", "_transcripts", "_translations", "_audio"):
+    for name in ("_transcripts", "_translations", "_audio"):
         setattr(p, name, queue.Queue())
+    p.transcript = Transcript(None, 2, 30)
     p._audio.put((None, 24000, 0.0))  # a sentence already synthesized ahead of playback
 
     p.handle_control({"action": "reset"})
@@ -493,8 +457,9 @@ def _startup_voice_pipeline(tmp_path):
     p._active_speaker_id = None
     p._persistent_config = None
     p._playback_generation = 0
-    for name in ("_segments", "_transcripts", "_translations", "_audio"):
+    for name in ("_transcripts", "_translations", "_audio"):
         setattr(p, name, queue.Queue())
+    p.transcript = Transcript(None, 2, 30)
     mine = p.voice_library.save("Mine", wav)
     return p, mine
 

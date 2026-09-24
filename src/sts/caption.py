@@ -3,10 +3,9 @@ recognizer - no VAD segmentation, no translation - and shows what the model
 hears, sentence by sentence, as it hears and revises it.
 
 The recognizer is Sber's GigaAM-v3 (e2e_rnnt, Russian-only, punctuated
-output) by default - run it from .venv-gigaam, which has the newer torch/
-transformers its model code needs (see sts.asr.gigaam_asr).
-`--asr-backend parakeet` uses NVIDIA's Parakeet TDT instead, from a
-virtualenv with NeMo (e.g. .venv-xtts).
+output), and the captioning (sentence locking) is the live pipeline's own,
+sts.transcript - this is the pipeline's captions on their own, without the
+web page, translation or voice.
 
 Unlike the live pipeline (which cuts speech into segments on silence), this
 never cuts on silence: the audio that isn't settled yet is re-transcribed
@@ -31,10 +30,9 @@ audio behind it is dropped, and recognition starts over from the next thing
 said - e.g. to start fresh on a new speaker.
 
 Usage:
-  .venv-gigaam/bin/sts-caption --input-device 7
-  .venv-gigaam/bin/sts-caption --input-device 7 --interval-ms 1000
-  .venv-gigaam/bin/sts-caption --input-device 7 --final-after-sentences 3 --final-after-seconds 20
-  .venv-xtts/bin/sts-caption --input-device 7 --asr-backend parakeet
+  .venv-xtts/bin/sts-caption --input-device 7
+  .venv-xtts/bin/sts-caption --input-device 7 --interval-ms 1000
+  .venv-xtts/bin/sts-caption --input-device 7 --final-after-sentences 3 --final-after-seconds 20
   sts-caption --list-devices
 """
 
@@ -48,23 +46,17 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 
 import numpy as np
 
-from sts.asr import TimedWord
 from sts.audio.capture import AudioCapture, list_devices
 from sts.config import ASRConfig, AudioConfig
-from sts.textclean import clean_transcript
+from sts.transcript import Transcript
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--input-device", type=int, default=None, help="ALSA input device index")
-    parser.add_argument(
-        "--asr-backend", choices=("gigaam", "parakeet"), default="gigaam",
-        help="gigaam (GigaAM-v3 e2e_rnnt, Russian-only; run from .venv-gigaam) or parakeet (default: gigaam)",
-    )
     parser.add_argument("--asr-device", default="cuda", help="cuda | cpu | mps (default: cuda)")
     parser.add_argument(
         "--final-after-sentences", type=int, default=2, metavar="N",
@@ -100,146 +92,6 @@ def screen_rows(text: str, width: int) -> list[str]:
     for line in text.split("\n"):
         rows.extend([line[i : i + width] for i in range(0, len(line), width)] or [""])
     return rows
-
-
-@dataclass
-class Sentence:
-    """A sentence (or the unfinished tail of one), timed in seconds since
-    sts-caption started listening."""
-
-    text: str
-    start: float
-    end: float
-    complete: bool  # ends with a sentence-ending mark
-
-
-# A word that ends a sentence: ., ?, ! or … last, possibly followed by a
-# closing quote/bracket ("ветви»." / "ветви.»").
-_ENDS_SENTENCE = re.compile(r'[.?!…]["»”)]*$')
-
-
-def sentences_from_words(words: list[TimedWord]) -> list[Sentence]:
-    sentences: list[Sentence] = []
-    current: list[TimedWord] = []
-    for word in words:
-        current.append(word)
-        if _ENDS_SENTENCE.search(word.text):
-            sentences.append(Sentence(" ".join(w.text for w in current), current[0].start, current[-1].end, True))
-            current = []
-    if current:
-        sentences.append(Sentence(" ".join(w.text for w in current), current[0].start, current[-1].end, False))
-    return sentences
-
-
-def _starts_lowercase(text: str) -> bool:
-    first_letter = next((c for c in text if c.isalpha()), "")
-    return first_letter.islower()
-
-
-def join_continuations(sentences: list[Sentence]) -> list[Sentence]:
-    """A "sentence" whose first letter is lowercase isn't one: the model put
-    a sentence end where the speaker only paused ("...и умыл ноги всем
-    ученикам, он начал." + "с ними беседовать."). It's joined onto the one
-    before, whose end mark is dropped."""
-    joined: list[Sentence] = []
-    for sentence in sentences:
-        if joined and _starts_lowercase(sentence.text):
-            previous = joined[-1]
-            text = f"{re.sub(r'[.?!…]+$', '', previous.text)} {sentence.text}"
-            joined[-1] = Sentence(text, previous.start, sentence.end, sentence.complete)
-        else:
-            joined.append(sentence)
-    return joined
-
-
-def count_final(sentences: list[Sentence], now_s: float, after_sentences: int, after_seconds: float) -> int:
-    """How many of the leading `sentences` are final: those with at least
-    `after_sentences` sentences after them, or complete and ended at least
-    `after_seconds` before `now_s` (0 turns either rule off). Only a
-    leading run can be final - a sentence is never locked while one
-    before it could still change."""
-    count = 0
-    for i, sentence in enumerate(sentences):
-        by_position = after_sentences > 0 and len(sentences) - 1 - i >= after_sentences
-        by_age = after_seconds > 0 and sentence.complete and now_s - sentence.end >= after_seconds
-        if not (by_position or by_age):
-            break
-        count = i + 1
-    return count
-
-
-class Transcript:
-    """The audio heard so far and what's been made of it. Each step()
-    re-transcribes the audio that isn't locked yet, locks the sentences that
-    have become final (see count_final), and drops their audio: they're
-    never transcribed - or reworded - again.
-
-    A little of the locked audio (CONTEXT_S) is kept in front of what's
-    still open, so the model hears how the next sentence begins in context;
-    words from it (those centered before the cut) are discarded.
-
-    That context can change the model's mind about a sentence boundary:
-    heard right after "...мы об этом рассуждаем", the next sentence may come
-    back as "для чего Христос приходил" - a continuation, lowercase - where
-    the model heard "Для чего..." as a new sentence before the lock. So the
-    most recently locked sentence is held back ("pending") until the one
-    after it is locked too: a lowercase continuation still joins onto it
-    (see join_continuations), and only then is it returned as final. Until
-    then it's returned first among the still-open sentences."""
-
-    CONTEXT_S = 1.5
-
-    def __init__(self, asr, after_sentences: int, after_seconds: float, sample_rate: int = 16_000):
-        self.asr = asr
-        self.after_sentences = after_sentences
-        self.after_seconds = after_seconds
-        self.sample_rate = sample_rate
-        self.clear()
-
-    def clear(self) -> None:
-        self._frames: list[np.ndarray] = []
-        self._offset_s = 0.0  # when the first buffered sample was heard
-        self._cut_s = 0.0  # words centered before this are already locked
-        self._pending: Sentence | None = None  # locked, not yet returned as final
-
-    def add(self, frame: np.ndarray) -> None:
-        self._frames.append(frame)
-
-    @property
-    def has_audio(self) -> bool:
-        return bool(self._frames)
-
-    def step(self) -> tuple[list[str], list[str]]:
-        """(sentences that just became final, sentences still open)."""
-        audio = np.concatenate(self._frames)
-        self._frames = [audio]
-        words = [
-            TimedWord(w.text, w.start + self._offset_s, w.end + self._offset_s)
-            for w in self.asr.transcribe_words(audio)
-            if (w.start + w.end) / 2 + self._offset_s >= self._cut_s
-        ]
-        sentences = join_continuations(sentences_from_words(words))
-        now_s = self._offset_s + len(audio) / self.sample_rate
-        n_locked = count_final(sentences, now_s, self.after_sentences, self.after_seconds)
-        final: list[Sentence] = []
-        for sentence in sentences[:n_locked]:
-            if self._pending is not None and not _starts_lowercase(sentence.text):
-                final.append(self._pending)
-                self._pending = sentence
-            else:
-                self._pending = join_continuations([self._pending, sentence])[0] if self._pending else sentence
-        if n_locked:
-            self._cut_s = sentences[n_locked - 1].end
-            drop = int(max(0.0, self._cut_s - self.CONTEXT_S - self._offset_s) * self.sample_rate)
-            self._frames = [audio[drop:]]
-            self._offset_s += drop / self.sample_rate
-        still_open = ([self._pending] if self._pending else []) + sentences[n_locked:]
-        return _texts(final), _texts(join_continuations(still_open))
-
-
-def _texts(sentences: list[Sentence]) -> list[str]:
-    cleaned = (clean_transcript(sentence.text) for sentence in sentences)
-    return [text for text in cleaned if text]
 
 
 class LiveLine:
@@ -420,11 +272,11 @@ def main() -> None:
 
         if not torch.cuda.is_available():
             sys.exit("[caption] --asr-device cuda, but PyTorch sees no CUDA GPU here; pass --asr-device cpu to run anyway")
-    name = {"gigaam": "GigaAM-v3 e2e_rnnt", "parakeet": "Parakeet"}[args.asr_backend]
+    name = "GigaAM-v3 e2e_rnnt"
     print(f"[caption] loading {name} on {args.asr_device}…", file=sys.stderr, flush=True)
     from sts.asr import create_asr  # heavy model imports; deferred past --list-devices
 
-    asr = create_asr(ASRConfig(backend=args.asr_backend, device=args.asr_device))
+    asr = create_asr(ASRConfig(device=args.asr_device))
     param = next(asr.model.parameters())
     print(f"[caption] {name} loaded on {param.device} ({param.dtype})", file=sys.stderr, flush=True)
 
@@ -469,7 +321,7 @@ def main() -> None:
                 last_run = now
                 final, live = transcript.step()
                 # The blank line keeps what's final visibly apart from what may still change.
-                line.update("\n" + "\n".join(live), above=final)
+                line.update("\n" + "\n".join(live), above=[sentence.text for sentence in final])
     except KeyboardInterrupt:
         pass
     finally:

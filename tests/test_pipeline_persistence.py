@@ -173,63 +173,6 @@ def test_voice_actions_are_fine_with_no_persistent_config(tmp_path):
     p.handle_control({"action": "select_speaker", "speaker_id": mine.speaker_id})  # must not raise
 
 
-# -- persisting the ASR backend on a live switch -----------------------------
-
-
-def _asr_pipeline(monkeypatch, asr_factory, persistent_config=None):
-    monkeypatch.setattr("sts.pipeline.create_asr", asr_factory)
-    p = object.__new__(Pipeline)
-    p.cfg = PipelineConfig()
-    p.broadcaster = _Broadcaster()
-    p.tts = _Tts()
-    p._pending_voice = None
-    p._active_speaker_id = None
-    p._asr_lock = threading.Lock()
-    p._asr_busy = False
-    p._persistent_config = persistent_config
-    p.control = RecognitionControl(16000)
-    return p
-
-
-def test_switch_asr_backend_persists_on_success(tmp_path, monkeypatch):
-    pc = PersistentConfig(str(tmp_path / "sts.db"))
-    p = _asr_pipeline(monkeypatch, lambda cfg: f"{cfg.backend}-engine", pc)
-    p.asr = "gigaam-engine"
-    p.cfg.asr.backend = "gigaam"
-
-    p._switch_asr_backend("parakeet")
-
-    assert pc.get("asr_backend") == "parakeet"
-
-
-def test_switch_asr_backend_does_not_persist_a_same_backend_noop(tmp_path, monkeypatch):
-    pc = PersistentConfig(str(tmp_path / "sts.db"))
-    p = _asr_pipeline(monkeypatch, lambda cfg: f"{cfg.backend}-engine", pc)
-    p.asr = "gigaam-engine"
-    p.cfg.asr.backend = "gigaam"
-    p._asr_busy = True
-
-    p._switch_asr_backend("gigaam")
-
-    assert pc.get("asr_backend") is None
-
-
-def test_switch_asr_backend_does_not_persist_on_failure(tmp_path, monkeypatch):
-    def flaky(cfg):
-        if cfg.backend == "parakeet":
-            raise RuntimeError("out of memory")
-        return "gigaam-engine"
-
-    pc = PersistentConfig(str(tmp_path / "sts.db"))
-    p = _asr_pipeline(monkeypatch, flaky, pc)
-    p.asr = "gigaam-engine"
-    p.cfg.asr.backend = "gigaam"
-
-    p._switch_asr_backend("parakeet")
-
-    assert pc.get("asr_backend") is None
-
-
 # -- persisting audio devices on a live change -------------------------------
 
 

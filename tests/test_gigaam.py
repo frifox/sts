@@ -58,18 +58,24 @@ def test_finished_chunks_are_transcribed_once():
     assert [w.start for w in words] == pytest.approx([b / SAMPLE_RATE + 0.1 for b in starts])
 
 
-def test_create_asr_dispatches_to_gigaam(monkeypatch):
+def test_create_asr_builds_gigaam(monkeypatch):
     monkeypatch.setattr("sts.asr.gigaam_asr.GigaAMASR", lambda cfg: "gigaam-instance")
-    assert create_asr(ASRConfig(backend="gigaam")) == "gigaam-instance"
+    assert create_asr(ASRConfig()) == "gigaam-instance"
 
 
-def test_create_asr_gigaam_missing_dependency_gives_install_hint(monkeypatch):
-    def raise_import_error(cfg):
-        raise ImportError("No module named 'hydra'")
+def test_create_asr_missing_dependency_gives_install_hint(monkeypatch):
+    import builtins
 
-    monkeypatch.setattr("sts.asr.gigaam_asr.GigaAMASR", raise_import_error)
-    with pytest.raises(SystemExit, match=r"\.venv-gigaam"):
-        create_asr(ASRConfig(backend="gigaam"))
+    real_import = builtins.__import__
+
+    def no_gigaam(name, *args, **kwargs):
+        if name == "sts.asr.gigaam_asr":
+            raise ImportError("No module named 'hydra'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_gigaam)
+    with pytest.raises(SystemExit, match=r"pip install -e \."):
+        create_asr(ASRConfig())
 
 
 def test_a_cut_goes_in_a_real_pause_not_a_brief_dip_inside_a_word():

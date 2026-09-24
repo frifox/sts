@@ -103,74 +103,50 @@ def test_broadcast_rtf_keeps_readings_still_within_the_window(monkeypatch):
     assert p.broadcaster.rtf[-1] == ("translate", pytest.approx(3.1 / 2.0))  # the spike still counts
 
 
-def test_asr_loop_tracks_audio_duration_and_broadcasts_rtf():
+def test_caption_step_reports_its_time_over_the_audio_that_arrived_meanwhile(monkeypatch):
     p = _rtf_pipeline()
-    p.bible_lookup = None  # "Привет." has no bible reference, so this is never touched
     p.cfg = PipelineConfig()
+    p.cfg.asr.interval_ms = 1
     p._asr_lock = threading.Lock()
-    p._segments = queue.Queue()
     p._stop = threading.Event()
-    p._last_asr_audio_s = 0.0
-    p._committed_text = ""
-    p._pending_confirmation = None
-    p._original_seq = 0
-    p._last_sentence_original = None
-    p._transcripts = queue.Queue()
+    published = []
+    p._publish_captions = lambda final, still_open: published.append((final, still_open))
 
-    class FakeAsr:
-        def transcribe(self, audio):
+    class Transcript:
+        has_audio = True
+
+        def step(self):
             time.sleep(0.05)
-            return "Привет."
+            return [], ["Привет"]
 
-    p.asr = FakeAsr()
-    segment = np.zeros(p.cfg.audio.sample_rate * 2, dtype=np.float32)  # 2s of audio
-    p._segments.put(("final", segment))
+    p.transcript = Transcript()
+    p._last_caption_step = time.monotonic() - 0.5  # half a second of audio since the last step
 
-    thread = threading.Thread(target=Pipeline._asr_loop, args=(p,), daemon=True)
-    thread.start()
-    thread.join(timeout=0.5)  # loop blocks forever on the next get() - daemon thread is fine to leave running
+    Pipeline._caption_step(p)
 
-    assert p._last_asr_audio_s == 2.0
-    assert len(p.broadcaster.rtf) == 1
     stage, value = p.broadcaster.rtf[0]
     assert stage == "asr"
-    assert value == pytest.approx(0.025, abs=0.05)  # ~0.05s processing / 2s audio
-    assert p._transcripts.get_nowait() == ("Привет.", 0, None)
+    assert value == pytest.approx(0.1, abs=0.05)  # ~0.05 s of work per ~0.5 s of audio
+    assert published == [([], ["Привет"])]
 
 
-def test_translate_segment_uses_the_last_asr_audio_duration():
+def test_translation_rtf_is_against_how_long_the_sentence_took_to_say():
     p = _rtf_pipeline()
     p._translations = queue.Queue()
-    p._last_asr_audio_s = 4.0
 
     class FakeTranslator:
-        def translate_sentences(self, text, context=None):
+        def translate_sentences(self, text):
             yield "Translated."
 
     p.translator = FakeTranslator()
 
-    Pipeline._translate_segment(p, "Text.")
+    Pipeline._translate_sentence(p, "Text.", seq=0, spoken_s=4.0)
+    Pipeline._translate_sentence(p, "Text.", seq=1, spoken_s=0.0)  # no duration: nothing to compare against
 
     assert len(p.broadcaster.rtf) == 1
     stage, value = p.broadcaster.rtf[0]
     assert stage == "translate"
     assert 0 <= value < 1.0  # near-instant translation over 4s of source audio
-
-
-def test_translate_segment_skips_rtf_before_any_segment_is_transcribed():
-    p = _rtf_pipeline()
-    p._translations = queue.Queue()
-    p._last_asr_audio_s = 0.0  # nothing transcribed yet this session
-
-    class FakeTranslator:
-        def translate_sentences(self, text, context=None):
-            yield "Translated."
-
-    p.translator = FakeTranslator()
-
-    Pipeline._translate_segment(p, "Text.")
-
-    assert p.broadcaster.rtf == []
 
 
 def test_tts_loop_broadcasts_voice_rtf_from_its_own_output_duration():

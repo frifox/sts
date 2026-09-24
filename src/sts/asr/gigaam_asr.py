@@ -2,15 +2,16 @@
 Russian-only Conformer RNN-T that outputs punctuated, capitalized,
 normalized text directly.
 
-Needs its own virtualenv (`pip install -e '.[gigaam]'`, e.g. .venv-gigaam):
-its code is loaded from the Hugging Face repo and pins newer torch/
-transformers than the TTS backends allow.
+Its model code is loaded from the Hugging Face repo. The model card asks for
+newer torch/transformers than XTTS allows, but it runs unchanged on what
+either TTS backend's virtualenv has (checked with torch 2.6 and transformers
+4.49 and 4.57), so no separate environment is needed.
 
 GigaAM only takes up to 25 s at a time (longer input is refused - its own
 long-form mode needs pyannote and a Hugging Face token). Longer audio is cut
 into chunks of at most MAX_CHUNK_S at the quietest moment near each limit,
 chosen from the start of the audio onward. Each cut therefore depends only
-on audio before it, so re-transcribing a growing buffer (sts-caption) puts
+on audio before it, so re-transcribing a growing buffer (sts.transcript) puts
 the same cuts in the same places every time: a chunk that's complete comes
 out identically on every run, and is cached instead of re-transcribed.
 """
@@ -86,7 +87,7 @@ def _without_pyannote_check():
 class GigaAMASR:
     def __init__(self, cfg: ASRConfig):
         self.cfg = cfg
-        from transformers import AutoModel  # the gigaam extra's pinned version
+        from transformers import AutoModel
 
         with _without_pyannote_check():
             model = AutoModel.from_pretrained(MODEL_NAME, revision=REVISION, trust_remote_code=True)

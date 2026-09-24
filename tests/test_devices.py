@@ -12,7 +12,7 @@ def test_cpu_maps_all_components_to_cpu():
 
 
 def test_mps_maps_all_components_to_mps():
-    # ASR included: Parakeet is PyTorch, unlike the faster-whisper this once
+    # ASR included: GigaAM is PyTorch, unlike the faster-whisper this once
     # had to route to cpu for lack of any Metal support.
     assert resolve_devices("mps", None) == ("mps", "mps", "mps")
 

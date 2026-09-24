@@ -1,7 +1,6 @@
 """Entry point: `sts` starts the live pipeline, `sts --list-devices` lists sound cards."""
 
 import argparse
-import importlib.util
 import sys
 import threading
 import time
@@ -12,7 +11,7 @@ from sts.audio.devices import check_input, check_output
 from sts.engine_args import add_engine_arguments, build_engine_config
 from sts.log import vlog
 from sts.persistent_config import PersistentConfig
-from sts.pipeline import LIVE_ASR_BACKENDS, Pipeline
+from sts.pipeline import Pipeline
 from sts.web.server import CaptionBroadcaster, run_server
 
 # Where --https-port looks for a cert/key when --tls-cert/--tls-key aren't
@@ -73,32 +72,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum silence between consecutive spoken translations (seconds, default 1.0; 0 disables)",
     )
     parser.add_argument(
-        "--min-silence-ms",
+        "--final-after-sentences",
         type=int,
         default=None,
-        help="Pause length (ms) that ends a caption segment; lower = shorter, more frequent captions (default 500)",
+        metavar="N",
+        help="Lock a caption sentence - send it on to translation and voicing, and never change it again - "
+        "once N more sentences have followed it (default 2; 0 turns this rule off)",
     )
     parser.add_argument(
-        "--max-segment-s",
+        "--final-after-seconds",
         type=float,
         default=None,
-        help="Longest a single caption segment may run (seconds) before it is cut regardless of pauses (default 20)",
+        metavar="S",
+        help="Lock a caption sentence once it ended S seconds ago (default 30; 0 turns this rule off)",
     )
     parser.add_argument(
-        "--partial-interval-ms",
+        "--caption-interval-ms",
         type=int,
         default=None,
-        help="Re-transcribe a still-open segment this often (ms) so a multi-sentence segment can have its "
-        "earlier sentences translated while the speaker keeps talking, instead of everything waiting for the "
-        "closing pause (default 2000, confirmed working well with Parakeet; 0 disables it). Re-transcribing a "
-        "growing prefix from scratch can occasionally reword its start once more context is available, which "
-        "can repeat a sentence (see VADConfig.partial_interval_ms's docstring for details) - retune this for "
-        "your own speaker/backend if you see that.",
+        help="How often the not-yet-locked audio is re-transcribed, updating the live caption (default 500)",
     )
     parser.add_argument(
         "--config-db",
         default="sts.db",
-        help="SQLite file that remembers the operator's ASR engine, input/output device, and active voice "
+        help="SQLite file that remembers the operator's input/output device, output volume, and active voice "
         "across restarts (default: sts.db in the working directory). An explicit --input-device/--output-device/ "
         "--default-voice/--clone still wins over what's saved. Pass '' to disable persistence.",
     )
@@ -141,23 +138,12 @@ def main() -> None:
 
     persistent_config = PersistentConfig(args.config_db) if args.config_db else None
     if persistent_config is not None:
-        saved_backend = persistent_config.get("asr_backend")
-        # Only an engine the live pipeline still offers - e.g. not "whisper",
-        # which a db saved before its removal may still name.
-        if saved_backend in LIVE_ASR_BACKENDS:
-            cfg.asr.backend = saved_backend
         saved_volume = persistent_config.get("output_volume")
         if saved_volume:
             try:
                 cfg.audio.volume = max(0, min(100, int(saved_volume))) / 100
             except ValueError:
                 pass
-
-    if cfg.asr.backend == "parakeet" and importlib.util.find_spec("nemo") is None:
-        sys.exit(
-            "error: speech recognition (Parakeet, via NeMo) isn't installed in this environment.\n"
-            "  Install it with:  pip install -e '.[parakeet]'"
-        )
 
     cfg.audio.input_device = (
         args.input_device
@@ -176,12 +162,12 @@ def main() -> None:
     )
     if args.pause_s is not None:
         cfg.audio.pause_between_s = args.pause_s
-    if args.min_silence_ms is not None:
-        cfg.vad.min_silence_ms = args.min_silence_ms
-    if args.max_segment_s is not None:
-        cfg.vad.max_segment_ms = int(args.max_segment_s * 1000)
-    if args.partial_interval_ms is not None:
-        cfg.vad.partial_interval_ms = args.partial_interval_ms
+    if args.final_after_sentences is not None:
+        cfg.asr.final_after_sentences = max(0, args.final_after_sentences)
+    if args.final_after_seconds is not None:
+        cfg.asr.final_after_seconds = max(0.0, args.final_after_seconds)
+    if args.caption_interval_ms is not None:
+        cfg.asr.interval_ms = max(100, args.caption_interval_ms)
 
     broadcaster = None
     if args.web:
@@ -209,7 +195,7 @@ def main() -> None:
         if args.https_port is not None:
             print(f"Captions (HTTPS, needed for the browser mic): https://{args.web_host}:{args.https_port}/")
 
-    vlog("init", f"loading models (asr={cfg.asr.backend} on {asr_device}, translation on {translation_device}, "
+    vlog("init", f"loading models (asr=gigaam on {asr_device}, translation on {translation_device}, "
          f"tts={cfg.tts.backend} on {tts_device})")
     pipeline = Pipeline(cfg, broadcaster=broadcaster, persistent_config=persistent_config)
     vlog("init", "models loaded")

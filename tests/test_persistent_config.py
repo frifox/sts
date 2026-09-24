@@ -6,13 +6,13 @@ from sts.persistent_config import PersistentConfig
 def test_get_returns_default_when_unset(tmp_path):
     pc = PersistentConfig(str(tmp_path / "sts.db"))
     assert pc.get("asr_backend") is None
-    assert pc.get("asr_backend", "parakeet") == "parakeet"
+    assert pc.get("output_volume", "80") == "80"
 
 
 def test_set_then_get_round_trips(tmp_path):
     pc = PersistentConfig(str(tmp_path / "sts.db"))
-    pc.set("asr_backend", "parakeet")
-    assert pc.get("asr_backend") == "parakeet"
+    pc.set("output_volume", "50")
+    assert pc.get("output_volume") == "50"
 
 
 def test_set_overwrites_an_existing_key(tmp_path):

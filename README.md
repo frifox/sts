@@ -13,7 +13,7 @@ see **Apple Silicon / Metal** below.
 ## Pipeline
 
 ```
-sound card -> VAD segmenter -> ASR (ru) -> NLLB translation (ru->en) -> XTTS (en) -> sound card out
+sound card -> live captions (ru) -> NLLB translation (ru->en) -> XTTS (en) -> sound card out
                                        |                        |
                                        v                        v
                                   original text          translated text
@@ -23,17 +23,23 @@ sound card -> VAD segmenter -> ASR (ru) -> NLLB translation (ru->en) -> XTTS (en
 ```
 
 - **Capture** (`sts.audio.capture`) — reads raw audio off an input device via `sounddevice`.
-- **VAD segmentation** (`sts.audio.vad`) — Silero VAD buffers speech and cuts a
-  segment on trailing silence, so ASR sees whole utterances instead of
-  arbitrary fixed windows.
-- **ASR** — NVIDIA's Parakeet TDT (`sts.asr.parakeet_asr`, via NeMo),
-  punctuated and capitalized output. Paired with `--partial-interval-ms 2000`
-  (also the default): a still-open segment is periodically re-transcribed so
-  a multi-sentence segment's earlier sentences can be translated while the
-  speaker keeps talking, instead of everything waiting for the segment's
-  closing pause. (Sber's Russian-only GigaAM-v3 is available to the
-  `sts-caption` diagnostic - see below - but not to the live pipeline: its
-  model code needs newer torch/transformers than the TTS backends allow.)
+- **Captions** (`sts.transcript`, `sts.asr.gigaam_asr`) — Sber's
+  [GigaAM-v3](https://huggingface.co/ai-sage/GigaAM-v3) `e2e_rnnt`, a
+  Russian-only speech recognizer with punctuation. Captions don't wait for
+  the speaker to pause: every 500 ms (`--caption-interval-ms`) the audio that
+  isn't settled yet is transcribed again, so the model keeps hearing more
+  context and can revise what it heard. A sentence is **locked** once two
+  more sentences have followed it, or 30 s after it ended
+  (`--final-after-sentences N`, `--final-after-seconds S`; 0 turns either
+  rule off); its audio is then dropped, so it's never reworded again. If the
+  model starts a sentence with a lowercase letter, it's joined back onto the
+  previous one (the speaker only paused) - even a locked one, so a locked
+  sentence becomes **final** once the sentence after it is locked too. Only
+  final sentences go on to translation and voicing; everything before that
+  is shown on the caption page as it's heard (see Live captions). The price
+  of waiting for text to settle is delay: in testing, a sentence became
+  final about 10-20 s after it first appeared (with the defaults), and was
+  translated within a second after that.
 - **Translation** (`sts.translate.translator`) — NLLB-200 (`ru->en`). A
   glossary (`sts.translate.glossary`) force-substitutes known Baptist/Christian
   terms (grace, repentance, communion, sanctification, ...) so the model
@@ -44,7 +50,7 @@ sound card -> VAD segmenter -> ASR (ru) -> NLLB translation (ru->en) -> XTTS (en
   `.venv-qwen/bin/sts` uses Qwen3-TTS:
   - `xtts` (default) — Coqui XTTS v2. Ships natural built-in speakers, plus
     zero-shot cloning from a short reference clip.
-  - `qwen3` — Qwen3-TTS-Base (`pip install -e '.[qwen3,parakeet]'`, in its own virtualenv - see Setup), Apache-2.0,
+  - `qwen3` — Qwen3-TTS-Base (`pip install -e '.[qwen3]'`, in its own virtualenv - see Setup), Apache-2.0,
     self-hosted. Also zero-shot cloning, and officially supports
     cross-lingual cloning (Russian reference clip -> English output) with a
     reusable "clone prompt" object built from the clip once. It has no
@@ -62,10 +68,13 @@ slow translation or TTS call doesn't stall audio capture.
 - **Live captions** (`sts.web`) — a FastAPI/uvicorn server, on by default (`--no-web` turns it off)
   that serves a full-screen caption page and pushes recognized/translated
   text to it over a websocket as it's produced. The page is a top half
-  (original) / bottom half (translated) split; each new line fades in at the
-  bottom and older lines are dropped once they no longer fit on screen, so
-  the page keeps auto-scrolling without accumulating unbounded DOM/memory
-  over a long service.
+  (original) / bottom half (translated) split. In the original half, final
+  sentences are shown slightly faded, followed by the text that isn't final
+  yet - bright, on the same running line, updated as it's heard. Each new
+  translation fades in at the bottom of its half, dimming the one before.
+  Older lines are dropped once they no longer fit on screen, so the page
+  keeps auto-scrolling without accumulating unbounded DOM/memory over a long
+  service.
 - **Bible reference detection** (`sts.bible`) — the Russian transcript is
   scanned for a spoken reference ("Матфея 1:15", "Первое послание к
   Коринфянам, глава 13, стих 4", "Плач Иеремии 3:22-23", chapter/verse as
@@ -88,9 +97,10 @@ slow translation or TTS call doesn't stall audio capture.
   announcement would not be harmless) and defaults to **off**, opt-in per
   button:
   - **Start / Stop** — pauses/resumes ASR/translation/captions, for when even
-    the captions aren't wanted (e.g. a long musical number). Audio capture
-    and VAD segmentation keep running either way; Stop just means nothing
-    gets transcribed, so it doesn't waste GPU time or produce junk captions.
+    the captions aren't wanted (e.g. a long musical number). Stop makes
+    whatever was already heard final (so it's still translated), and then
+    nothing more is transcribed, so it doesn't waste GPU time or produce junk
+    captions.
   - **Voice on / off** — independently gates whether translated text is
     actually synthesized and played out loud; starts off regardless of
     Start/Stop, so captions can run continuously while voicing is switched
@@ -129,12 +139,6 @@ slow translation or TTS call doesn't stall audio capture.
     remembered across restarts (`--config-db`, default `sts.db`); an explicit
     `--input-device` / `--output-device` on the command line always wins over
     whatever was last saved.
-  - **Pause slider** (top right, next to the connection indicator) — how long
-    the speaker must pause before a caption ends and a new one starts
-    (200-1500 ms, default 700; `--min-silence-ms` sets the starting value).
-    It takes effect on the very next pause, live, so tune it per speaker: a
-    fast talker who barely pauses wants a lower value (shorter, quicker
-    captions), a slow one a higher value. All open pages stay in sync.
   - **Voice dropdown** — a single list with two groups:
     - **Default** — starts with the bundled **Default** voice, a calm,
       natural English preacher voice (designed with Qwen3's Create Voice) that
@@ -187,7 +191,7 @@ hardware.
 
 | Part | Models | Rough VRAM |
 |---|---|---|
-| Captions (ASR + translation) | Parakeet TDT 0.6B (fp16, ~1.2GB measured) + NLLB-200-1.3B (fp16) | ~4GB |
+| Captions (ASR + translation) | GigaAM-v3 (~240M, ~0.8GB) + NLLB-200-1.3B (fp16) | ~3.5GB |
 | TTS, zero-shot | XTTS v2 (~460M) or Qwen3-TTS-Base (0.6B/1.7B) | ~2-4GB |
 | TTS, trained (LoRA) | same base model, adapter merged in | same as zero-shot per speaker; each additional *cached* trained speaker is a full extra model load, not a small increment (see `sts/tts/qwen3.py`) |
 | **Whole pipeline together** | all of the above loaded at once | **~6GB measured with XTTS on an 8GB RTX 2070; more with Qwen3-TTS 1.7B** |
@@ -230,7 +234,7 @@ known-working reference code rather than guessed at.
 `--device mps` runs ASR, translation, and TTS on the Apple GPU, and sets
 `PYTORCH_ENABLE_MPS_FALLBACK=1` so any PyTorch op MPS doesn't yet implement
 falls back to CPU instead of crashing, at some speed cost for that op.
-`--asr-device cpu` keeps just ASR on the CPU if Parakeet turns out not to
+`--asr-device cpu` keeps just ASR on the CPU if GigaAM turns out not to
 run well on MPS.
 
 Qwen3-TTS uses float16 + SDPA attention on `mps` rather than CUDA's
@@ -254,8 +258,8 @@ sts --device mps --tts-backend qwen3             # Qwen3-TTS backend (or just ru
 
 ## Older NVIDIA GPUs (pre-Ampere) and Windows
 
-`--device cuda` works on Windows the same as Linux — PyTorch, NeMo, Coqui
-TTS, and `sounddevice` all support it natively.
+`--device cuda` works on Windows the same as Linux — PyTorch, Coqui TTS,
+and `sounddevice` all support it natively.
 
 The one thing that varies by *which* GPU, not the OS: Qwen3-TTS's CUDA path
 picks bfloat16 + flash-attention by default, but both need Ampere or newer
@@ -289,7 +293,7 @@ but will lag). Supported on Windows, macOS, and Linux.
 ```bash
 git clone https://github.com/frifox/sts.git
 cd sts
-pip install -e ".[xtts,parakeet]"
+pip install -e ".[xtts]"
 ```
 
 If you already have Python, git, and (for `--device cuda`) a working CUDA
@@ -359,9 +363,9 @@ the path a Windows + NVIDIA GPU setup - e.g. a GTX 1080 Ti - would follow):
 
 6. **Install the project:**
    ```
-   pip install -e ".[xtts,parakeet]"
+   pip install -e ".[xtts]"
    ```
-   The Qwen3-TTS backend needs a separate virtualenv (`pip install -e ".[qwen3,parakeet]"`; its
+   The Qwen3-TTS backend needs a separate virtualenv (`pip install -e ".[qwen3]"`; its
    transformers requirement conflicts with XTTS's)
    — see **Older NVIDIA GPUs (pre-Ampere) and Windows** above for what that
    backend needs on a card like a GTX 1080 Ti specifically.
@@ -406,7 +410,7 @@ mps` does and doesn't cover) or Intel Macs with no dev environment yet:
 
 4. **Install the project:**
    ```
-   pip install -e ".[xtts,parakeet]"
+   pip install -e ".[xtts]"
    ```
    `pip install torch` on macOS installs a universal build with Apple
    Silicon (MPS) support already included - no separate CUDA-style index-url
@@ -498,9 +502,9 @@ the Python side is identical everywhere.
 
 5. **Install the project:**
    ```
-   pip install -e ".[xtts,parakeet]"
+   pip install -e ".[xtts]"
    ```
-   The Qwen3-TTS backend needs its own virtualenv (`pip install -e ".[qwen3,parakeet]"`), because
+   The Qwen3-TTS backend needs its own virtualenv (`pip install -e ".[qwen3]"`), because
    its transformers requirement conflicts with XTTS's.
 
 6. **Run it** - see **First run, on any OS** below. Linux generally has no
@@ -519,7 +523,7 @@ sts --list-devices                 # confirm your mic/speakers show up
 sts
 ```
 
-Model weights (Parakeet, NLLB, XTTS, Silero VAD) download automatically on
+Model weights (GigaAM, NLLB, XTTS, Silero VAD) download automatically on
 first run — that first run needs internet access even though normal
 operation doesn't.
 
@@ -539,8 +543,10 @@ sts --accent-voice "Andrew Chipper" --accent-strength 1.0
 sts --pause-s 1.0 --sentence-pause-s 0.35
                                     # silence between spoken translations / between the
                                     # sentences within one (each sentence is spoken separately)
-sts --min-silence-ms 400 --max-segment-s 10
-                                    # cut captions sooner (shorter pause / shorter maximum segment)
+sts --final-after-sentences 1 --final-after-seconds 15
+                                    # finalize captions sooner - less delay before
+                                    # translation/voice, more chance a recognition
+                                    # error is locked in
 sts --clone reference.wav          # stretch goal: clone the speaker's voice
                                     # from a 10-20s reference clip instead of
                                     # using the default TTS voice (one-off,
@@ -557,7 +563,7 @@ sts --web-port 8765                # live captions are served at :8765 by defaul
                                     # runs without the page, printing text only
 sts --voice-library-dir /data/sts-voices
                                     # a custom voice library location
-sts --config-db /data/sts.db       # where the operator's ASR engine, input/output
+sts --config-db /data/sts.db       # where the operator's input/output
                                     # device, and active voice are remembered across
                                     # restarts (default: sts.db in the working
                                     # directory; pass '' to disable persistence)
@@ -597,36 +603,24 @@ thresholds are the `catchup_*` and `max_backlog_s` settings in `AudioConfig`
 
 ## Caption diagnostic (sts-caption)
 
-`sts-caption` streams an input device straight into a speech recognizer and
-shows its raw output live: no voice-activity detection (VAD), no
-translation, one sentence per line, redrawn in place as the model revises
-it. Press `x` to clear and start over. It uses Sber's
-[GigaAM-v3](https://huggingface.co/ai-sage/GigaAM-v3) `e2e_rnnt` by default,
-a Russian-only model with punctuation. GigaAM's model code needs
-torch 2.8 and transformers 4.57, newer than XTTS allows, so it gets its own
-virtualenv:
+`sts-caption` runs the live pipeline's captions on their own, in a terminal:
+no web page, translation or voice. Final sentences are printed once, above
+a blank line; below it is what may still change, one sentence per line,
+redrawn in place. Press `x` to clear and start over. It takes the same
+`--final-after-sentences`, `--final-after-seconds` and `--interval-ms`
+settings as `sts` (named `--caption-interval-ms` there), and runs from the
+same virtualenv:
 
 ```bash
-uv venv --python 3.11 .venv-gigaam
-uv pip install --python .venv-gigaam/bin/python -e '.[gigaam]' \
-  --extra-index-url https://download.pytorch.org/whl/cu126 --index-strategy unsafe-best-match
-.venv-gigaam/bin/sts-caption --list-devices
-.venv-gigaam/bin/sts-caption --input-device 7
-.venv-xtts/bin/sts-caption --input-device 7 --asr-backend parakeet   # Parakeet instead, from a NeMo venv
+.venv-xtts/bin/sts-caption --list-devices
+.venv-xtts/bin/sts-caption --input-device 7
 ```
 
-A sentence is locked once two more sentences have followed it, or 30 s after
-it ended (`--final-after-sentences N`, `--final-after-seconds S`; 0 turns
-either rule off): it's never re-transcribed or reworded again. If the model
-starts a sentence with a lowercase letter, it's joined back onto the previous
-one (the speaker only paused), even a locked one - so a locked sentence moves
-above the blank line, final and unchanging, once the sentence after it is
-locked too. Below the line is everything that may still change. Piped to a
-file, only final sentences are written.
+Piped to a file, only final sentences are written.
 
 ## Benchmarking hardware
 
-`benchmark.py` times each pipeline stage - ASR (Parakeet, and GigaAM-v3 when run from `.venv-gigaam`),
+`benchmark.py` times each pipeline stage - ASR (GigaAM-v3),
 translation (NLLB), and TTS (both backends), whichever backends are installed - using the exact
 same model configs and device-selection logic `sts` itself runs, so the
 numbers reflect real pipeline performance, not a synthetic benchmark of the
@@ -639,7 +633,6 @@ options in the church-service deployment this was built for.
 python benchmark.py                       # auto-detect device, benchmark everything installed
 python benchmark.py --device cpu          # force a device
 python benchmark.py --asr-device cpu      # override just ASR (e.g. to match a VRAM-constrained deployment)
-python benchmark.py --asr-backend parakeet  # only benchmark one ASR backend instead of both
 python benchmark.py --repeats 5           # timed repetitions per stage (default 3, plus 1 untimed warmup call)
 python benchmark.py --tts-backend qwen3   # only benchmark one TTS backend instead of both
 ```

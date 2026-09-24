@@ -69,6 +69,9 @@
     animation: fade-in 0.25s ease-out;
   }
 
+  /* Original captions: final (locked) sentences are "historic" - faded, like
+     older lines; the text that isn't final yet (.recent) stays bright, as
+     one running line at the end. */
   .line.old { opacity: 0.4; transition: opacity 0.6s ease; }
 
   #original-lines .line { color: #9cdcfe; }
@@ -144,16 +147,6 @@
   .rtf-item b { color: #4cbb6c; font-weight: 600; }
   .rtf-item.slow b { color: #e0864c; }
   .rtf-item.unknown b { color: #888; }
-
-  #pause-control {
-    display: flex;
-    align-items: center;
-    gap: 0.5em;
-    cursor: default;
-  }
-
-  #pause-slider { width: 7.5em; accent-color: #7a8aa0; cursor: pointer; }
-  #pause-value { min-width: 4.2em; font-variant-numeric: tabular-nums; }
 
   #volume-control {
     display: flex;
@@ -463,15 +456,6 @@
             <div>Device: <b id="asr-info-device">–</b></div>
             <div>Input: <b id="asr-info-source">–</b></div>
           </div>
-          <label for="asr-backend-select" title="Switching reloads the recognition model - captions pause for a few seconds to a minute while it loads">Engine</label>
-          <select id="asr-backend-select">
-            <option value="parakeet">Parakeet (NVIDIA)</option>
-          </select>
-          <label id="pause-control" title="How long the speaker must pause before the current caption ends and a new one starts. Lower = shorter, quicker captions; higher = longer ones. Adjust to the speaker.">
-            Pause
-            <input id="pause-slider" type="range" min="200" max="1500" step="50" value="500" />
-            <span id="pause-value">500 ms</span>
-          </label>
         </div>
       </div>
       <div class="engine" id="engine-translate">
@@ -631,18 +615,16 @@
   const rtfOff = { asr: false, translate: false, voice: false };
   const RTF_ELEMENT_IDS = { asr: 'rtf-asr', translate: 'rtf-translate', voice: 'rtf-voice' };
 
-  // A single backend commit can be pushed as several separate "original"/
-  // "translated" messages, one per sentence (see Pipeline._commit_new_asr_text
-  // and _translate_segment) - they aren't a mix of fresh + historical, so
-  // treating only the very last of them as "current" would wrongly fade out
-  // the sentences just before it. Every message carries the id of the commit
-  // it belongs to (`batch`); a sentence joins the still-highlighted batch when
+  // Translated captions: the newest one stays bright and a new one dims
+  // the rest. (Original captions don't use this: a final original is faded
+  // from the start - see `historic` in addLine - and only the live caption
+  // is bright.) Every message carries a batch id (`batch`, currently the
+  // sentence's own number); a line joins the still-highlighted batch when
   // it has the same id as the previous one in its column, and only a new id
   // starts a fresh batch and dims the previous one. The id, not timing, is
-  // what decides it: a translation can lag its commit by several seconds
+  // what decides it: a translation can lag its original by several seconds
   // (translation and TTS share one GPU lock on Apple Silicon, so a slow TTS
-  // holds it up), and a timing window then took each late sentence for a new
-  // commit and faded its siblings while the originals stayed bright.
+  // holds it up).
   //
   // Messages without an id (an older server) fall back to a time window:
   // anything within BATCH_GAP_MS of the previous one joins its batch.
@@ -663,7 +645,7 @@
     lastBatchId[key] = forceNewBatch ? undefined : batch;
   }
 
-  function addLine(containerId, text, opts, seq) {
+  function flowOf(containerId) {
     const container = document.getElementById(containerId);
     let flow = container.querySelector('.flow');
     if (!flow) {
@@ -672,12 +654,21 @@
       flow.style.margin = '0';
       container.appendChild(flow);
     }
+    return flow;
+  }
+
+  // `opts.historic`: shown faded from the start (a final original caption)
+  // instead of by batch.
+  function addLine(containerId, text, opts, seq) {
+    const container = document.getElementById(containerId);
+    const flow = flowOf(containerId);
     const snippet = document.createElement('span');
     snippet.className = 'line';
     snippet.textContent = text + ' ';  // the space keeps consecutive snippets apart on one line
     snippet.seq = seq;  // kept so a switch to portrait can pair originals with translations exactly
-    markOldIfNewBatch(containerId, flow.children, opts);
-    flow.appendChild(snippet);
+    if (opts?.historic) snippet.classList.add('old');
+    else markOldIfNewBatch(containerId, flow.children, opts);
+    flow.insertBefore(snippet, flow.querySelector('.recent'));  // before the live caption, if any
 
     // Drop the oldest snippets once even the retained (not just visible)
     // history no longer fits, so the DOM (and the visible page) never grows
@@ -695,7 +686,7 @@
   // one flowing paragraph per panel (see addLine above). Each "original"
   // message starts a new row (both cells created together, the translated
   // one empty at first); each "translated" message fills the row whose
-  // original carries the same `seq` (see Pipeline._commit_new_asr_text). It
+  // original carries the same `seq` (see Pipeline._publish_captions). It
   // is matched by that number, not by arrival order, because the two streams
   // don't stay in step: originals keep arriving while Translate is off (or
   // lagging) and are never translated, so pairing the next translation with
@@ -729,9 +720,10 @@
   }
 
   function addPortraitOriginal(text, opts, seq) {
-    markOldIfNewBatch('portrait-original', portraitGrid.querySelectorAll('.original'), opts);
     const original = document.createElement('p');
     original.className = 'portrait-cell line original';
+    if (opts?.historic) original.classList.add('old');
+    else markOldIfNewBatch('portrait-original', portraitGrid.querySelectorAll('.original:not(.recent)'), opts);
     original.style.margin = '0';
     original.textContent = text;
     const translated = document.createElement('p');
@@ -740,8 +732,9 @@
     const key = seq ?? `local-${localRowKey++}`;
     original.rowKey = key;
     translated.rowKey = key;
-    portraitGrid.appendChild(original);
-    portraitGrid.appendChild(translated);
+    const liveRow = recentRow ? recentRow[0] : null;  // final rows go above the live caption's row
+    portraitGrid.insertBefore(original, liveRow);
+    portraitGrid.insertBefore(translated, liveRow);
     pendingTranslationCells.set(key, translated);
     prunePortraitRows();
   }
@@ -767,6 +760,60 @@
     prunePortraitRows();
   }
 
+  // -- The live caption: the original text that isn't final yet (see
+  // Pipeline._publish_captions), replaced as a whole on every update. It's
+  // kept after the final sentences - one bright span at the end of the
+  // landscape paragraph, or the last row in portrait - and updated in
+  // place rather than re-created, so it doesn't re-run the fade-in on
+  // every update. --
+  let recentOriginal = '';
+  let recentRow = null;  // portrait: [original cell, translated cell] of the live row
+
+  function setRecentOriginal(text) {
+    recentOriginal = text;
+    renderRecentOriginal();
+  }
+
+  function renderRecentOriginal() {
+    const portrait = renderMode === 'portrait';
+    // Drop one left over in the other render mode's layout.
+    for (const el of document.querySelectorAll(portrait ? '#original-lines .recent' : '#portrait-grid .recent')) {
+      el.remove();
+    }
+    if (!portrait) recentRow = null;
+    if (portrait) {
+      if (!recentOriginal) {
+        if (recentRow) recentRow.forEach((el) => el.remove());
+        recentRow = null;
+        return;
+      }
+      if (!recentRow) {
+        recentRow = ['original', 'translated'].map((side) => {
+          const cell = document.createElement('p');
+          cell.className = `portrait-cell line ${side} recent`;
+          cell.style.margin = '0';
+          portraitGrid.appendChild(cell);
+          return cell;
+        });
+      }
+      recentRow[0].textContent = recentOriginal;
+      prunePortraitRows();
+      return;
+    }
+    const flow = flowOf('original-lines');
+    let span = flow.querySelector('.recent');
+    if (!recentOriginal) {
+      span?.remove();
+      return;
+    }
+    if (!span) {
+      span = document.createElement('span');
+      span.className = 'line recent';
+      flow.appendChild(span);
+    }
+    span.textContent = recentOriginal + ' ';
+  }
+
   // -- Switching Render mode: carries the existing transcript over into the
   // new layout instead of clearing it. -----------------------------------
   function textOf(el) {
@@ -780,12 +827,16 @@
   function transformLandscapeToPortrait() {
     const readFlow = (id) => {
       const flow = document.getElementById(id).querySelector('.flow');
-      return flow ? Array.from(flow.children).map((el) => ({ text: textOf(el), seq: el.seq })).filter((x) => x.text) : [];
+      return flow
+        ? Array.from(flow.children).filter((el) => !el.classList.contains('recent'))
+            .map((el) => ({ text: textOf(el), seq: el.seq })).filter((x) => x.text)
+        : [];
     };
     const originals = readFlow('original-lines');
     const translateds = readFlow('translated-lines');
 
     portraitGrid.innerHTML = '';
+    recentRow = null;
     pendingTranslationCells.clear();
     // Rebuilding replays distinct, separately-timed historical lines through
     // the same add-functions as live updates - unlike a live burst, each one
@@ -799,7 +850,7 @@
       // it shifts.
       const translationOf = new Map(translateds.map((t) => [t.seq, t.text]));
       for (const o of originals) {
-        addPortraitOriginal(o.text, forced, o.seq);
+        addPortraitOriginal(o.text, { historic: true }, o.seq);
         if (translationOf.has(o.seq)) addPortraitTranslated(translationOf.get(o.seq), forced, o.seq);
       }
       return;
@@ -814,7 +865,7 @@
     const recentOriginals = originals.slice(originals.length - n);
     const recentTranslateds = translateds.slice(translateds.length - n);
     for (let i = 0; i < n; i++) {
-      addPortraitOriginal(recentOriginals[i].text, forced);
+      addPortraitOriginal(recentOriginals[i].text, { historic: true });
       addPortraitTranslated(recentTranslateds[i].text, forced);  // no seq: pairs with the row just added
     }
   }
@@ -824,12 +875,12 @@
       Array.from(portraitGrid.querySelectorAll(selector))
         .map((el) => ({ text: textOf(el), seq: seqOf(el.rowKey) }))
         .filter((x) => x.text);
-    const originals = read('.original');
-    const translateds = read('.translated');
+    const originals = read('.original:not(.recent)');
+    const translateds = read('.translated:not(.recent)');
 
     document.getElementById('original-lines').querySelector('.flow')?.remove();
     document.getElementById('translated-lines').querySelector('.flow')?.remove();
-    for (const o of originals) addLine('original-lines', o.text, { forceNewBatch: true }, o.seq);
+    for (const o of originals) addLine('original-lines', o.text, { historic: true }, o.seq);
     for (const t of translateds) addLine('translated-lines', t.text, { forceNewBatch: true }, t.seq);
   }
 
@@ -912,6 +963,8 @@
     document.getElementById('original-lines').innerHTML = '';
     document.getElementById('translated-lines').innerHTML = '';
     portraitGrid.innerHTML = '';
+    recentRow = null;
+    recentOriginal = '';
     pendingTranslationCells.clear();
     dismissVerse();
     lastVerseMsg = null;
@@ -927,9 +980,6 @@
   const cfgInput = document.getElementById('cfg-input');
   const cfgOutput = document.getElementById('cfg-output');
   let lastDevices = null;
-  const pauseSlider = document.getElementById('pause-slider');
-  const pauseValue = document.getElementById('pause-value');
-  let draggingPause = false;
   const volumeSlider = document.getElementById('volume-slider');
   const volumeValue = document.getElementById('volume-value');
   let draggingVolume = false;
@@ -1012,6 +1062,7 @@
     // Carry the existing transcript over into the new layout rather than
     // wiping it - see transformLandscapeToPortrait/transformPortraitToLandscape.
     if (newMode === 'portrait') transformLandscapeToPortrait(); else transformPortraitToLandscape();
+    renderRecentOriginal();
     try { localStorage.setItem('sts-render-mode', renderMode); } catch { /* ignore */ }
   });
 
@@ -1100,10 +1151,6 @@
     createBtn.hidden = !status.can_design;
     if (!status.can_save) closeSaveDialog();
 
-    if (status.min_silence_ms != null && !draggingPause) {
-      pauseSlider.value = status.min_silence_ms;
-      pauseValue.textContent = `${status.min_silence_ms} ms`;
-    }
     if (status.output_volume != null && !draggingVolume) {
       volumeSlider.value = status.output_volume;
       volumeValue.textContent = `${status.output_volume}%`;
@@ -1173,8 +1220,6 @@
     }
   });
 
-  const asrBackendSelect = document.getElementById('asr-backend-select');
-
   function applyEngines(msg) {
     document.getElementById('asr-info-model').textContent = msg.asr?.model || '–';
     document.getElementById('asr-info-device').textContent = msg.asr?.device || '–';
@@ -1182,13 +1227,6 @@
     document.getElementById('translate-info-device').textContent = msg.translation?.device || '–';
     document.getElementById('tts-info-model').textContent = msg.tts?.model || '–';
     document.getElementById('tts-info-device').textContent = msg.tts?.device || '–';
-    // Re-sent after every ASR switch (not just once at startup); this is
-    // what clears the "switching" disabled state once the new engine is up
-    // (or reverts the dropdown if the switch failed and fell back).
-    if (document.activeElement !== asrBackendSelect) {
-      asrBackendSelect.value = msg.asr?.backend || 'parakeet';
-    }
-    asrBackendSelect.disabled = false;
   }
 
   function applyRtf(msg) {
@@ -1229,15 +1267,6 @@
 
   const applyInputLevel = (msg) => applyLevel(volumeBars, msg.level);
   const applyOutputLevel = (msg) => applyLevel(outputBars, msg.level);
-
-  // Switching reloads the whole ASR engine (several seconds to about a
-  // minute for a cold Parakeet load), during which the #stage indicator
-  // shows "Switching speech recognition to ..." via the existing stage
-  // broadcast - no separate progress UI needed here.
-  asrBackendSelect.addEventListener('change', () => {
-    asrBackendSelect.disabled = true;
-    send('set_asr_backend', { backend: asrBackendSelect.value });
-  });
 
   trainBtn.addEventListener('click', () => {
     if (lastStatus.training) {
@@ -1309,18 +1338,8 @@
     closeSaveDialog();
   });
 
-  // Live pause threshold: the label follows the thumb; the value goes to the
+  // Live output volume: the label follows the thumb; the value goes to the
   // backend as it moves, throttled so a fast drag doesn't flood the socket.
-  let pauseTimer = null;
-  pauseSlider.addEventListener('pointerdown', () => { draggingPause = true; });
-  window.addEventListener('pointerup', () => { draggingPause = false; });
-  pauseSlider.addEventListener('input', () => {
-    pauseValue.textContent = `${pauseSlider.value} ms`;
-    clearTimeout(pauseTimer);
-    pauseTimer = setTimeout(() => send('set_min_silence', { ms: Number(pauseSlider.value) }), 80);
-  });
-
-  // Live output volume: same pattern as the pause slider above.
   let volumeTimer = null;
   volumeSlider.addEventListener('pointerdown', () => { draggingVolume = true; });
   window.addEventListener('pointerup', () => { draggingVolume = false; });
@@ -1591,7 +1610,9 @@
       if (event.data instanceof ArrayBuffer) { playAudioChunk(event.data); return; }
       const msg = JSON.parse(event.data);
       if (msg.type === 'original') {
-        if (renderMode === 'portrait') addPortraitOriginal(msg.text, { batch: msg.batch }, msg.seq); else addLine('original-lines', msg.text, { batch: msg.batch }, msg.seq);
+        if (renderMode === 'portrait') addPortraitOriginal(msg.text, { historic: true }, msg.seq); else addLine('original-lines', msg.text, { historic: true }, msg.seq);
+      } else if (msg.type === 'original_recent') {
+        setRecentOriginal(msg.text);
       } else if (msg.type === 'translated') {
         if (renderMode === 'portrait') addPortraitTranslated(msg.text, { batch: msg.batch }, msg.seq); else addLine('translated-lines', msg.text, { batch: msg.batch }, msg.seq);
       }
