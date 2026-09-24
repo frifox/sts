@@ -114,6 +114,7 @@ def test_asr_loop_tracks_audio_duration_and_broadcasts_rtf():
     p._committed_text = ""
     p._pending_confirmation = None
     p._original_seq = 0
+    p._last_sentence_original = None
     p._transcripts = queue.Queue()
 
     class FakeAsr:
@@ -134,7 +135,7 @@ def test_asr_loop_tracks_audio_duration_and_broadcasts_rtf():
     stage, value = p.broadcaster.rtf[0]
     assert stage == "asr"
     assert value == pytest.approx(0.025, abs=0.05)  # ~0.05s processing / 2s audio
-    assert p._transcripts.get_nowait() == ("Привет.", 0)
+    assert p._transcripts.get_nowait() == ("Привет.", 0, None)
 
 
 def test_translate_segment_uses_the_last_asr_audio_duration():
@@ -143,7 +144,7 @@ def test_translate_segment_uses_the_last_asr_audio_duration():
     p._last_asr_audio_s = 4.0
 
     class FakeTranslator:
-        def translate_sentences(self, text):
+        def translate_sentences(self, text, context=None):
             yield "Translated."
 
     p.translator = FakeTranslator()
@@ -162,7 +163,7 @@ def test_translate_segment_skips_rtf_before_any_segment_is_transcribed():
     p._last_asr_audio_s = 0.0  # nothing transcribed yet this session
 
     class FakeTranslator:
-        def translate_sentences(self, text):
+        def translate_sentences(self, text, context=None):
             yield "Translated."
 
     p.translator = FakeTranslator()

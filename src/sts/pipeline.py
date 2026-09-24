@@ -142,9 +142,13 @@ class Pipeline:
         self._last_output_level_broadcast = 0.0
 
         self._segments: queue.Queue = queue.Queue()
-        # (text, first_seq) per committed chunk - see _commit_new_asr_text.
+        # (text, first_seq, context) per committed chunk - see _commit_new_asr_text.
         self._transcripts: queue.Queue = queue.Queue()
         self._original_seq = 0  # next sequence number for a broadcast original sentence
+        # The most recently committed sentence's original-language text (any
+        # segment, not just the current one) - see _commit_new_asr_text's use
+        # of it as translation context for a sentence that continues it.
+        self._last_sentence_original: str | None = None
         # Text already committed (pushed to translation) for the segment
         # currently being spoken, via periodic partial re-transcription - see
         # _segment_loop/_asr_loop. Reset to "" whenever a segment closes.
@@ -308,6 +312,7 @@ class Pipeline:
         self._pending_voice = None
         self._committed_text = ""
         self._pending_confirmation = None
+        self._last_sentence_original = None
         self._frames_since_partial = 0
         self._drain(self._segments)
         self._drain(self._transcripts)
@@ -927,13 +932,24 @@ class Pipeline:
         # The commit's first number doubles as its batch id (see
         # CaptionBroadcaster.broadcast_original).
         sentences = split_sentences(to_commit)
+        # A lowercase first letter is the ASR model's own signal that this
+        # sentence isn't a fresh one - it's the tail of a thought VAD's pause
+        # threshold cut off mid-utterance, re-transcribed from scratch with no
+        # memory of what preceded it (see the class docstring). Translating it
+        # alone, as if it were self-contained, reliably reads as a disconnected
+        # non-sequitur - so it's translated together with the last sentence
+        # actually committed (any segment, not just this one) as surrounding
+        # context, in _translate_segment.
+        context = self._last_sentence_original if sentences and sentences[0][:1].islower() else None
         first_seq = self._original_seq
         self._original_seq += len(sentences)
         if self.broadcaster:
             for i, sentence in enumerate(sentences):
                 self.broadcaster.broadcast_original(sentence, first_seq + i, first_seq)
             self._broadcast_bible_references(to_commit)
-        self._transcripts.put((to_commit, first_seq))
+        self._transcripts.put((to_commit, first_seq, context))
+        if sentences:
+            self._last_sentence_original = sentences[-1]
 
     def _broadcast_bible_references(self, text: str) -> None:
         for ref in find_references(text):
@@ -951,13 +967,13 @@ class Pipeline:
 
     def _translate_loop(self) -> None:
         while not self._stop.is_set():
-            text, first_seq = self._transcripts.get()
+            text, first_seq, context = self._transcripts.get()
             if not self.control.translation_enabled.is_set():
                 vlog("translate", "translation is off, skipping")
                 continue
-            self._translate_segment(text, first_seq)
+            self._translate_segment(text, first_seq, context)
 
-    def _translate_segment(self, text: str, first_seq: int | None = None) -> None:
+    def _translate_segment(self, text: str, first_seq: int | None = None, context: str | None = None) -> None:
         """Translates one ASR segment's text and pushes/broadcasts/queues each
         sentence for TTS the moment it's ready. Yielded, not joined-then-
         returned: a multi-sentence segment (VAD closes on silence, so it can
@@ -967,9 +983,14 @@ class Pipeline:
         `first_seq` is the sequence number _commit_new_asr_text gave the
         first sentence of `text`; each translation is broadcast with the
         number of the original sentence it belongs to, and with `first_seq`
-        itself as its batch id (the same one that commit's originals carry)."""
+        itself as its batch id (the same one that commit's originals carry).
+
+        `context`, if given, is the previous sentence committed - passed
+        through to Translator.translate_sentences so it can be given as
+        leading context for `text`'s own first sentence (see
+        _commit_new_asr_text for when/why)."""
         t0 = time.monotonic()
-        for i, translated in enumerate(self.translator.translate_sentences(text)):
+        for i, translated in enumerate(self.translator.translate_sentences(text, context=context)):
             processing_s = time.monotonic() - t0
             vlog("translate", f"translated a sentence in {processing_s:.2f}s")
             if translated:

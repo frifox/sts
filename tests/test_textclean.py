@@ -123,6 +123,44 @@ def test_translate_sentences_yields_incrementally_and_translate_still_joins():
     assert list(translator.translate_sentences("  ")) == []
 
 
+def test_translate_sentences_prepends_context_to_the_first_sentence_only():
+    """Used when the caller's own text is the tail end of a sentence VAD's
+    pause threshold split across two segments (see Pipeline._commit_new_asr_text) -
+    context is given as lead-in so the model isn't translating a disconnected
+    fragment, but it's only relevant to the first sentence of this text; later
+    ones are unrelated (freshly started) sentences and must go through unmodified."""
+    from sts.translate.translator import Translator
+
+    translator = Translator.__new__(Translator)
+    sources = []
+
+    def fake_translate_sentence(text):
+        sources.append(text)
+        return text.upper()
+
+    translator._translate_sentence = fake_translate_sentence
+
+    result = list(translator.translate_sentences("продолжение. Новое предложение.", context="Прошлое предложение."))
+
+    # context's own trailing period is dropped - joined as one continuing
+    # clause, not two complete sentences (see the docstring for why: joining
+    # as two led the model to translate them as separate, duplicating ideas).
+    assert sources == ["Прошлое предложение продолжение.", "Новое предложение."]
+    assert result == ["ПРОШЛОЕ ПРЕДЛОЖЕНИЕ ПРОДОЛЖЕНИЕ.", "НОВОЕ ПРЕДЛОЖЕНИЕ."]
+
+
+def test_translate_sentences_ignores_context_when_none_given():
+    from sts.translate.translator import Translator
+
+    translator = Translator.__new__(Translator)
+    sources = []
+    translator._translate_sentence = lambda text: sources.append(text) or text.upper()
+
+    list(translator.translate_sentences("Предложение."))
+
+    assert sources == ["Предложение."]
+
+
 def test_split_complete():
     from sts.textclean import split_complete
 

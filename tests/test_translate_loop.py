@@ -9,7 +9,7 @@ from sts.pipeline import Pipeline
 
 def _stub_pipeline(translate_sentences):
     class FakeTranslator:
-        def translate_sentences(self, text):
+        def translate_sentences(self, text, context=None):
             return translate_sentences(text)
 
     class Broadcaster:
@@ -115,6 +115,7 @@ def test_captions_first_then_translation_pairs_by_number_not_by_arrival_order():
     p._committed_text = ""
     p._pending_confirmation = None
     p._original_seq = 0
+    p._last_sentence_original = None
     p.bible_lookup = None
     p.broadcaster.broadcast_original = lambda text, seq=None, batch=None: originals.append((seq, text))
     originals: list = []
@@ -127,9 +128,9 @@ def test_captions_first_then_translation_pairs_by_number_not_by_arrival_order():
     # Drain the way _translate_loop does: the two skipped ones are dropped,
     # the third is translated.
     while not p._transcripts.empty():
-        text, first_seq = p._transcripts.get()
+        text, first_seq, context = p._transcripts.get()
         if p.control.translation_enabled.is_set() and text.startswith("Третье"):
-            Pipeline._translate_segment(p, text, first_seq)
+            Pipeline._translate_segment(p, text, first_seq, context)
 
     assert [seq for seq, _ in originals] == [0, 1, 2]
     assert p.broadcaster.seqs == [2]  # the translation belongs to original #2, not #0

@@ -53,6 +53,7 @@ def _stub_pipeline():
     p._committed_text = ""
     p._pending_confirmation = None
     p._original_seq = 0
+    p._last_sentence_original = None
     p._transcripts = queue.Queue()
     return p
 
@@ -100,7 +101,7 @@ def test_a_sentence_is_released_once_confirmed_by_a_second_re_run():
     assert p.broadcaster.original == ["Первое предложение."]
     assert p._committed_text == "Первое предложение."
     assert p._pending_confirmation is None
-    assert list(p._transcripts.queue) == [("Первое предложение.", 0)]  # (text, first sentence's seq)
+    assert list(p._transcripts.queue) == [("Первое предложение.", 0, None)]  # (text, first sentence's seq, context)
 
 
 def test_a_revised_first_sighting_replaces_the_pending_candidate_not_release_it():
@@ -303,7 +304,51 @@ def test_each_broadcast_sentence_gets_the_next_sequence_number():
     p._commit_new_asr_text("Третье предложение.", final=True)
 
     assert p.broadcaster.seqs == [0, 1, 2]
-    assert list(p._transcripts.queue) == [("Первое предложение. Второе предложение.", 0), ("Третье предложение.", 2)]
+    assert list(p._transcripts.queue) == [
+        ("Первое предложение. Второе предложение.", 0, None),
+        ("Третье предложение.", 2, None),
+    ]
+
+
+def test_a_lowercase_starting_commit_gets_the_previous_sentence_as_context():
+    """The real bug this guards: a VAD pause can land mid-sentence, so the
+    *next* segment's transcript starts mid-clause - ASR itself signals this
+    by leaving it lowercase (it only capitalizes what it hears as a genuine
+    sentence start). Translating that alone reads as a disconnected
+    non-sequitur (see Translator.translate_sentences), so it's queued with
+    the last sentence actually committed as context instead."""
+    p = _stub_pipeline()
+
+    p._commit_new_asr_text("Первое предложение.", final=True)
+    p._commit_new_asr_text("продолжение мысли. Новое предложение.", final=True)
+
+    queued = list(p._transcripts.queue)
+    assert queued[0] == ("Первое предложение.", 0, None)  # nothing to continue yet
+    assert queued[1] == ("продолжение мысли. Новое предложение.", 1, "Первое предложение.")
+
+
+def test_context_is_none_when_the_commit_starts_with_a_capital_letter():
+    """The ordinary case - a real new sentence - must never be given
+    unrelated leading context just because *something* was said before."""
+    p = _stub_pipeline()
+
+    p._commit_new_asr_text("Первое предложение.", final=True)
+    p._commit_new_asr_text("Второе предложение.", final=True)
+
+    assert list(p._transcripts.queue)[1] == ("Второе предложение.", 1, None)
+
+
+def test_context_carries_across_more_than_one_segment():
+    """Tracks the last sentence *ever* committed, not just "from the segment
+    right before" - a lowercase continuation must find it regardless of how
+    many properly-capitalized segments came in between."""
+    p = _stub_pipeline()
+
+    p._commit_new_asr_text("Первое предложение.", final=True)
+    p._commit_new_asr_text("Второе предложение.", final=True)
+    p._commit_new_asr_text("третье, продолжая второе.", final=True)
+
+    assert list(p._transcripts.queue)[2] == ("третье, продолжая второе.", 2, "Второе предложение.")
 
 
 def test_sequence_numbers_advance_even_with_no_broadcaster():
@@ -313,7 +358,7 @@ def test_sequence_numbers_advance_even_with_no_broadcaster():
     p._commit_new_asr_text("Первое предложение. Второе предложение.", final=True)
     p._commit_new_asr_text("Третье предложение.", final=True)
 
-    assert list(p._transcripts.queue)[1] == ("Третье предложение.", 2)
+    assert list(p._transcripts.queue)[1] == ("Третье предложение.", 2, None)
 
 
 # -- _process_captured_frame (segment loop's per-frame decision) -----------

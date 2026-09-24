@@ -80,7 +80,7 @@ class Translator:
     def translate(self, text: str) -> str:
         return " ".join(self.translate_sentences(text)).strip()
 
-    def translate_sentences(self, text: str):
+    def translate_sentences(self, text: str, context: str | None = None):
         """Translates `text` one sentence at a time, yielding each translation
         the moment it's ready instead of waiting for the whole passage - lets a
         caller (e.g. the live pipeline) start speaking/showing sentence 1 while
@@ -89,11 +89,29 @@ class Translator:
         NLLB is trained on single sentences and silently drops content when
         handed several at once, so a speech segment is translated per sentence
         either way; `translate()` above just joins them back into one string.
+
+        `context`, if given, is prepended to the *first* sentence only before
+        translating it - not shown itself, just given as grammatical lead-in.
+        Used when that first sentence is actually the tail end of a sentence
+        VAD's pause threshold split across two segments (the caller detects
+        this from ASR's own lowercase-first-letter signal): translating it in
+        isolation reliably reads as a disconnected, unrelated sentence, since
+        NLLB has no way to know what it's continuing.
+
+        `context`'s own trailing period is stripped before joining: measured
+        against the actual mistranslation this was written to fix, joining as
+        two complete sentences ("Contains several items. Each of these
+        sections.") led the model to translate them as two independent ideas
+        (duplicating context's own content back into the output); joining as
+        one continuing clause ("...several items, each of these sections.")
+        reliably produced one coherent sentence instead - which is what this
+        actually is, grammatically, before VAD's pause cut it in two.
         """
         if not text.strip():
             return
-        for sentence in split_sentences(text):
-            yield self._translate_sentence(sentence)
+        for i, sentence in enumerate(split_sentences(text)):
+            source = f"{context.rstrip('.!?… ')} {sentence}" if i == 0 and context else sentence
+            yield self._translate_sentence(source)
 
     def _translate_sentence(self, text: str) -> str:
         known = short_phrase(text)
