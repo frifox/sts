@@ -108,6 +108,10 @@
   #portrait-lines .original { color: #9cdcfe; }
   #portrait-lines .translated { color: #e8c07d; }
 
+  /* The caption text that isn't final yet: twice the size of the rest. After
+     .portrait-cell so it wins there too (same specificity - order decides). */
+  .recent { font-size: 2em; }
+
   /* Portrait mode has no separate original/translated panels to hide (both
      columns live in one shared panel) - Caption/Translate turning off is
      applied to just that column instead: its own cells, verse banner
