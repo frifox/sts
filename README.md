@@ -617,11 +617,12 @@ uv pip install --python .venv-gigaam/bin/python -e '.[gigaam]' \
 
 A sentence is locked once two more sentences have followed it, or 30 s after
 it ended (`--final-after-sentences N`, `--final-after-seconds S`; 0 turns
-either rule off). A locked sentence is printed once, above a blank line, and
-never changes again; below the line are the sentences that may still be
-revised. If the model starts a sentence with a lowercase letter, it's joined
-back onto the previous one (the speaker only paused). Piped to a file, only
-locked sentences are written.
+either rule off): it's never re-transcribed or reworded again. If the model
+starts a sentence with a lowercase letter, it's joined back onto the previous
+one (the speaker only paused), even a locked one - so a locked sentence moves
+above the blank line, final and unchanging, once the sentence after it is
+locked too. Below the line is everything that may still change. Piped to a
+file, only final sentences are written.
 
 ## Benchmarking hardware
 

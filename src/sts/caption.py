@@ -14,13 +14,14 @@ every --interval-ms, so the model sees more context each time and can revise
 what it heard - which is shown as it happens, one sentence per line,
 rewritten in place.
 
-A sentence is locked - printed once, above a blank line, and never changed
-again - once --final-after-sentences more sentences have followed it
-(default 2), or it ended --final-after-seconds ago (default 30). Its audio
-is then dropped, so later re-transcriptions only cover what's still open.
-A "sentence" the model starts with a lowercase letter isn't one - it's the
-rest of the previous sentence, cut by a pause - and is joined back onto it
-before either rule applies. Piped to a file, only locked sentences are
+A sentence is locked once --final-after-sentences more sentences have
+followed it (default 2), or it ended --final-after-seconds ago (default 30):
+its audio is dropped, so it's never re-transcribed or reworded again. A
+"sentence" the model starts with a lowercase letter isn't one - it's the
+rest of the previous sentence, cut by a pause - and is joined back onto it,
+even onto a locked one. So a locked sentence is shown as final - printed
+once, above a blank line, and never changed again - when the sentence after
+it is locked too, and no continuation can still join it. Piped to a file, only locked sentences are
 printed (plus whatever is still open on exit). GigaAM takes at most ~25 s
 at a time, so a longer stretch that isn't locked yet is cut into ~20 s
 chunks at quiet moments. Meant for exploratory runs.
@@ -169,14 +170,22 @@ def count_final(sentences: list[Sentence], now_s: float, after_sentences: int, a
 
 class Transcript:
     """The audio heard so far and what's been made of it. Each step()
-    re-transcribes the audio that isn't locked yet, returns the sentences
-    that have just become final (see count_final) and the ones still open,
-    and drops the final ones' audio: they're never transcribed - or changed
-    - again.
+    re-transcribes the audio that isn't locked yet, locks the sentences that
+    have become final (see count_final), and drops their audio: they're
+    never transcribed - or reworded - again.
 
     A little of the locked audio (CONTEXT_S) is kept in front of what's
     still open, so the model hears how the next sentence begins in context;
-    words from it (those centered before the cut) are discarded."""
+    words from it (those centered before the cut) are discarded.
+
+    That context can change the model's mind about a sentence boundary:
+    heard right after "...мы об этом рассуждаем", the next sentence may come
+    back as "для чего Христос приходил" - a continuation, lowercase - where
+    the model heard "Для чего..." as a new sentence before the lock. So the
+    most recently locked sentence is held back ("pending") until the one
+    after it is locked too: a lowercase continuation still joins onto it
+    (see join_continuations), and only then is it returned as final. Until
+    then it's returned first among the still-open sentences."""
 
     CONTEXT_S = 1.5
 
@@ -190,7 +199,8 @@ class Transcript:
     def clear(self) -> None:
         self._frames: list[np.ndarray] = []
         self._offset_s = 0.0  # when the first buffered sample was heard
-        self._cut_s = 0.0  # words centered before this are already final
+        self._cut_s = 0.0  # words centered before this are already locked
+        self._pending: Sentence | None = None  # locked, not yet returned as final
 
     def add(self, frame: np.ndarray) -> None:
         self._frames.append(frame)
@@ -200,6 +210,7 @@ class Transcript:
         return bool(self._frames)
 
     def step(self) -> tuple[list[str], list[str]]:
+        """(sentences that just became final, sentences still open)."""
         audio = np.concatenate(self._frames)
         self._frames = [audio]
         words = [
@@ -209,13 +220,21 @@ class Transcript:
         ]
         sentences = join_continuations(sentences_from_words(words))
         now_s = self._offset_s + len(audio) / self.sample_rate
-        n_final = count_final(sentences, now_s, self.after_sentences, self.after_seconds)
-        if n_final:
-            self._cut_s = sentences[n_final - 1].end
+        n_locked = count_final(sentences, now_s, self.after_sentences, self.after_seconds)
+        final: list[Sentence] = []
+        for sentence in sentences[:n_locked]:
+            if self._pending is not None and not _starts_lowercase(sentence.text):
+                final.append(self._pending)
+                self._pending = sentence
+            else:
+                self._pending = join_continuations([self._pending, sentence])[0] if self._pending else sentence
+        if n_locked:
+            self._cut_s = sentences[n_locked - 1].end
             drop = int(max(0.0, self._cut_s - self.CONTEXT_S - self._offset_s) * self.sample_rate)
             self._frames = [audio[drop:]]
             self._offset_s += drop / self.sample_rate
-        return _texts(sentences[:n_final]), _texts(sentences[n_final:])
+        still_open = ([self._pending] if self._pending else []) + sentences[n_locked:]
+        return _texts(final), _texts(join_continuations(still_open))
 
 
 def _texts(sentences: list[Sentence]) -> list[str]:

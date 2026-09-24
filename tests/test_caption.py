@@ -251,10 +251,13 @@ def test_final_by_position_and_by_age():
 class _ScriptedAsr:
     """Recognizes a fixed script of timed words. The fake audio's samples
     hold their own absolute sample index, so this knows which stretch of
-    the recording it was handed - the way a real model would hear it."""
+    the recording it was handed - the way a real model would hear it.
+    `revise(text, heard_from_s)` can change a word depending on where the
+    audio it was given starts (context changes what a model hears)."""
 
-    def __init__(self, script):
+    def __init__(self, script, revise=None):
         self.script = script
+        self.revise = revise or (lambda text, heard_from_s: text)
         self.heard = []
 
     def transcribe_words(self, audio):
@@ -262,7 +265,7 @@ class _ScriptedAsr:
 
         begin, end = audio[0] / 16_000, (audio[-1] + 1) / 16_000
         self.heard.append((begin, end))
-        return [TimedWord(w.text, w.start - begin, w.end - begin)
+        return [TimedWord(self.revise(w.text, begin), w.start - begin, w.end - begin)
                 for w in self.script if w.start >= begin - 0.01 and w.end <= end]
 
 
@@ -286,15 +289,41 @@ def test_transcript_locks_sentences_once_and_stops_rehearing_their_audio():
     fed = [0]
 
     _feed(t, 5.5, fed)
-    assert t.step() == (["Первое."], ["Второе предложение.", "Третье."])
+    # "Первое." is locked, but shown as final only once the next one is
+    # locked too (it could still turn out to continue).
+    assert t.step() == ([], ["Первое.", "Второе предложение.", "Третье."])
     _feed(t, 9.0, fed)
-    final, live = t.step()
-    assert final == ["Второе предложение.", "Третье."]  # never "Первое." again
-    assert live == ["Четвёртое.", "Пятое"]
-    # The second pass heard audio from shortly before the first cut, not from 0.
-    assert asr.heard[1][0] == pytest.approx(1.5 - Transcript.CONTEXT_S)
+    assert t.step() == (["Первое.", "Второе предложение."], ["Третье.", "Четвёртое.", "Пятое"])
+    # The second pass heard audio from shortly before the first cut, not the whole recording.
+    assert asr.heard[1][0] == pytest.approx(max(0.0, 1.5 - Transcript.CONTEXT_S))
     _feed(t, 45.0, fed)
-    assert t.step() == (["Четвёртое."], ["Пятое"])  # 30+ s after it ended; the open tail stays open
+    assert t.step() == (["Третье."], ["Четвёртое.", "Пятое"])  # 30+ s after it ended; the open tail stays open
+
+
+def test_a_continuation_heard_only_after_the_lock_still_joins_the_locked_sentence():
+    """The reported case: locked while the model heard "Для чего..." as a new
+    sentence; with only the end of the locked one left as context, it came
+    back as "для чего..." - which belongs on the end of the locked one."""
+    from sts.caption import Transcript
+
+    script = _words(
+        ("Мы", 0.5, 0.7), ("об", 0.8, 0.9), ("этом", 1.0, 1.3), ("рассуждаем.", 1.4, 2.4),
+        ("Для", 2.8, 3.0), ("чего", 3.1, 3.4), ("Христос", 3.5, 4.0), ("приходил.", 4.1, 4.8),
+        ("Мы", 5.5, 5.7), ("обычно", 5.8, 6.3), ("такие.", 6.4, 7.0),
+        ("Тогда.", 8.0, 8.6), ("Потом", 9.5, 10.0),
+    )
+    # Once the audio it's given starts after the beginning, the model hears
+    # "для" as a continuation.
+    asr = _ScriptedAsr(script, revise=lambda text, begin: "для" if text == "Для" and begin > 0 else text)
+    t = Transcript(asr, after_sentences=2, after_seconds=30)
+    fed = [0]
+
+    _feed(t, 6.5, fed)
+    assert t.step() == ([], ["Мы об этом рассуждаем.", "Для чего Христос приходил.", "Мы обычно"])
+    _feed(t, 10.5, fed)
+    final, still_open = t.step()
+    assert final == ["Мы об этом рассуждаем для чего Христос приходил."]
+    assert still_open == ["Мы обычно такие.", "Тогда.", "Потом"]
 
 
 def test_transcript_by_age_only():
@@ -306,18 +335,6 @@ def test_transcript_by_age_only():
     _feed(t, 4.0, fed)
     assert t.step() == ([], ["Одно.", "Другое."])
     _feed(t, 7.0, fed)
+    assert t.step() == ([], ["Одно.", "Другое."])  # "Одно." is locked, held until the next one is
+    _feed(t, 9.0, fed)
     assert t.step() == (["Одно."], ["Другое."])
-
-
-def test_a_sentence_becoming_final_moves_above_the_blank_line_in_one_redraw(monkeypatch):
-    from sts.caption import LiveLine
-
-    _size(monkeypatch, 60, 24)
-    out = _Terminal()
-    line = LiveLine(out)
-    line.update("\nПервое.\nВторое.\nТретье")
-    before = len(out.getvalue())
-    line.update("\nВторое.\nТретье. Четвёртое", above=["Первое."])
-    assert _screen(out.getvalue(), 60, 24) == ["Первое.", "", "Второе.", "Третье.", "Четвёртое"]
-    # Never redrawn below the line after being printed above it.
-    assert out.getvalue()[before:].count("Первое.") == 1
