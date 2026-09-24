@@ -1279,6 +1279,15 @@
 
   async function startBrowserMic() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      if (location.protocol === 'http:') {
+        // getUserMedia needs a secure context, which plain HTTP isn't - this
+        // server also listens on HTTPS (default port 443) for exactly this,
+        // so jump there instead of just telling the operator to type a
+        // different URL themselves. (Assumes the standard 443; if
+        // --https-port was set to something else, this won't find it.)
+        location.href = `https://${location.hostname}${location.pathname}${location.search}`;
+        return;
+      }
       micStatusEl.textContent = 'Microphone access needs HTTPS (or localhost) - this page is served over plain HTTP.';
       micStatusEl.classList.add('error');
       return;
