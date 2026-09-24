@@ -1039,7 +1039,7 @@ class Pipeline:
             if i == 0 and context:
                 translated = _strip_repeated_prefix(translated, self._last_sentence_translated)
             if translated:
-                print(f"[en] {translated}")
+                print(f"    [en] {translated}")
                 if self.broadcaster:
                     self.broadcaster.broadcast_translated(
                         translated,
