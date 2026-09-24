@@ -465,8 +465,7 @@
           </div>
           <label for="asr-backend-select" title="Switching reloads the recognition model - captions pause for a few seconds to a minute while it loads">Engine</label>
           <select id="asr-backend-select">
-            <option value="whisper">Whisper (faster-whisper)</option>
-            <option value="parakeet">Parakeet (NVIDIA, experimental)</option>
+            <option value="parakeet">Parakeet (NVIDIA)</option>
           </select>
           <label id="pause-control" title="How long the speaker must pause before the current caption ends and a new one starts. Lower = shorter, quicker captions; higher = longer ones. Adjust to the speaker.">
             Pause
@@ -1187,7 +1186,7 @@
     // what clears the "switching" disabled state once the new engine is up
     // (or reverts the dropdown if the switch failed and fell back).
     if (document.activeElement !== asrBackendSelect) {
-      asrBackendSelect.value = msg.asr?.backend || 'whisper';
+      asrBackendSelect.value = msg.asr?.backend || 'parakeet';
     }
     asrBackendSelect.disabled = false;
   }

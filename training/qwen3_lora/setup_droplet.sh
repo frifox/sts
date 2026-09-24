@@ -25,7 +25,7 @@ pip install -U pip
 
 echo "== python packages =="
 pip install -U torch torchaudio
-pip install -U qwen-tts peft accelerate safetensors soundfile librosa faster-whisper
+pip install -U qwen-tts peft accelerate safetensors soundfile librosa "nemo_toolkit[asr]"
 pip install -U flash-attn --no-build-isolation || echo "flash-attn build failed - will fall back to eager attention (slower, still correct)"
 
 echo "== Qwen3-TTS (pinned commit) =="

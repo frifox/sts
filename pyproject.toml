@@ -9,11 +9,8 @@ dependencies = [
     "soxr>=0.3",           # streaming resampler for speech playback (also a librosa dependency)
     "scipy>=1.10",         # capture resampling, audio-quality measures
     "torch>=2.1",
-    "faster-whisper>=1.0",
     "transformers>=4.40",
     "sentencepiece>=0.2",
-    "scikit-learn>=1.3",   # clustering speakers (translate.py --multiple)
-    "onnxruntime>=1.16",   # runs the speaker-embedding model
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
 ]
@@ -33,10 +30,10 @@ qwen3 = [
     "peft>=0.11",
     "safetensors>=0.4",
 ]
-# Unlike the TTS backends, this doesn't conflict with either one - nemo's own
-# transformers requirement is unpinned, so it resolves to whatever xtts/qwen3
-# already pinned in that virtualenv. Install alongside whichever TTS extra
-# you're already using, e.g. `pip install -e '.[xtts,parakeet]'`.
+# Speech recognition for the live pipeline - needed alongside a TTS extra, e.g.
+# `pip install -e '.[xtts,parakeet]'`. Unlike the TTS backends, it doesn't
+# conflict with either one: nemo's own transformers requirement is unpinned, so
+# it resolves to whatever xtts/qwen3 already pinned in that virtualenv.
 parakeet = [
     "nemo_toolkit[asr]",
 ]
@@ -58,7 +55,6 @@ gigaam = [
 [project.scripts]
 sts = "sts.cli:main"
 sts-import-voice = "sts.tts.import_cli:main"
-sts-translate = "sts.offline:main"
 sts-benchmark = "sts.benchmark:main"
 sts-caption = "sts.caption:main"
 

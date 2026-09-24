@@ -184,7 +184,7 @@ class CaptionBroadcaster:
         asyncio.run_coroutine_threadsafe(self._send_bytes_to_all(payload), self.loop)
 
     def broadcast_stage(self, text: str, ready: bool = False) -> None:
-        """Startup progress ("Loading Whisper…" -> "Listening"). Remembered so
+        """Startup progress ("Loading speech recognition…" -> "Listening"). Remembered so
         pages that connect mid-startup see the current stage immediately."""
         self._last_stage = {"type": "stage", "text": text, "ready": ready}
         if self.loop is None:

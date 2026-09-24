@@ -1,4 +1,4 @@
-"""Benchmarks each pipeline stage - ASR (faster-whisper and NVIDIA Parakeet),
+"""Benchmarks each pipeline stage - ASR (NVIDIA Parakeet, and Sber GigaAM-v3 from .venv-gigaam),
 translation (NLLB), and TTS (both the xtts and qwen3 backends), whichever
 backends are installed - using
 the exact same sts model configs and device-selection logic (sts.devices)
@@ -15,7 +15,6 @@ Usage:
   sts-benchmark                       # auto-detect device (cuda > mps > cpu), benchmark everything installed
   sts-benchmark --device cpu          # force a device
   sts-benchmark --asr-device cpu      # override just ASR (e.g. to match a VRAM-constrained deployment)
-  sts-benchmark --asr-device mps --asr-backend parakeet   # Parakeet on the Apple GPU (whisper can't use it)
   sts-benchmark --repeats 5           # timed repetitions per stage (default 3, plus 1 untimed warmup call)
   sts-benchmark --skip-tts            # ASR + translation only
   sts-benchmark --asr-backend parakeet  # only benchmark one ASR backend instead of both
@@ -155,21 +154,17 @@ def system_info() -> dict:
     return info
 
 
-def benchmark_asr(backend: str, device: str, model_size: str, repeats: int) -> StageResult:
-    """Times one ASR backend ("whisper" or "parakeet"), built through
-    create_asr() exactly as `sts` builds it. `model_size` only applies to
-    whisper - Parakeet is a single fixed model."""
+# Model name reported per ASR backend.
+_ASR_LABELS = {"parakeet": "parakeet tdt-0.6b-v3", "gigaam": "gigaam-v3 e2e_rnnt"}
+
+
+def benchmark_asr(backend: str, device: str, repeats: int) -> StageResult:
+    """Times one ASR backend ("parakeet" or "gigaam"), built through
+    create_asr() exactly as `sts`/`sts-caption` build it."""
     from sts.asr import create_asr
 
     stage = f"asr:{backend}"
-    if backend == "whisper" and device == "mps":
-        return StageResult(stage, device, False,
-                           detail="not supported: faster-whisper has no MPS support (only cpu/cuda)")
-
-    cfg = ASRConfig(
-        backend=backend, model_size=model_size, device=device,
-        compute_type="float16" if device == "cuda" else "int8",
-    )
+    cfg = ASRConfig(backend=backend, device=device)
     t0 = time.perf_counter()
     try:
         asr = create_asr(cfg)
@@ -184,7 +179,7 @@ def benchmark_asr(backend: str, device: str, model_size: str, repeats: int) -> S
     audio_s = wav_duration_s(REFERENCE_WAV)
 
     t0 = time.perf_counter()
-    asr.transcribe(str(REFERENCE_WAV))  # warmup: excludes first-call CUDA/MPS/CTranslate2 init from the timed runs
+    asr.transcribe(str(REFERENCE_WAV))  # warmup: excludes first-call CUDA/MPS init from the timed runs
     warmup_s = time.perf_counter() - t0
 
     runs_s = []
@@ -193,7 +188,7 @@ def benchmark_asr(backend: str, device: str, model_size: str, repeats: int) -> S
         asr.transcribe(str(REFERENCE_WAV))
         runs_s.append(time.perf_counter() - t0)
 
-    label = f"whisper {model_size}" if backend == "whisper" else "parakeet tdt-0.6b-v3"
+    label = _ASR_LABELS[backend]
     mean_rtf = rtf(statistics.mean(runs_s), audio_s)
     return StageResult(
         stage, device, True,
@@ -396,9 +391,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Compute device for translation/TTS, and ASR unless --asr-device overrides it. "
                         "Default: auto-detect (cuda, then mps, then cpu)")
     parser.add_argument("--asr-device", default=None, help="Override just the ASR device")
-    parser.add_argument("--asr-backend", choices=["whisper", "parakeet"], default=None,
+    parser.add_argument("--asr-backend", choices=["parakeet", "gigaam"], default=None,
                         help="Only benchmark this ASR backend (default: try both, skipping whichever isn't installed)")
-    parser.add_argument("--whisper-model", default="large-v3", help="faster-whisper model size (default: large-v3, matches sts's default)")
     parser.add_argument("--translation-model", default=None, metavar="HF_MODEL",
                         help="Hugging Face NLLB model to benchmark (default: facebook/nllb-200-distilled-1.3B)")
     parser.add_argument("--repeats", type=int, default=3, help="Timed repetitions per stage, after 1 untimed warmup call (default: 3)")
@@ -446,9 +440,9 @@ def main() -> None:
     results: list[StageResult] = []
 
     if not args.skip_asr:
-        for backend in [args.asr_backend] if args.asr_backend else ["whisper", "parakeet"]:
+        for backend in [args.asr_backend] if args.asr_backend else ["parakeet", "gigaam"]:
             print(f"Benchmarking ASR ({backend} on {asr_device})...", flush=True)
-            results.append(benchmark_asr(backend, asr_device, args.whisper_model, args.repeats))
+            results.append(benchmark_asr(backend, asr_device, args.repeats))
 
     if not args.skip_translate:
         print(f"Benchmarking translation ({args.translation_model or 'NLLB'} on {translation_device})...", flush=True)

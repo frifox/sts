@@ -49,6 +49,11 @@ from sts.tts import create_synthesizer
 from sts.tts.voice_library import BUNDLED_VOICES_DIR, VoiceLibrary
 from sts.web.server import CaptionBroadcaster
 
+# The ASR engines the Caption dropdown can switch between live (see
+# _switch_asr_backend). GigaAM isn't one: its model code needs newer torch/
+# transformers than the TTS backends allow in the same virtualenv.
+LIVE_ASR_BACKENDS = ("parakeet",)
+
 # Bounds for the live pause-threshold slider (milliseconds of silence that end a snippet).
 MIN_SILENCE_RANGE_MS = (200, 1500)
 
@@ -97,8 +102,8 @@ STAGE_ERROR_BACKOFF_S = 0.5
 
 
 def _is_cuda_oom(exc: BaseException) -> bool:
-    """torch.OutOfMemoryError from PyTorch models, or CTranslate2's
-    RuntimeError("CUDA failed with error out of memory") from Whisper."""
+    """torch.OutOfMemoryError, or a library's own RuntimeError that surfaces
+    a CUDA out-of-memory failure in its message."""
     return isinstance(exc, torch.OutOfMemoryError) or "out of memory" in str(exc).lower()
 
 
@@ -188,7 +193,7 @@ class Pipeline:
         self.playback = AudioPlayback(cfg.audio)
         self._stage("Loading speech detector…")
         self.segmenter = SpeechSegmenter(cfg.audio, cfg.vad)
-        asr_label = cfg.asr.model_size if cfg.asr.backend == "whisper" else cfg.asr.backend
+        asr_label = cfg.asr.backend
         self._stage(f"Loading speech recognition ({asr_label})…")
         self.asr = create_asr(cfg.asr)
         self._stage("Loading translation model…")
@@ -385,7 +390,7 @@ class Pipeline:
             return
         elif action == "set_asr_backend":
             backend = str(data.get("backend") or "")
-            if backend not in ("whisper", "parakeet") or self._asr_busy:
+            if backend not in LIVE_ASR_BACKENDS or self._asr_busy:
                 return
             self._asr_busy = True
             threading.Thread(target=self._switch_asr_backend, args=(backend,), daemon=True).start()
@@ -705,7 +710,7 @@ class Pipeline:
         _free_gpu_memory()
 
     def _switch_asr_backend(self, backend: str) -> None:
-        """Swaps the ASR engine live (e.g. Whisper <-> Parakeet from the
+        """Swaps the ASR engine live (one of LIVE_ASR_BACKENDS, from the
         Caption dropdown). Runs off the web server's event loop since a cold
         load can take tens of seconds. _asr_loop is blocked on _asr_lock for
         the whole swap, so it can never see self.asr as None or half-built -
@@ -935,7 +940,7 @@ class Pipeline:
         dropdown (see _switch_asr_backend) - so this is re-sent after every
         switch, not just once."""
         if self.broadcaster:
-            asr_model = self.cfg.asr.model_size if self.cfg.asr.backend == "whisper" else parakeet_asr.MODEL_NAME
+            asr_model = parakeet_asr.MODEL_NAME if self.cfg.asr.backend == "parakeet" else self.cfg.asr.backend
             tts_model = (
                 self.cfg.tts.qwen3_model_name if self.cfg.tts.backend == "qwen3" else self.cfg.tts.model_name
             )

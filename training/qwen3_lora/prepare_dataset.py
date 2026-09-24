@@ -1,5 +1,6 @@
 """Turns one recorded-speaker audio file into a Qwen3-TTS LoRA training set:
-VAD-segmented into utterances, transcribed with faster-whisper, resampled to
+VAD-segmented into utterances, transcribed with NVIDIA Parakeet (the same
+model the live pipeline uses), resampled to
 the 24kHz mono the Qwen3-TTS codec pipeline requires, and written out as
 train/val JSONL in the official finetuning schema (`audio`, `text`,
 `ref_audio` per line - see ../../README.md's data format section).
@@ -22,10 +23,12 @@ from pathlib import Path
 
 import soundfile as sf
 import torch
-from faster_whisper import WhisperModel
+import torchaudio
 
 SAMPLE_RATE = 24_000  # Qwen3-TTS codec pipeline requires exactly this
 VAD_SAMPLE_RATE = 16_000  # what Silero VAD actually supports
+ASR_SAMPLE_RATE = 16_000  # what Parakeet expects
+ASR_MODEL = "nvidia/parakeet-tdt-0.6b-v3"
 
 
 def convert_to_wav(input_path: Path, output_path: Path) -> None:
@@ -61,6 +64,23 @@ def find_speech_segments(master_wav_24k: Path, min_seconds: float, max_seconds: 
     return audio_24k, timestamps_24k
 
 
+def transcribe_clips(clips: list, device: str, batch_size: int = 16) -> list[str]:
+    """Transcripts of 24kHz clips (float arrays), in order. Parakeet detects
+    the language itself and emits punctuation/capitalization."""
+    import nemo.collections.asr as nemo_asr
+
+    # Loaded on the CPU and then moved, so the fp32 checkpoint never sits on
+    # the GPU next to an fp16 copy (see sts.asr.parakeet_asr).
+    model = nemo_asr.models.ASRModel.from_pretrained(model_name=ASR_MODEL, map_location=torch.device("cpu"))
+    model = (model.half() if device.startswith("cuda") else model.float()).to(device).eval()
+    audio_16k = [
+        torchaudio.functional.resample(torch.as_tensor(clip, dtype=torch.float32), SAMPLE_RATE, ASR_SAMPLE_RATE).numpy()
+        for clip in clips
+    ]
+    out = model.transcribe(audio_16k, batch_size=batch_size, verbose=False)
+    return [(hyp.text if hasattr(hyp, "text") else hyp).strip() for hyp in out]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("input_audio", help="Recorded speaker file (mp3, wav, ... - anything ffmpeg reads)")
@@ -68,8 +88,6 @@ def main() -> None:
         "--speaker-name", required=True, help="Internal speaker name for training (passed as --speaker_name to train.sh)"
     )
     parser.add_argument("--output-dir", default="./data")
-    parser.add_argument("--language", default="ru", help="Whisper language code for transcription")
-    parser.add_argument("--whisper-model", default="large-v3")
     parser.add_argument("--min-clip-seconds", type=float, default=4.0)
     parser.add_argument("--max-clip-seconds", type=float, default=20.0)
     parser.add_argument("--val-fraction", type=float, default=0.1)
@@ -90,24 +108,17 @@ def main() -> None:
         sys.exit("No speech detected - check the input recording.")
     print(f"Found {len(timestamps)} speech segments.")
 
-    print(f"Transcribing with faster-whisper ({args.whisper_model})...")
-    whisper = WhisperModel(
-        args.whisper_model, device=args.device, compute_type="float16" if args.device == "cuda" else "int8"
-    )
+    print(f"Transcribing with {ASR_MODEL}...")
+    clips = [audio[ts["start"] : ts["end"]] for ts in timestamps]
+    texts = transcribe_clips(clips, args.device)
 
     rows = []
-    for i, ts in enumerate(timestamps):
-        clip = audio[ts["start"] : ts["end"]]
-        duration = len(clip) / SAMPLE_RATE
+    for i, (clip, text) in enumerate(zip(clips, texts)):
+        if not text:
+            continue
         clip_path = audio_dir / f"utt{i:04d}.wav"
         sf.write(clip_path, clip, SAMPLE_RATE)
-
-        segments, _ = whisper.transcribe(str(clip_path), language=args.language)
-        text = " ".join(s.text.strip() for s in segments).strip()
-        if not text:
-            clip_path.unlink()
-            continue
-        rows.append({"path": str(clip_path.resolve()), "text": text, "duration": duration})
+        rows.append({"path": str(clip_path.resolve()), "text": text, "duration": len(clip) / SAMPLE_RATE})
 
     if not rows:
         sys.exit("No transcribable speech segments found.")

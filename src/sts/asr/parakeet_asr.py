@@ -1,11 +1,11 @@
 """Transcribes Russian speech segments with NVIDIA's Parakeet TDT, via NeMo.
 
-Unlike Whisper, Parakeet emits its own punctuation and capitalization, so
-there's no initial_prompt to nudge vocabulary and no per-segment confidence
-score to filter hallucinations on - `nemo`'s plain `transcribe()` doesn't
-expose one without switching to its `return_hypotheses=True` mode. Not
-implemented here since it hasn't shown the hallucination-on-silence problem
-Whisper has in testing; revisit if that changes.
+Parakeet emits its own punctuation and capitalization. There's no prompt to
+nudge its vocabulary, and no per-segment confidence score to filter
+hallucinated text on - `nemo`'s plain `transcribe()` doesn't expose one
+without switching to its `return_hypotheses=True` mode. Not implemented here
+since it hasn't shown a hallucination-on-silence problem in testing; revisit
+if that changes.
 """
 
 import numpy as np
@@ -46,8 +46,7 @@ class ParakeetASR:
 
     def transcribe(self, audio: np.ndarray | str) -> str:
         # Accepts a raw float32 array (live-captured segments) or a file path
-        # (e.g. a pre-supplied --clone reference clip) directly, same as
-        # WhisperASR.transcribe.
+        # (e.g. a pre-supplied --clone reference clip) directly.
         out = self.model.transcribe(audio, verbose=False)
         text = out[0].text if hasattr(out[0], "text") else out[0]
         # Its 8192-token vocabulary has no token for any style of quotation

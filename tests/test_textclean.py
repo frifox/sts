@@ -39,16 +39,6 @@ def test_normal_text_untouched():
     assert clean_transcript(text) == text
 
 
-def test_asr_drops_prompt_echo():
-    from sts.asr.whisper_asr import is_hallucination
-    from sts.config import ASRConfig
-
-    cfg = ASRConfig()
-    assert is_hallucination("Библия, церковь, молитва, благодать, покаяние, грех.", 0.1, -0.2, cfg)
-    assert not is_hallucination("Молитва есть разговор с Богом.", 0.1, -0.2, cfg)
-    assert not is_hallucination("Грех.", 0.1, -0.2, cfg)  # single real word is fine
-
-
 def test_xtts_chunking():
     import pytest
 

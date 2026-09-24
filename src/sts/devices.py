@@ -2,7 +2,7 @@
 decides which CUDA GPUs are new enough for bfloat16/flash-attention.
 
 Pulled out of `sts.cli`/`sts.tts.qwen3` because those modules import the
-full pipeline stack (sounddevice, faster-whisper, torch, transformers, ...)
+full pipeline stack (sounddevice, NeMo, torch, transformers, ...)
 at import time, none of which needs to be installed just to test this
 mapping/decision logic.
 """
@@ -45,19 +45,12 @@ def resolve_devices(
     device. No model parallelism, no data crossing cards except the small
     text/audio handed between stages already.
 
-    faster-whisper's CTranslate2 backend has no Metal/MPS support (only
-    cpu/cuda), so on Apple Silicon ASR runs on cpu (still fast there -
-    CTranslate2's int8 path is well optimized for it) while translation and
-    TTS use the GPU via mps.
+    On Apple Silicon (mps), PyTorch ops that Metal doesn't implement yet
+    fall back to the CPU instead of crashing (PYTORCH_ENABLE_MPS_FALLBACK),
+    at some speed cost for just those ops.
     """
     if device == "mps":
         os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-        asr_device = asr_device_override or "cpu"
-        if asr_device != "cpu":
-            print(f"[device] using --asr-device {asr_device} instead of falling back to cpu for mps")
-        else:
-            print("[device] mps has no faster-whisper support - ASR runs on cpu, translation/TTS on mps")
-        return asr_device, translation_device_override or "mps", tts_device_override or "mps"
     return (
         asr_device_override or device,
         translation_device_override or device,

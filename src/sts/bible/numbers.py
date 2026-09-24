@@ -2,7 +2,7 @@
 "пятнадцатый") into integers, for chapter/verse numbers a speaker says as
 words instead of reading as digits.
 
-Whisper normalizes most spoken numbers to digits in its transcript already,
+The ASR model normalizes most spoken numbers to digits in its transcript already,
 so digit parsing (in `sts.bible.reference`) is the primary path and this is
 a fallback. It covers 0-176 (enough for every chapter and verse number in
 the Bible, e.g. Psalm 119's 176 verses) but doesn't chase every irregular

@@ -47,7 +47,7 @@ over to wherever the live pipeline actually runs.
    ```
 
 3. **Prepare the dataset** - VAD-segments the recording into utterances,
-   transcribes each with faster-whisper, and writes the training JSONL:
+   transcribes each with NVIDIA Parakeet, and writes the training JSONL:
    ```bash
    python prepare_dataset.py ~/sermon.mp3 \
      --speaker-name pastor_ivan \

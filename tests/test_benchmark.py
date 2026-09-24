@@ -121,7 +121,7 @@ def test_benchmark_asr_times_the_backend_it_was_asked_for(monkeypatch):
     fake = _FakeAsr()
     monkeypatch.setattr("sts.asr.create_asr", lambda cfg: built.append(cfg.backend) or fake)
 
-    result = benchmark_asr("parakeet", "mps", "large-v3", repeats=2)
+    result = benchmark_asr("parakeet", "mps", repeats=2)
 
     assert built == ["parakeet"]
     assert result.ok and result.stage == "asr:parakeet" and result.device == "mps"
@@ -136,7 +136,7 @@ def test_benchmark_asr_reports_a_missing_backend_as_not_installed_rather_than_cr
 
     monkeypatch.setattr("sts.asr.create_asr", missing)
 
-    result = benchmark_asr("parakeet", "cpu", "large-v3", repeats=1)
+    result = benchmark_asr("parakeet", "cpu", repeats=1)
 
     assert not result.ok and is_not_installed(result)  # SystemExit isn't an Exception - must not kill the run
 
@@ -147,14 +147,6 @@ def test_benchmark_asr_reports_other_load_failures(monkeypatch):
 
     monkeypatch.setattr("sts.asr.create_asr", boom)
 
-    result = benchmark_asr("whisper", "cpu", "large-v3", repeats=1)
+    result = benchmark_asr("gigaam", "cpu", repeats=1)
 
     assert not result.ok and not is_not_installed(result) and "out of memory" in result.detail
-
-
-def test_whisper_on_mps_is_reported_unsupported_without_trying_to_load_it(monkeypatch):
-    monkeypatch.setattr("sts.asr.create_asr", lambda cfg: pytest.fail("shouldn't even try"))
-
-    result = benchmark_asr("whisper", "mps", "large-v3", repeats=1)
-
-    assert not result.ok and result.stage == "asr:whisper" and "no MPS support" in result.detail

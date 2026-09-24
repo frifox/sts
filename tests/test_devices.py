@@ -11,11 +11,10 @@ def test_cpu_maps_all_components_to_cpu():
     assert resolve_devices("cpu", None) == ("cpu", "cpu", "cpu")
 
 
-def test_mps_forces_asr_to_cpu_but_keeps_translation_and_tts_on_mps():
-    asr, translation, tts = resolve_devices("mps", None)
-    assert asr == "cpu"
-    assert translation == "mps"
-    assert tts == "mps"
+def test_mps_maps_all_components_to_mps():
+    # ASR included: Parakeet is PyTorch, unlike the faster-whisper this once
+    # had to route to cpu for lack of any Metal support.
+    assert resolve_devices("mps", None) == ("mps", "mps", "mps")
 
 
 def test_mps_sets_pytorch_fallback_env_var():
@@ -51,7 +50,7 @@ def test_all_three_stages_can_be_pinned_to_different_devices():
 
 def test_translation_and_tts_overrides_apply_under_mps_too():
     asr, translation, tts = resolve_devices("mps", None, "cuda:1", "cuda:1")
-    assert asr == "cpu"  # still no faster-whisper support on mps
+    assert asr == "mps"
     assert translation == "cuda:1"
     assert tts == "cuda:1"
 

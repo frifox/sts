@@ -194,8 +194,8 @@ def _asr_pipeline(monkeypatch, asr_factory, persistent_config=None):
 def test_switch_asr_backend_persists_on_success(tmp_path, monkeypatch):
     pc = PersistentConfig(str(tmp_path / "sts.db"))
     p = _asr_pipeline(monkeypatch, lambda cfg: f"{cfg.backend}-engine", pc)
-    p.asr = "whisper-engine"
-    p.cfg.asr.backend = "whisper"
+    p.asr = "gigaam-engine"
+    p.cfg.asr.backend = "gigaam"
 
     p._switch_asr_backend("parakeet")
 
@@ -205,11 +205,11 @@ def test_switch_asr_backend_persists_on_success(tmp_path, monkeypatch):
 def test_switch_asr_backend_does_not_persist_a_same_backend_noop(tmp_path, monkeypatch):
     pc = PersistentConfig(str(tmp_path / "sts.db"))
     p = _asr_pipeline(monkeypatch, lambda cfg: f"{cfg.backend}-engine", pc)
-    p.asr = "whisper-engine"
-    p.cfg.asr.backend = "whisper"
+    p.asr = "gigaam-engine"
+    p.cfg.asr.backend = "gigaam"
     p._asr_busy = True
 
-    p._switch_asr_backend("whisper")
+    p._switch_asr_backend("gigaam")
 
     assert pc.get("asr_backend") is None
 
@@ -218,12 +218,12 @@ def test_switch_asr_backend_does_not_persist_on_failure(tmp_path, monkeypatch):
     def flaky(cfg):
         if cfg.backend == "parakeet":
             raise RuntimeError("out of memory")
-        return "whisper-engine"
+        return "gigaam-engine"
 
     pc = PersistentConfig(str(tmp_path / "sts.db"))
     p = _asr_pipeline(monkeypatch, flaky, pc)
-    p.asr = "whisper-engine"
-    p.cfg.asr.backend = "whisper"
+    p.asr = "gigaam-engine"
+    p.cfg.asr.backend = "gigaam"
 
     p._switch_asr_backend("parakeet")
 

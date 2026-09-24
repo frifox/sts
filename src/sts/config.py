@@ -75,22 +75,10 @@ class VADConfig:
 
 @dataclass
 class ASRConfig:
-    # "whisper" (faster-whisper), "parakeet" (NVIDIA Parakeet TDT, via NeMo), or
-    # "gigaam" (Sber GigaAM-v3 e2e_rnnt, Russian-only - its own virtualenv; see sts.asr.gigaam_asr)
+    # "parakeet" (NVIDIA Parakeet TDT, via NeMo - the live pipeline's), or "gigaam"
+    # (Sber GigaAM-v3 e2e_rnnt, Russian-only - its own virtualenv; see sts.asr.gigaam_asr)
     backend: str = "parakeet"
-    model_size: str = "large-v3"
     device: str = "cuda"
-    compute_type: str = "float16"
-    source_language: str = "ru"
-    # Drop a segment when Whisper both thinks it is probably not speech AND is
-    # unsure of its own transcription (guards against hallucinated text on noise).
-    no_speech_threshold: float = 0.6
-    min_avg_logprob: float = -1.0
-    # Nudges Whisper's decoding toward Baptist/religious vocabulary.
-    initial_prompt: str = (
-        "Проповедь. Библия, церковь, молитва, благодать, покаяние, "
-        "крещение, спасение, Господь, Иисус Христос, вера, грех."
-    )
 
 
 @dataclass

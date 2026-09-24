@@ -60,7 +60,7 @@ class Translator:
         )
         # fp16 on cuda roughly halves VRAM versus the default fp32 load - matters
         # once ASR and TTS are also sharing the same GPU (observed OOM on an 8GB
-        # card loading NLLB fp32 alongside faster-whisper + Qwen3-TTS).
+        # card loading NLLB fp32 alongside the ASR model + Qwen3-TTS).
         # `torch_dtype`, not `dtype`: sts supports transformers back to 4.40
         # (the xtts extra pins <4.50), and `dtype` only exists on newer
         # releases - `torch_dtype` still works everywhere, just deprecated

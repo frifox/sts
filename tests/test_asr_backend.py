@@ -11,13 +11,6 @@ def test_create_asr_rejects_unknown_backend():
         create_asr(ASRConfig(backend="bogus"))
 
 
-def test_create_asr_dispatches_to_whisper(monkeypatch):
-    calls = []
-    monkeypatch.setattr("sts.asr.whisper_asr.WhisperASR", lambda cfg: calls.append(cfg) or "whisper-instance")
-    assert create_asr(ASRConfig(backend="whisper")) == "whisper-instance"
-    assert len(calls) == 1
-
-
 def test_create_asr_dispatches_to_parakeet(monkeypatch):
     calls = []
     monkeypatch.setattr("sts.asr.parakeet_asr.ParakeetASR", lambda cfg: calls.append(cfg) or "parakeet-instance")
@@ -80,8 +73,8 @@ def test_switch_asr_backend_swaps_the_engine(monkeypatch):
         return f"{cfg.backend}-engine"
 
     p = _switch_pipeline(monkeypatch, fake_create_asr)
-    p.asr = "whisper-engine"
-    p.cfg.asr.backend = "whisper"
+    p.asr = "gigaam-engine"
+    p.cfg.asr.backend = "gigaam"
 
     p._switch_asr_backend("parakeet")
 
@@ -94,14 +87,14 @@ def test_switch_asr_backend_swaps_the_engine(monkeypatch):
 def test_switch_asr_backend_is_a_no_op_for_the_same_backend(monkeypatch):
     calls = []
     p = _switch_pipeline(monkeypatch, lambda cfg: calls.append(cfg) or "engine")
-    p.asr = "whisper-engine"
-    p.cfg.asr.backend = "whisper"
+    p.asr = "gigaam-engine"
+    p.cfg.asr.backend = "gigaam"
     p._asr_busy = True  # set by handle_control before dispatching, as it would be for real
 
-    p._switch_asr_backend("whisper")
+    p._switch_asr_backend("gigaam")
 
     assert calls == []  # never even tried to build a new one
-    assert p.asr == "whisper-engine"  # untouched
+    assert p.asr == "gigaam-engine"  # untouched
     assert not p._asr_busy
 
 
@@ -114,16 +107,16 @@ def test_switch_asr_backend_falls_back_when_the_new_backend_is_not_installed(mon
     def create_asr_missing_parakeet(cfg):
         if cfg.backend == "parakeet":
             raise SystemExit("the 'parakeet' ASR backend isn't installed in this environment")
-        return "whisper-engine"
+        return "gigaam-engine"
 
     p = _switch_pipeline(monkeypatch, create_asr_missing_parakeet)
-    p.asr = "whisper-engine"
-    p.cfg.asr.backend = "whisper"
+    p.asr = "gigaam-engine"
+    p.cfg.asr.backend = "gigaam"
 
     p._switch_asr_backend("parakeet")
 
-    assert p.cfg.asr.backend == "whisper"
-    assert p.asr == "whisper-engine"
+    assert p.cfg.asr.backend == "gigaam"
+    assert p.asr == "gigaam-engine"
     assert not p._asr_busy
 
 
@@ -131,24 +124,24 @@ def test_switch_asr_backend_falls_back_to_the_previous_engine_on_failure(monkeyp
     def flaky_create_asr(cfg):
         if cfg.backend == "parakeet":
             raise RuntimeError("out of memory")
-        return "whisper-engine"
+        return "gigaam-engine"
 
     p = _switch_pipeline(monkeypatch, flaky_create_asr)
-    p.asr = "whisper-engine"
-    p.cfg.asr.backend = "whisper"
+    p.asr = "gigaam-engine"
+    p.cfg.asr.backend = "gigaam"
 
     p._switch_asr_backend("parakeet")
 
     # Failed to switch - back on the working engine, not left broken.
-    assert p.cfg.asr.backend == "whisper"
-    assert p.asr == "whisper-engine"
+    assert p.cfg.asr.backend == "gigaam"
+    assert p.asr == "gigaam-engine"
     assert not p._asr_busy
-    assert p.broadcaster.engines["asr"]["backend"] == "whisper"
+    assert p.broadcaster.engines["asr"]["backend"] == "gigaam"
 
 
 def test_switch_asr_backend_survives_the_fallback_itself_failing(monkeypatch):
     """Reproduces what actually happened testing this live: switching to
-    Parakeet OOM'd, and reloading Whisper right afterward (before the failed
+    Parakeet OOM'd, and reloading the previous engine right afterward (before the failed
     attempt's GPU memory had really cleared) OOM'd too. self.asr must end up
     *something* callable, not deleted-and-never-reassigned, or _asr_loop's
     thread dies on the next segment with an AttributeError."""
@@ -157,13 +150,13 @@ def test_switch_asr_backend_survives_the_fallback_itself_failing(monkeypatch):
         raise RuntimeError("CUDA out of memory")
 
     p = _switch_pipeline(monkeypatch, always_fails)
-    p.asr = "whisper-engine"
-    p.cfg.asr.backend = "whisper"
+    p.asr = "gigaam-engine"
+    p.cfg.asr.backend = "gigaam"
 
     p._switch_asr_backend("parakeet")
 
     assert p.asr.transcribe(None) == ""  # the _NullASR stand-in, not gone entirely
-    assert p.cfg.asr.backend == "whisper"  # reports the engine it *meant* to be on
+    assert p.cfg.asr.backend == "gigaam"  # reports the engine it *meant* to be on
     assert not p._asr_busy
 
 
@@ -200,18 +193,18 @@ def test_failed_switch_never_releases_the_lock_while_self_asr_is_missing(monkeyp
     def create_asr_missing_parakeet(cfg):
         if cfg.backend == "parakeet":
             raise SystemExit("the 'parakeet' ASR backend isn't installed in this environment")
-        return "whisper-engine"
+        return "gigaam-engine"
 
     p = _switch_pipeline(monkeypatch, create_asr_missing_parakeet)
-    p.asr = "whisper-engine"
-    p.cfg.asr.backend = "whisper"
+    p.asr = "gigaam-engine"
+    p.cfg.asr.backend = "gigaam"
     p._asr_lock = _AsrPresenceLock(p)
 
     p._switch_asr_backend("parakeet")
 
     assert p._asr_lock.released_without_asr == 0
-    assert p.asr == "whisper-engine"  # and it did fall back correctly
-    assert p.cfg.asr.backend == "whisper"
+    assert p.asr == "gigaam-engine"  # and it did fall back correctly
+    assert p.cfg.asr.backend == "gigaam"
 
 
 def test_failed_switch_and_failed_fallback_never_releases_the_lock_without_an_engine(monkeypatch):
@@ -219,8 +212,8 @@ def test_failed_switch_and_failed_fallback_never_releases_the_lock_without_an_en
         raise RuntimeError("CUDA out of memory")
 
     p = _switch_pipeline(monkeypatch, always_fails)
-    p.asr = "whisper-engine"
-    p.cfg.asr.backend = "whisper"
+    p.asr = "gigaam-engine"
+    p.cfg.asr.backend = "gigaam"
     p._asr_lock = _AsrPresenceLock(p)
 
     p._switch_asr_backend("parakeet")
@@ -231,7 +224,7 @@ def test_failed_switch_and_failed_fallback_never_releases_the_lock_without_an_en
 
 def test_switch_is_refused_up_front_when_the_gpu_clearly_lacks_room(monkeypatch):
     """The real failure: a switch to Parakeet ran out of GPU memory halfway
-    through loading, which left too little for the fallback to Whisper too.
+    through loading, which left too little for the fallback to the previous engine too.
     Now a switch that can't fit is refused before anything is built, and the
     previous engine comes back (its reload isn't held to the estimate)."""
     built = []
@@ -243,14 +236,14 @@ def test_switch_is_refused_up_front_when_the_gpu_clearly_lacks_room(monkeypatch)
     p = _switch_pipeline(monkeypatch, fake_create_asr)
     monkeypatch.setattr("sts.pipeline.torch.cuda.is_available", lambda: True)
     monkeypatch.setattr("sts.pipeline.torch.cuda.mem_get_info", lambda device: (200 * 2**20, 8 * 2**30))
-    p.asr = "whisper-engine"
-    p.cfg.asr.backend = "whisper"
+    p.asr = "gigaam-engine"
+    p.cfg.asr.backend = "gigaam"
 
     p._switch_asr_backend("parakeet")
 
-    assert built == ["whisper"]  # parakeet was never attempted
-    assert p.asr == "whisper-engine"
-    assert p.cfg.asr.backend == "whisper"
+    assert built == ["gigaam"]  # parakeet was never attempted
+    assert p.asr == "gigaam-engine"
+    assert p.cfg.asr.backend == "gigaam"
 
 
 def test_switching_releases_the_old_engine_before_building_the_new_one(monkeypatch):
@@ -266,19 +259,17 @@ def test_switching_releases_the_old_engine_before_building_the_new_one(monkeypat
 
     p = _switch_pipeline(monkeypatch, fake_create_asr)
     p.asr = OldEngine()
-    p.cfg.asr.backend = "whisper"
+    p.cfg.asr.backend = "gigaam"
 
     p._switch_asr_backend("parakeet")
 
     assert events == ["closed old", "built parakeet"]
 
 
-def test_estimate_vram_bytes_scales_with_model_and_compute_type():
+def test_estimate_vram_bytes_covers_each_backend():
     from sts.asr import estimate_vram_bytes
 
-    int8 = estimate_vram_bytes(ASRConfig(backend="whisper", model_size="large-v3", compute_type="int8_float16"))
-    fp16 = estimate_vram_bytes(ASRConfig(backend="whisper", model_size="large-v3", compute_type="float16"))
-    small = estimate_vram_bytes(ASRConfig(backend="whisper", model_size="small", compute_type="float16"))
     parakeet = estimate_vram_bytes(ASRConfig(backend="parakeet"))
-    assert small < int8 < fp16
-    assert 1 * 2**30 < parakeet < 2 * 2**30
+    gigaam = estimate_vram_bytes(ASRConfig(backend="gigaam"))
+    assert 1 * 2**30 < parakeet < 2 * 2**30  # measured: ~1.2 GB loaded
+    assert 0.8 * 2**30 < gigaam < 2 * 2**30  # measured: ~0.83 GB loaded

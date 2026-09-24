@@ -12,7 +12,7 @@ from sts.audio.devices import check_input, check_output
 from sts.engine_args import add_engine_arguments, build_engine_config
 from sts.log import vlog
 from sts.persistent_config import PersistentConfig
-from sts.pipeline import Pipeline
+from sts.pipeline import LIVE_ASR_BACKENDS, Pipeline
 from sts.web.server import CaptionBroadcaster, run_server
 
 # Where --https-port looks for a cert/key when --tls-cert/--tls-key aren't
@@ -142,7 +142,9 @@ def main() -> None:
     persistent_config = PersistentConfig(args.config_db) if args.config_db else None
     if persistent_config is not None:
         saved_backend = persistent_config.get("asr_backend")
-        if saved_backend:
+        # Only an engine the live pipeline still offers - e.g. not "whisper",
+        # which a db saved before its removal may still name.
+        if saved_backend in LIVE_ASR_BACKENDS:
             cfg.asr.backend = saved_backend
         saved_volume = persistent_config.get("output_volume")
         if saved_volume:
@@ -152,11 +154,10 @@ def main() -> None:
                 pass
 
     if cfg.asr.backend == "parakeet" and importlib.util.find_spec("nemo") is None:
-        # Parakeet is the default (or a saved preference), but this
-        # environment doesn't have the extra installed - fall back rather
-        # than crashing a run that would otherwise work fine on Whisper.
-        print("[config] ASR engine 'parakeet' isn't installed here; starting on 'whisper' instead")
-        cfg.asr.backend = "whisper"
+        sys.exit(
+            "error: speech recognition (Parakeet, via NeMo) isn't installed in this environment.\n"
+            "  Install it with:  pip install -e '.[parakeet]'"
+        )
 
     cfg.audio.input_device = (
         args.input_device
@@ -208,7 +209,7 @@ def main() -> None:
         if args.https_port is not None:
             print(f"Captions (HTTPS, needed for the browser mic): https://{args.web_host}:{args.https_port}/")
 
-    vlog("init", f"loading models (whisper={cfg.asr.model_size} on {asr_device}, translation on {translation_device}, "
+    vlog("init", f"loading models (asr={cfg.asr.backend} on {asr_device}, translation on {translation_device}, "
          f"tts={cfg.tts.backend} on {tts_device})")
     pipeline = Pipeline(cfg, broadcaster=broadcaster, persistent_config=persistent_config)
     vlog("init", "models loaded")

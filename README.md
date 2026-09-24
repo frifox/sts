@@ -26,16 +26,14 @@ sound card -> VAD segmenter -> ASR (ru) -> NLLB translation (ru->en) -> XTTS (en
 - **VAD segmentation** (`sts.audio.vad`) — Silero VAD buffers speech and cuts a
   segment on trailing silence, so ASR sees whole utterances instead of
   arbitrary fixed windows.
-- **ASR** — two swappable backends, picked from the Caption dropdown on the
-  live page (switches the running engine without a restart):
-  - `parakeet` (default) — NVIDIA's Parakeet TDT (`sts.asr.parakeet_asr`,
-    via NeMo). Paired with `--partial-interval-ms 2000` (also the default):
-    a still-open segment is periodically re-transcribed so a multi-sentence
-    segment's earlier sentences can be translated while the speaker keeps
-    talking, instead of everything waiting for the segment's closing pause.
-  - `whisper` (`sts.asr.whisper_asr`) — `faster-whisper`, `large-v3`,
-    Russian, primed with a Baptist/religious-vocabulary prompt to bias
-    decoding.
+- **ASR** — NVIDIA's Parakeet TDT (`sts.asr.parakeet_asr`, via NeMo),
+  punctuated and capitalized output. Paired with `--partial-interval-ms 2000`
+  (also the default): a still-open segment is periodically re-transcribed so
+  a multi-sentence segment's earlier sentences can be translated while the
+  speaker keeps talking, instead of everything waiting for the segment's
+  closing pause. (Sber's Russian-only GigaAM-v3 is available to the
+  `sts-caption` diagnostic - see below - but not to the live pipeline: its
+  model code needs newer torch/transformers than the TTS backends allow.)
 - **Translation** (`sts.translate.translator`) — NLLB-200 (`ru->en`). A
   glossary (`sts.translate.glossary`) force-substitutes known Baptist/Christian
   terms (grace, repentance, communion, sanctification, ...) so the model
@@ -46,7 +44,7 @@ sound card -> VAD segmenter -> ASR (ru) -> NLLB translation (ru->en) -> XTTS (en
   `.venv-qwen/bin/sts` uses Qwen3-TTS:
   - `xtts` (default) — Coqui XTTS v2. Ships natural built-in speakers, plus
     zero-shot cloning from a short reference clip.
-  - `qwen3` — Qwen3-TTS-Base (`pip install -e '.[qwen3]'`, in its own virtualenv - see Setup), Apache-2.0,
+  - `qwen3` — Qwen3-TTS-Base (`pip install -e '.[qwen3,parakeet]'`, in its own virtualenv - see Setup), Apache-2.0,
     self-hosted. Also zero-shot cloning, and officially supports
     cross-lingual cloning (Russian reference clip -> English output) with a
     reusable "clone prompt" object built from the clip once. It has no
@@ -183,23 +181,21 @@ slow translation or TTS call doesn't stall audio capture.
 
 ## GPU requirements
 
-Estimates from published model sizes, not benchmarked against real hardware
-in this repo (no GPU in dev). All three components load simultaneously
-regardless of which caption-page toggles are on, so the last row is what
-actually matters for picking hardware.
+All three components load simultaneously regardless of which caption-page
+toggles are on, so the last row is what actually matters for picking
+hardware.
 
 | Part | Models | Rough VRAM |
 |---|---|---|
-| Captions (ASR + translation) | faster-whisper `large-v3` + NLLB-200-1.3B | ~5-6GB int8, ~8GB float16 |
-| TTS, zero-shot | XTTS v2 (~460M) or Qwen3-TTS-Base (0.6B/1.7B) | ~3-4GB |
+| Captions (ASR + translation) | Parakeet TDT 0.6B (fp16, ~1.2GB measured) + NLLB-200-1.3B (fp16) | ~4GB |
+| TTS, zero-shot | XTTS v2 (~460M) or Qwen3-TTS-Base (0.6B/1.7B) | ~2-4GB |
 | TTS, trained (LoRA) | same base model, adapter merged in | same as zero-shot per speaker; each additional *cached* trained speaker is a full extra model load, not a small increment (see `sts/tts/qwen3.py`) |
-| **Whole pipeline together** | all of the above loaded at once | **~7-9GB at int8 Whisper, ~10-14GB at float16** |
+| **Whole pipeline together** | all of the above loaded at once | **~6GB measured with XTTS on an 8GB RTX 2070; more with Qwen3-TTS 1.7B** |
 
-A 12GB+ card (RTX 3060 12GB, RTX 4070, ...) is a comfortable floor. 8-11GB
-cards (see **Older NVIDIA GPUs**, below, for a GTX 1080 Ti specifically) are
-workable but tight, especially with Qwen3-TTS's 1.7B variant or several
-cached trained speakers — the 0.6B variant, XTTS, and `int8` Whisper (the
-default off-CUDA already) all buy back headroom.
+An 8GB card runs the XTTS pipeline with about 2GB to spare. A 12GB+ card
+(RTX 3060 12GB, RTX 4070, ...) is a comfortable floor for Qwen3-TTS's 1.7B
+variant or several cached trained speakers; its 0.6B variant, or XTTS, buys
+back headroom.
 
 ## True LoRA training (rented GPU, e.g. an H100/H200 droplet)
 
@@ -231,15 +227,11 @@ known-working reference code rather than guessed at.
 
 ## Apple Silicon / Metal
 
-`--device mps` runs translation and TTS on the Apple GPU. One component
-can't join it: **faster-whisper's CTranslate2 backend has no Metal support**
-(only CPU and CUDA), so ASR always runs on CPU on a Mac regardless of this
-flag — `sts.devices.resolve_devices` handles that split automatically
-(ASR -> cpu, translation/TTS -> mps), and sets
+`--device mps` runs ASR, translation, and TTS on the Apple GPU, and sets
 `PYTORCH_ENABLE_MPS_FALLBACK=1` so any PyTorch op MPS doesn't yet implement
-falls back to CPU instead of crashing, at some speed cost for that op. Use
-`--asr-device cuda` instead only if you actually have an eGPU or are
-otherwise not really on Apple Silicon.
+falls back to CPU instead of crashing, at some speed cost for that op.
+`--asr-device cpu` keeps just ASR on the CPU if Parakeet turns out not to
+run well on MPS.
 
 Qwen3-TTS uses float16 + SDPA attention on `mps` rather than CUDA's
 bfloat16 + flash-attention (flash-attn has no Metal build; MPS's bfloat16
@@ -249,8 +241,8 @@ no such split; `.to("mps")` is all it needs.
 
 This hasn't been run on real Apple hardware in this repo (no Mac available
 in dev) - assuming a high-end chip (M5 Max-class: plenty of GPU cores and
-unified memory), there's no reason to downgrade model sizes (Whisper
-`large-v3`, Qwen3-TTS 1.7B) the way you might on a smaller Mac; unified
+unified memory), there's no reason to downgrade model sizes (NLLB 1.3B,
+Qwen3-TTS 1.7B) the way you might on a smaller Mac; unified
 memory also means there's no separate VRAM ceiling to budget against like
 on a discrete GPU. What's unverified is per-op MPS support and real-world
 throughput, not whether the models fit.
@@ -262,8 +254,8 @@ sts --device mps --tts-backend qwen3             # Qwen3-TTS backend (or just ru
 
 ## Older NVIDIA GPUs (pre-Ampere) and Windows
 
-`--device cuda` works on Windows the same as Linux — PyTorch, CTranslate2
-(faster-whisper), Coqui TTS, and `sounddevice` all support it natively.
+`--device cuda` works on Windows the same as Linux — PyTorch, NeMo, Coqui
+TTS, and `sounddevice` all support it natively.
 
 The one thing that varies by *which* GPU, not the OS: Qwen3-TTS's CUDA path
 picks bfloat16 + flash-attention by default, but both need Ampere or newer
@@ -284,8 +276,7 @@ flash-attn being present.
 
 On VRAM: an 11GB card (e.g. a GTX 1080 Ti) is workable for the whole
 pipeline but tight if you also pick Qwen3-TTS's 1.7B variant - the 0.6B
-variant, or the XTTS backend, plus `int8` Whisper (already the default for
-non-CUDA ASR devices), leaves more headroom. See the GPU requirements
+variant, or the XTTS backend, leaves more headroom. See the GPU requirements
 breakdown earlier in this README for the per-component numbers this is
 based on.
 
@@ -298,7 +289,7 @@ but will lag). Supported on Windows, macOS, and Linux.
 ```bash
 git clone https://github.com/frifox/sts.git
 cd sts
-pip install -e ".[xtts]"
+pip install -e ".[xtts,parakeet]"
 ```
 
 If you already have Python, git, and (for `--device cuda`) a working CUDA
@@ -368,26 +359,14 @@ the path a Windows + NVIDIA GPU setup - e.g. a GTX 1080 Ti - would follow):
 
 6. **Install the project:**
    ```
-   pip install -e ".[xtts]"
+   pip install -e ".[xtts,parakeet]"
    ```
-   The Qwen3-TTS backend needs a separate virtualenv (`pip install -e ".[qwen3]"`; its
+   The Qwen3-TTS backend needs a separate virtualenv (`pip install -e ".[qwen3,parakeet]"`; its
    transformers requirement conflicts with XTTS's)
    — see **Older NVIDIA GPUs (pre-Ampere) and Windows** above for what that
    backend needs on a card like a GTX 1080 Ti specifically.
 
-7. **Known rough edge: faster-whisper (ASR) on Windows + CUDA.** Its
-   CTranslate2 backend needs cuBLAS/cuDNN, and Windows wheels have
-   historically been less consistent than Linux about bundling them. If
-   `sts` fails specifically when loading the Whisper model (not at the
-   PyTorch step above, which is a separate library), that's almost always
-   this - check [faster-whisper's own install
-   docs](https://github.com/SYSTRAN/faster-whisper#gpu) for current
-   Windows-specific guidance, since this varies by faster-whisper version
-   more than anything else here. Forcing `--asr-device cpu` (ASR still runs
-   fine on CPU, just slower) is the immediate workaround while sorting it
-   out.
-
-8. **Run it** - see **First run, on any OS** at the end of this section.
+7. **Run it** - see **First run, on any OS** at the end of this section.
    Two Windows-specific prompts to expect the first time you do: a
    **Windows Defender Firewall**
    prompt when the caption web server binds its port (allow it, at least for
@@ -427,7 +406,7 @@ mps` does and doesn't cover) or Intel Macs with no dev environment yet:
 
 4. **Install the project:**
    ```
-   pip install -e ".[xtts]"
+   pip install -e ".[xtts,parakeet]"
    ```
    `pip install torch` on macOS installs a universal build with Apple
    Silicon (MPS) support already included - no separate CUDA-style index-url
@@ -519,9 +498,9 @@ the Python side is identical everywhere.
 
 5. **Install the project:**
    ```
-   pip install -e ".[xtts]"
+   pip install -e ".[xtts,parakeet]"
    ```
-   The Qwen3-TTS backend needs its own virtualenv (`pip install -e ".[qwen3]"`), because
+   The Qwen3-TTS backend needs its own virtualenv (`pip install -e ".[qwen3,parakeet]"`), because
    its transformers requirement conflicts with XTTS's.
 
 6. **Run it** - see **First run, on any OS** below. Linux generally has no
@@ -540,7 +519,7 @@ sts --list-devices                 # confirm your mic/speakers show up
 sts
 ```
 
-Model weights (Whisper, NLLB, XTTS, Silero VAD) download automatically on
+Model weights (Parakeet, NLLB, XTTS, Silero VAD) download automatically on
 first run — that first run needs internet access even though normal
 operation doesn't.
 
@@ -616,72 +595,6 @@ full minute behind even so, the oldest waiting sentences are skipped. The
 thresholds are the `catchup_*` and `max_backlog_s` settings in `AudioConfig`
 (`sts/config.py`).
 
-## Translating a recorded video
-
-`translate.py` translates a whole video (Russian -> English) offline and
-writes a copy with the audio track replaced by an English voice. The video
-stream is copied untouched (no re-encoding), so it's fast and lossless. Needs
-`ffmpeg` (`brew install ffmpeg` / `sudo apt install ffmpeg`).
-
-```bash
-python translate.py --input talk.mp4                  # -> talk-english.mp4, next to the input
-python translate.py --input talk.mkv --output out/english.mkv
-python translate.py --input talk.mov --voice "Pastor Ivan"   # speak with a saved voice
-python translate.py --input talk.mp4 --save-voice "Pastor Ivan"
-                                                      # keep the voice cloned from the video
-python translate.py --input talk.mp4 --keep-original --save-transcript
-                                                      # original audio as a 2nd track + a .json of the text
-```
-
-It uses whichever TTS backend is installed in the environment you run it from:
-run it from `.venv-qwen` for **Qwen3-TTS** (preferred if both are somehow
-installed), or from `.venv` for XTTS. `--tts-backend` overrides the choice.
-It accepts the same engine options as `sts` (`--device`, `--whisper-model`,
-`--default-voice`, `--qwen-temperature`, ...); see `python translate.py --help`.
-
-How it works: ffmpeg extracts the audio; Whisper transcribes it with word
-timestamps; the text is split into sentences, translated one sentence at a
-time, and spoken in a cloned voice; each sentence is then placed on the
-timeline where the Russian sentence began.
-
-- **Several speakers (`--multiple`):** works out who says each sentence and
-  clones a separate voice for each person from their own speech, so a video
-  of five people each reading two verses gets five different English voices.
-  Speakers are told apart with WeSpeaker's speaker-embedding model (a small
-  public download, no login). **Pass `--speakers N` when you know the count**
-  (implies `--multiple`): guessing is unreliable when voices are alike, such
-  as children or two men, and the script prints the number it found so you can
-  check. `--save-voice NAME` keeps each cloned voice as `NAME 1`, `NAME 2`, ...
-  in the library. The cloned voices are zero-shot clones from a
-  ~10-20 s sample of each person, not trained models. Limits: a speaker change
-  in the middle of a sentence isn't detected (a long run of continuous speech
-  by several people may be labelled as one person), overlapping speech isn't
-  separated, and a speaker with under ~2 s of speech gets the built-in voice.
-- **Voice:** by default the speaker is cloned from the cleanest ~10-20 s
-  stretch of the video's own audio. `--voice NAME` uses one from the voice
-  library instead (e.g. trained in the live app), and `--no-clone` uses the
-  built-in default voice. It assumes **one speaker**; with several people the
-  clone is of whoever spoke in that stretch.
-- **Sound quality:** the speech models say very short phrases (a one-word
-  "Amen.") several dB quieter than long sentences, up to about 12 dB in
-  testing, which sounds like someone far away. Every spoken clip is therefore
-  brought to the same speech level (`TTSConfig.target_level`, in `sts/config.py`;
-  None turns it off), with a cap on the boost so noise isn't amplified. Separately,
-  a cloned voice copies the recording conditions of its sample, so each speaker's
-  reference is built from their *clearest* sentences, avoiding very long blurry
-  ones. An optional retake pass (`--retakes N`, off by default) re-records
-  sentences that are much duller than the rest of that speaker's.
-- **Timing:** English often runs longer than the Russian it replaces. A
-  sentence that would run into the next is sped up (at most `--max-speedup`,
-  default 1.3x); if that isn't enough, later sentences start a little late and
-  catch up at the next pause. The summary line reports how many were affected.
-- **Output:** the new audio is AAC and becomes the default track. Subtitles
-  and extra streams from the input aren't copied. Any background music or
-  sound in the original is replaced too, since only the speech is regenerated.
-- **Speed:** on Apple Silicon, expect roughly real time or slower for the
-  speech step, plus transcription time; a one-hour video takes on the order
-  of an hour or more. Progress and a time estimate are printed.
-
 ## Caption diagnostic (sts-caption)
 
 `sts-caption` streams an input device straight into a speech recognizer and
@@ -709,7 +622,7 @@ keeps changing.
 
 ## Benchmarking hardware
 
-`benchmark.py` times each pipeline stage - ASR (faster-whisper and Parakeet),
+`benchmark.py` times each pipeline stage - ASR (Parakeet, and GigaAM-v3 when run from `.venv-gigaam`),
 translation (NLLB), and TTS (both backends), whichever backends are installed - using the exact
 same model configs and device-selection logic `sts` itself runs, so the
 numbers reflect real pipeline performance, not a synthetic benchmark of the
@@ -722,14 +635,13 @@ options in the church-service deployment this was built for.
 python benchmark.py                       # auto-detect device, benchmark everything installed
 python benchmark.py --device cpu          # force a device
 python benchmark.py --asr-device cpu      # override just ASR (e.g. to match a VRAM-constrained deployment)
-python benchmark.py --asr-device mps --asr-backend parakeet   # Parakeet on the Apple GPU (whisper has no MPS support)
 python benchmark.py --asr-backend parakeet  # only benchmark one ASR backend instead of both
 python benchmark.py --repeats 5           # timed repetitions per stage (default 3, plus 1 untimed warmup call)
 python benchmark.py --tts-backend qwen3   # only benchmark one TTS backend instead of both
 ```
 
 Each stage reports model load time, a warmup call (excluded from the timed
-numbers, so first-call CUDA/CTranslate2 init doesn't skew them), and the
+numbers, so first-call CUDA/MPS init doesn't skew them), and the
 timed runs with mean/median - plus a real-time factor (processing time /
 audio duration) for ASR and TTS, since that's what actually determines
 whether a stage keeps up with a live speaker. A backend that isn't installed

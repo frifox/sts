@@ -1,6 +1,5 @@
-"""Command-line options and config building shared by `sts` (live) and
-`translate.py` (offline video): which models to run, on what device, and how
-the TTS voice behaves."""
+"""Command-line options and config building for `sts`: which models to run,
+on what device, and how the TTS voice behaves."""
 
 import argparse
 import importlib.util
@@ -22,7 +21,7 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "--asr-device",
         default=None,
         help="Override just the ASR device: 'cpu' (e.g. to free VRAM for translation/TTS), or a specific "
-        "GPU like 'cuda:1' if you have more than one card. faster-whisper only supports cpu/cuda, never mps.",
+        "GPU like 'cuda:1' if you have more than one card.",
     )
     parser.add_argument(
         "--translation-device",
@@ -36,14 +35,6 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Override just the TTS device, e.g. 'cuda:1' to run voice synthesis on a second GPU instead "
         "of sharing one with ASR/translation.",
-    )
-    parser.add_argument("--whisper-model", default="large-v3", help="faster-whisper model size/name")
-    parser.add_argument(
-        "--asr-compute-type",
-        default=None,
-        help="faster-whisper quantization. Default: float16 on GPU, int8 on CPU. 'int8_float16' (GPU only) "
-        "trades a little accuracy for a smaller VRAM footprint and faster inference - useful when ASR has "
-        "to share an 8GB card with translation and TTS.",
     )
     parser.add_argument(
         "--translation-model",
@@ -108,8 +99,7 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=None,
         help="How many times Qwen3 may regenerate a take that sounds duller (muffled, distant) than that "
-        "voice's usual; each retry costs a full extra generation, so it adds latency (default 1 live, 2 for "
-        "translate.py; 0 turns it off)",
+        "voice's usual; each retry costs a full extra generation, so it adds latency (default 0: off)",
     )
     parser.add_argument(
         "--sentence-pause-s",
@@ -147,7 +137,7 @@ def default_tts_backend(prefer: str = "xtts") -> str:
     return installed[0] if len(installed) == 1 else prefer
 
 
-def build_engine_config(args: argparse.Namespace, prefer_backend: str = "xtts") -> tuple[PipelineConfig, tuple[str, str, str]]:
+def build_engine_config(args: argparse.Namespace) -> tuple[PipelineConfig, tuple[str, str, str]]:
     """Applies the shared options to a fresh PipelineConfig. Returns it together
     with the resolved (asr, translation, tts) devices."""
     set_verbose(args.verbose)
@@ -171,13 +161,11 @@ def build_engine_config(args: argparse.Namespace, prefer_backend: str = "xtts") 
 
     cfg = PipelineConfig()
     cfg.asr.device = asr_device
-    cfg.asr.compute_type = args.asr_compute_type or ("float16" if asr_device == "cuda" else "int8")
-    cfg.asr.model_size = args.whisper_model
     cfg.translation.device = translation_device
     if args.translation_model:
         cfg.translation.model_name = args.translation_model
     cfg.tts.device = tts_device
-    cfg.tts.backend = args.tts_backend or default_tts_backend(prefer_backend)
+    cfg.tts.backend = args.tts_backend or default_tts_backend()
     if not args.tts_backend:
         print(f"[tts] using the {cfg.tts.backend} backend (the one installed in this environment)", flush=True)
     cfg.tts.use_backend_voices()

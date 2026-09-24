@@ -6,7 +6,7 @@ from sts.persistent_config import PersistentConfig
 def test_get_returns_default_when_unset(tmp_path):
     pc = PersistentConfig(str(tmp_path / "sts.db"))
     assert pc.get("asr_backend") is None
-    assert pc.get("asr_backend", "whisper") == "whisper"
+    assert pc.get("asr_backend", "parakeet") == "parakeet"
 
 
 def test_set_then_get_round_trips(tmp_path):
