@@ -123,32 +123,33 @@ class AudioPlayback:
         `on_chunk`, if given, is called with each chunk as it's written (used
         to report output level for the volume-bar meter) - safe to do inline
         here since, unlike audio *capture*, this runs on a plain Python
-        thread (the caller's), not a PortAudio real-time callback."""
+        thread (the caller's), not a PortAudio real-time callback.
+
+        Always written in ~50ms chunks (whether or not `should_continue` is
+        given) rather than as one big write, so `cfg.volume` - read fresh per
+        chunk, not baked in once up front - takes effect within ~50ms of the
+        operator dragging the volume slider, even mid-clip, instead of only
+        on the next clip pulled off the queue."""
         with self._lock:
             stream, target_rate = self._ensure_stream(sample_rate)
             if target_rate != sample_rate:
                 audio = torchaudio.functional.resample(torch.from_numpy(audio), sample_rate, target_rate).numpy()
                 sample_rate = target_rate
-            samples = np.ascontiguousarray(audio, dtype=np.float32).reshape(-1, 1) * self.cfg.volume
+            samples = np.ascontiguousarray(audio, dtype=np.float32).reshape(-1, 1)
             now = time.monotonic()
             pad = pause_needed(now, self._scheduled_end, pause_before) if pause_before > 0 else 0.0
             self._scheduled_end = max(now, self._scheduled_end) + pad + len(samples) / sample_rate
             if pad > 0:
                 samples = np.concatenate([np.zeros((int(pad * sample_rate), 1), dtype=np.float32), samples])
         vlog("audio", f"playing {len(audio) / sample_rate:.1f}s of speech" + (f" after a {pad:.1f}s pause" if pad > 0 else ""))
-        if should_continue is None:
-            stream.write(samples)
-            if on_chunk:
-                on_chunk(samples)
-            return
         chunk_frames = max(1, int(0.05 * sample_rate))
         for start in range(0, len(samples), chunk_frames):
-            if not should_continue():
+            if should_continue is not None and not should_continue():
                 with self._lock:
                     self._scheduled_end = 0.0  # what got cut short isn't "queued" anymore
                 vlog("audio", "playback cut short")
                 return
-            chunk = samples[start : start + chunk_frames]
+            chunk = samples[start : start + chunk_frames] * self.cfg.volume
             stream.write(chunk)
             if on_chunk:
                 on_chunk(chunk)

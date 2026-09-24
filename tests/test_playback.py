@@ -61,12 +61,14 @@ def stub_output(monkeypatch):
     return holder
 
 
-def test_play_without_should_continue_writes_the_whole_clip_in_one_call(stub_output):
+def test_play_without_should_continue_still_writes_the_whole_clip(stub_output):
+    """Written in chunks even without should_continue (see the volume test
+    below for why), but nothing is skipped or cut short."""
     pb = AudioPlayback(AudioConfig())
     audio = np.zeros(24_000 * 2, dtype=np.float32)  # 2s clip
     pb.play(audio, sample_rate=24_000)
     stream = stub_output["stream"]
-    assert len(stream.written) == 1
+    assert len(stream.written) > 1
     assert sum(len(c) for c in stream.written) == len(audio)
 
 
@@ -79,6 +81,33 @@ def test_play_applies_the_configured_volume_as_a_gain(stub_output):
     pb.play(audio, sample_rate=24_000)
     written = np.concatenate(stub_output["stream"].written).reshape(-1)
     assert np.allclose(written, 0.4)
+
+
+def test_volume_change_mid_clip_takes_effect_on_the_next_chunk(stub_output):
+    """The bug this guards: volume used to be multiplied into the whole clip
+    once, up front, so dragging the slider mid-sentence had no audible effect
+    until the *next* queued clip started - up to several seconds later. It's
+    now read fresh from cfg.volume per ~50ms chunk instead."""
+    cfg = AudioConfig()
+    pb = AudioPlayback(cfg)
+    chunk_frames = int(0.05 * 24_000)  # 1200 samples/chunk at 24kHz
+    audio = np.full(chunk_frames * 3, 0.8, dtype=np.float32)  # exactly 3 chunks
+
+    calls = {"n": 0}
+
+    def should_continue():
+        calls["n"] += 1
+        if calls["n"] == 2:
+            cfg.volume = 0.25  # the operator drags the slider between chunks 1 and 2
+        return True
+
+    pb.play(audio, sample_rate=24_000, should_continue=should_continue)
+
+    written = stub_output["stream"].written
+    assert len(written) == 3
+    assert np.allclose(written[0], 0.8)   # written before the drag, at the default volume (1.0)
+    assert np.allclose(written[1], 0.2)   # 0.8 * 0.25 - applied to this chunk already, not the next play() call
+    assert np.allclose(written[2], 0.2)
 
 
 def test_should_continue_false_cuts_playback_short_instead_of_finishing_the_clip(stub_output):
