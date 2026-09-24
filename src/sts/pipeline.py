@@ -22,17 +22,20 @@ import struct
 import tempfile
 import threading
 import time
+import traceback
 import wave
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
 
-from sts.asr import create_asr, parakeet_asr
+from sts.asr import create_asr, estimate_vram_bytes, parakeet_asr
 from sts.audio.capture import AudioCapture
 from sts.audio.devices import check_input, check_output, reinitialize_audio_system
 from sts.audio.playback import AudioPlayback
+from sts.audio.tempo import time_stretch
 from sts.audio.vad import SpeechSegmenter
 from sts.bible.lookup import BibleLookup
 from sts.bible.reference import find_references
@@ -83,6 +86,28 @@ DESIGN_REFERENCE_TEXT = (
 )
 
 
+# How long a stage's blocking queue get() waits before re-checking whether
+# the pipeline is stopping - so stop() can actually join the stage threads.
+QUEUE_POLL_S = 0.5
+
+# Pause after a stage step raises before taking the next item, so an error
+# that repeats on every item (a broken model, a device gone) logs at a
+# readable rate instead of spinning a CPU core.
+STAGE_ERROR_BACKOFF_S = 0.5
+
+
+def _is_cuda_oom(exc: BaseException) -> bool:
+    """torch.OutOfMemoryError from PyTorch models, or CTranslate2's
+    RuntimeError("CUDA failed with error out of memory") from Whisper."""
+    return isinstance(exc, torch.OutOfMemoryError) or "out of memory" in str(exc).lower()
+
+
+def _free_gpu_memory() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def _strip_repeated_prefix(translated: str, previous: str | None) -> str:
     """`translated` was produced with `previous` as leading context (see
     Translator.translate_sentences and _commit_new_asr_text) - given as
@@ -104,6 +129,24 @@ def _strip_repeated_prefix(translated: str, previous: str | None) -> str:
     return remainder or translated
 
 
+@dataclass
+class _Clip:
+    """One piece of synthesized speech waiting in the playback queue."""
+
+    audio: np.ndarray
+    sample_rate: int
+    pause_before: float = 0.0
+    # Plays even with Voice off (the Test Output button's clip).
+    force: bool = False
+    # A streamed chunk continuing the previous clip mid-piece: no pause
+    # before it, and it may be merged with that clip before speeding up.
+    seamless: bool = False
+
+    @property
+    def seconds(self) -> float:
+        return self.pause_before + self.audio.size / self.sample_rate
+
+
 class _NullASR:
     """Last-resort stand-in when a live ASR backend switch fails and the
     fallback reload of the previous engine fails too (see
@@ -116,6 +159,18 @@ class _NullASR:
 
 
 class Pipeline:
+    # Bumped by _reset(). ASR, translation, and TTS each note it before a
+    # slow call and drop their result if it changed meanwhile - so text or
+    # speech from the previous speaker that was already mid-flight when the
+    # operator hit Reset doesn't show up after the queues were drained.
+    # (A class attribute so test stubs built with object.__new__ get it too.)
+    _reset_generation = 0
+    # Slow operator actions (anything that touches a voice or the models) run
+    # here, one at a time and in order, on the control thread - see
+    # handle_control. None until start(), in which case they run inline
+    # (the CLI's --clone at startup, tests).
+    _commands: queue.Queue | None = None
+
     def __init__(
         self,
         cfg: PipelineConfig,
@@ -199,7 +254,9 @@ class Pipeline:
         # right now, without touching the output stream from this (a
         # different) thread - see _play().
         self._playback_generation = 0
-        self._threads: list[threading.Thread] = []
+        # name -> (target, thread) for every long-running stage thread, so the
+        # watchdog can notice one that died and start it again.
+        self._threads: dict[str, tuple] = {}
         self._stop = threading.Event()
 
         if cfg.tts.startup_voice:
@@ -238,7 +295,41 @@ class Pipeline:
 
     # -- operator controls, invoked from the caption page's buttons --------
 
+    # Operator actions cheap enough to do right away on the web server's
+    # event loop: flipping a switch, dropping queued items, or handing off
+    # to a thread of their own. Everything else queues for the control
+    # thread - done inline, a voice-training transcription or a clone
+    # prompt that waits for a sentence mid-synthesis froze every connected
+    # page (captions included) for seconds, and let a Voice off or Reset
+    # pressed meanwhile wait behind it.
+    _INSTANT_ACTIONS = frozenset({
+        "start", "stop", "voice_on", "voice_off", "translate_on", "translate_off", "reset",
+        "test_output", "train_start", "train_stop", "set_min_silence", "set_output_volume",
+        "refresh_devices", "set_audio_devices", "mic_start", "mic_stop", "set_asr_backend",
+        "design_generate", "design_play",
+    })
+
     def handle_control(self, data: dict) -> None:
+        """Called on the web server's event loop for each operator action."""
+        if data.get("action") in self._INSTANT_ACTIONS:
+            self._execute_control(data)
+        else:
+            self._on_control_thread(self._execute_control, data)
+
+    def _on_control_thread(self, fn, *args) -> None:
+        """Runs fn(*args) on the control thread, after anything already
+        queued there, and broadcasts the resulting status."""
+        if self._commands is None:
+            fn(*args)
+        else:
+            self._commands.put((fn, args))
+
+    def _control_step(self) -> None:
+        fn, args = self._commands.get(timeout=QUEUE_POLL_S)
+        fn(*args)
+        self._broadcast_status()
+
+    def _execute_control(self, data: dict) -> None:
         action = data.get("action")
         vlog("control", f"operator action: {action}")
         if action == "start":
@@ -337,13 +428,15 @@ class Pipeline:
         whatever's currently playing."""
         if self.control.training.is_set():
             self.control.stop_training(discard=True)
-        self._use_startup_voice()
-        self._pending_voice = None
+        # After anything already queued - a voice being trained or picked
+        # just before Reset must not become active again after it.
+        self._on_control_thread(self._reset_voice)
         self._committed_text = ""
         self._pending_confirmation = None
         self._last_sentence_original = None
         self._last_sentence_translated = None
         self._frames_since_partial = 0
+        self._reset_generation += 1
         self._drain(self._segments)
         self._drain(self._transcripts)
         self._drain(self._translations)
@@ -360,6 +453,10 @@ class Pipeline:
             self.broadcaster.broadcast_output_level(0.0)
         if self.broadcaster:
             self.broadcaster.broadcast_reset()
+
+    def _reset_voice(self) -> None:
+        self._use_startup_voice()
+        self._pending_voice = None
 
     def _use_startup_voice(self) -> None:
         """Back to the voice the session starts with: the bundled "Default" voice
@@ -419,10 +516,13 @@ class Pipeline:
         vlog("voice", f"deleted voice {entry.name!r}")
 
     def _finish_training(self, discard: bool = False) -> None:
+        """Ends the training capture right away (so no more audio goes into
+        it), and transcribes/clones what was captured on the control thread."""
         audio = self.control.stop_training(discard=discard)
-        if audio is None:
-            return
+        if audio is not None:
+            self._on_control_thread(self._activate_trained_voice, audio)
 
+    def _activate_trained_voice(self, audio: np.ndarray) -> None:
         path = self._write_training_wav(audio)
         ref_text = self._transcribe_or_none(audio)
         # Activate the clone right away so the operator can listen to it, but
@@ -443,7 +543,10 @@ class Pipeline:
 
     def _transcribe_or_none(self, audio) -> str | None:
         try:
-            return self.asr.transcribe(audio) or None
+            # The lock: an ASR engine switch may be swapping self.asr out
+            # right now, and _asr_loop may be mid-transcribe on it.
+            with self._asr_lock:
+                return self.asr.transcribe(audio) or None
         except Exception as exc:  # a failed transcript just means a lower-quality clone, not a lost one
             print(f"[voice] couldn't transcribe reference clip, falling back to embedding-only clone: {exc}")
             return None
@@ -563,19 +666,43 @@ class Pipeline:
             return
         self.capture.push_browser_frame(samples.copy())  # copy: payload's buffer is reused by the socket
 
-    def _load_asr(self, backend: str) -> None:
+    def _load_asr(self, backend: str, check_memory: bool = True) -> None:
         """(Re)builds self.asr for `backend`, freeing whatever GPU memory the
-        current one holds first - dropping the reference and collecting
-        before building the replacement, rather than briefly holding both,
-        since two ASR engines resident at once doesn't fit an 8GB card
-        alongside translation/TTS. Must be called with _asr_lock held."""
-        if hasattr(self, "asr"):
-            del self.asr
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        current one holds first - releasing it and collecting before building
+        the replacement, rather than briefly holding both, since two ASR
+        engines resident at once doesn't fit an 8GB card alongside
+        translation/TTS. Refuses up front (raising, so the caller falls back)
+        when what's free once the old engine is gone clearly can't hold the
+        new one, rather than finding out halfway through the load with the
+        card left full of a half-built model (`check_memory`; skipped for a
+        fallback to the engine that was running a moment ago, which is
+        simply worth trying). Must be called with _asr_lock held."""
+        self._unload_asr()
         self.cfg.asr.backend = backend
+        device = self.cfg.asr.device
+        if check_memory and device.startswith("cuda") and torch.cuda.is_available():
+            free, _total = torch.cuda.mem_get_info(torch.device(device))
+            needed = estimate_vram_bytes(self.cfg.asr)
+            if free < needed:
+                raise RuntimeError(
+                    f"not enough GPU memory for {backend}: about {needed / 2**30:.1f} GB needed, "
+                    f"{free / 2**30:.1f} GB free"
+                )
         self.asr = create_asr(self.cfg.asr)
+
+    def _unload_asr(self) -> None:
+        asr = getattr(self, "asr", None)
+        if asr is None:
+            return
+        del self.asr
+        close = getattr(asr, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception as exc:
+                print(f"[asr] couldn't release the old engine cleanly: {exc!r}")
+        del asr
+        _free_gpu_memory()
 
     def _switch_asr_backend(self, backend: str) -> None:
         """Swaps the ASR engine live (e.g. Whisper <-> Parakeet from the
@@ -590,7 +717,13 @@ class Pipeline:
         released between a failed attempt and the fallback reload,
         _asr_loop could grab it in that gap, find self.asr gone, and die
         with an AttributeError - killing captions until a restart. So the
-        attempt and its fallback share one uninterrupted hold of the lock."""
+        attempt and its fallback share one uninterrupted hold of the lock.
+
+        The fallback runs only after the `except` block has ended: while
+        it's still open, the exception's traceback keeps the failed load's
+        frames - and the partly built model in them - alive, pinning its
+        GPU memory. Reloading the previous engine from inside it ran out of
+        memory for exactly that reason in real use."""
         previous = self.cfg.asr.backend
         if backend == previous:
             self._asr_busy = False
@@ -599,6 +732,7 @@ class Pipeline:
         try:
             with self._asr_lock:
                 self._stage(f"Switching speech recognition to {backend}…")
+                failure = None
                 try:
                     self._load_asr(backend)
                     switched = True
@@ -608,19 +742,23 @@ class Pipeline:
                     # CLI-startup failure but not for a live webui toggle -
                     # caught here too so a missing dependency falls back
                     # cleanly instead of leaving self.asr gone.
-                    print(f"[asr] couldn't switch to {backend!r}, reloading {previous!r}: {exc!r}")
+                    failure = repr(exc)
+                if not switched:
+                    print(f"[asr] couldn't switch to {backend!r}, reloading {previous!r}: {failure}")
+                    _free_gpu_memory()
+                    fallback_failure = None
                     try:
-                        self._load_asr(previous)
+                        self._load_asr(previous, check_memory=False)
                     except (Exception, SystemExit) as exc2:
-                        # The fallback failed too (e.g. the failed switch left
-                        # GPU memory fragmented/exhausted) - leaving self.asr
-                        # undefined would crash _asr_loop's next transcribe()
-                        # call outright and kill that thread. A no-op stand-in
-                        # keeps every thread alive so the operator can retry
-                        # (or restart the service) once whatever's holding GPU
-                        # memory clears, instead of losing captions silently
-                        # until someone notices and restarts it.
-                        print(f"[asr] fallback reload of {previous!r} also failed: {exc2!r}")
+                        fallback_failure = repr(exc2)
+                    if fallback_failure is not None:
+                        # The fallback failed too - leaving self.asr undefined
+                        # would crash _asr_loop's next transcribe() call. A
+                        # no-op stand-in keeps every thread alive so the
+                        # operator can retry (or restart the service) once
+                        # whatever's holding GPU memory clears, instead of
+                        # losing captions silently until someone notices.
+                        print(f"[asr] fallback reload of {previous!r} also failed: {fallback_failure}")
                         self.cfg.asr.backend = previous
                         self.asr = _NullASR()
             if switched:
@@ -818,16 +956,39 @@ class Pipeline:
     # just under 3 frames' worth so it catches that one instead.
     _LEVEL_METER_INTERVAL_S = 0.095
 
+    def _run_stage(self, name: str, step) -> None:
+        """Calls `step()` - one queue item's worth of a stage's work - until
+        the pipeline stops. An exception from one item is logged (with its
+        traceback) and that item is dropped, instead of ending the thread:
+        an uncaught one used to kill the stage silently for the rest of the
+        session (e.g. one CUDA out-of-memory error in translation meant no
+        more translations until a restart). A GPU out-of-memory error also
+        releases PyTorch's cached-but-unused memory, which is often enough
+        for the next item to fit."""
+        while not self._stop.is_set():
+            try:
+                step()
+            except queue.Empty:
+                pass  # nothing arrived within QUEUE_POLL_S; check _stop and wait again
+            except Exception as exc:
+                print(f"[{name}] error, skipping this item: {exc!r}")
+                traceback.print_exc()
+                if _is_cuda_oom(exc):
+                    _free_gpu_memory()
+                self._stop.wait(STAGE_ERROR_BACKOFF_S)
+
     def _segment_loop(self) -> None:
         self._frames_since_partial = 0
-        last_level_broadcast = 0.0
-        while not self._stop.is_set():
-            frame = self.capture.frames.get()
-            now = time.monotonic()
-            if now - last_level_broadcast >= self._LEVEL_METER_INTERVAL_S:
-                self._broadcast_input_level(frame)
-                last_level_broadcast = now
-            self._process_captured_frame(frame)
+        self._last_level_broadcast = 0.0
+        self._run_stage("vad", self._segment_step)
+
+    def _segment_step(self) -> None:
+        frame = self.capture.frames.get(timeout=QUEUE_POLL_S)
+        now = time.monotonic()
+        if now - self._last_level_broadcast >= self._LEVEL_METER_INTERVAL_S:
+            self._broadcast_input_level(frame)
+            self._last_level_broadcast = now
+        self._process_captured_frame(frame)
 
     def _process_captured_frame(self, frame: np.ndarray) -> None:
         """One frame's worth of VAD/segmentation bookkeeping: closes and
@@ -843,7 +1004,6 @@ class Pipeline:
                 self._broadcast_status()
                 if reached_target:
                     self._finish_training()
-                    self._broadcast_status()
             if self.control.active.is_set():
                 self._segments.put(("final", segment))
             return
@@ -868,17 +1028,32 @@ class Pipeline:
         self._segments.put(("partial", partial_audio))
 
     def _asr_loop(self) -> None:
-        while not self._stop.is_set():
-            kind, segment = self._segments.get()
-            t0 = time.monotonic()
+        self._run_stage("asr", self._asr_step)
+
+    def _asr_step(self) -> None:
+        kind, segment = self._segments.get(timeout=QUEUE_POLL_S)
+        generation = self._reset_generation
+        t0 = time.monotonic()
+        try:
             with self._asr_lock:
                 text = self.asr.transcribe(segment)
-            processing_s = time.monotonic() - t0
-            audio_s = len(segment) / self.cfg.audio.sample_rate
-            vlog("asr", f"transcribed {audio_s:.1f}s of audio ({kind}) in {processing_s:.2f}s")
-            self._last_asr_audio_s = audio_s
-            self._broadcast_rtf("asr", processing_s, audio_s)
-            self._commit_new_asr_text(text, final=kind == "final")
+        except Exception:
+            if kind == "final":
+                # The segment's already-committed sentences stay committed;
+                # the next segment has to start from a clean slate, or it'd be
+                # compared against this one's leftover _committed_text.
+                self._committed_text = ""
+                self._pending_confirmation = None
+            raise
+        processing_s = time.monotonic() - t0
+        audio_s = len(segment) / self.cfg.audio.sample_rate
+        vlog("asr", f"transcribed {audio_s:.1f}s of audio ({kind}) in {processing_s:.2f}s")
+        self._last_asr_audio_s = audio_s
+        self._broadcast_rtf("asr", processing_s, audio_s)
+        if generation != self._reset_generation:
+            vlog("asr", "dropping a transcript of audio from before Reset")
+            return
+        self._commit_new_asr_text(text, final=kind == "final")
 
     def _commit_new_asr_text(self, full_text: str, final: bool) -> None:
         """Pushes whatever part of `full_text` - the growing (partial) or
@@ -1005,12 +1180,14 @@ class Pipeline:
             )
 
     def _translate_loop(self) -> None:
-        while not self._stop.is_set():
-            text, first_seq, context = self._transcripts.get()
-            if not self.control.translation_enabled.is_set():
-                vlog("translate", "translation is off, skipping")
-                continue
-            self._translate_segment(text, first_seq, context)
+        self._run_stage("translate", self._translate_step)
+
+    def _translate_step(self) -> None:
+        text, first_seq, context = self._transcripts.get(timeout=QUEUE_POLL_S)
+        if not self.control.translation_enabled.is_set():
+            vlog("translate", "translation is off, skipping")
+            return
+        self._translate_segment(text, first_seq, context)
 
     def _translate_segment(self, text: str, first_seq: int | None = None, context: str | None = None) -> None:
         """Translates one ASR segment's text and pushes/broadcasts/queues each
@@ -1032,8 +1209,12 @@ class Pipeline:
         _strip_repeated_prefix catches and removes it from the first
         sentence's translation, since the context sentence's own translation
         was already shown on its own line."""
+        generation = self._reset_generation
         t0 = time.monotonic()
         for i, translated in enumerate(self.translator.translate_sentences(text, context=context)):
+            if generation != self._reset_generation:
+                vlog("translate", "dropping the rest of a segment from before Reset")
+                return
             processing_s = time.monotonic() - t0
             vlog("translate", f"translated a sentence in {processing_s:.2f}s")
             continues = i == 0 and bool(context)
@@ -1057,44 +1238,61 @@ class Pipeline:
             t0 = time.monotonic()
 
     def _tts_loop(self) -> None:
-        while not self._stop.is_set():
-            text, continues = self._translations.get()
-            if not self.control.voice_enabled.is_set():
-                vlog("tts", "voice is off, skipping synthesis")
+        self._run_stage("tts", self._tts_step)
+
+    def _tts_step(self) -> None:
+        text, continues = self._translations.get(timeout=QUEUE_POLL_S)
+        if not self.control.voice_enabled.is_set():
+            vlog("tts", "voice is off, skipping synthesis")
+            return
+        generation = self._reset_generation
+        t0 = time.monotonic()
+        # Each piece is handed to the playback thread as soon as it is ready,
+        # so the rest of the sentence (and the next one) synthesizes while
+        # this plays. A failure raises out to _run_stage, which skips just
+        # this sentence.
+        first_piece = True
+        for audio, sample_rate, seamless in self._synthesize_pieces(text):
+            if generation != self._reset_generation or not self.control.voice_enabled.is_set():
+                vlog("tts", "Reset or Voice off mid-sentence; not synthesizing the rest")
+                return
+            if not audio.size:
                 continue
+            processing_s = time.monotonic() - t0
+            audio_s = audio.size / sample_rate
+            vlog("tts", f"synthesized {audio_s:.1f}s of speech in {processing_s:.2f}s "
+                        f"({self._translations.qsize()} sentences waiting)")
+            self._broadcast_rtf("voice", processing_s, audio_s)
+            # A longer pause before a new translated text, a shorter one
+            # between the sentences within it - and also for the first
+            # piece of a sentence ASR itself flagged as continuing the
+            # previous one (see _translate_segment): VAD split it into
+            # a separate segment, but it's still one spoken thought, so
+            # it's paced like a continuation, not introduced fresh. A
+            # streamed chunk that continues the same piece mid-word gets
+            # no pause at all.
+            if seamless:
+                pause = 0.0
+            elif first_piece:
+                pause = self.cfg.audio.pause_within_s if continues else self.cfg.audio.pause_between_s
+            else:
+                pause = self.cfg.audio.pause_within_s
+            self._audio.put(_Clip(audio, sample_rate, pause, seamless=seamless))
+            first_piece = False
             t0 = time.monotonic()
-            try:
-                # Each clip is handed to the playback thread as soon as it is
-                # ready, so the next sentence synthesizes while this one plays.
-                first_piece = True
-                for audio, sample_rate in self._synthesize_pieces(text):
-                    if not audio.size:
-                        continue
-                    processing_s = time.monotonic() - t0
-                    audio_s = audio.size / sample_rate
-                    vlog("tts", f"synthesized {audio_s:.1f}s of speech in {processing_s:.2f}s "
-                                f"({self._translations.qsize()} sentences waiting)")
-                    self._broadcast_rtf("voice", processing_s, audio_s)
-                    # A longer pause before a new translated text, a shorter one
-                    # between the sentences within it - and also for the first
-                    # piece of a sentence ASR itself flagged as continuing the
-                    # previous one (see _translate_segment): VAD split it into
-                    # a separate segment, but it's still one spoken thought, so
-                    # it's paced like a continuation, not introduced fresh.
-                    between_pause = self.cfg.audio.pause_within_s if continues else self.cfg.audio.pause_between_s
-                    pause = between_pause if first_piece else self.cfg.audio.pause_within_s
-                    self._audio.put((audio, sample_rate, pause))
-                    first_piece = False
-                    t0 = time.monotonic()
-            except Exception as exc:  # one bad sentence shouldn't kill voicing for the rest of the session
-                print(f"[tts] synthesis failed, skipping this sentence: {exc!r}")
 
     def _synthesize_pieces(self, text: str):
+        """(audio, sample_rate, seamless) per piece. Backends that stream
+        (XTTS's stream_chunks) mark each chunk after the first of a piece
+        seamless; the others yield whole pieces."""
+        chunks = getattr(self.tts, "stream_chunks", None)
+        if chunks is not None:
+            yield from chunks(text)
+            return
         stream = getattr(self.tts, "synthesize_stream", None)
-        if stream is not None:
-            yield from stream(text)
-        else:
-            yield self.tts.synthesize(text)
+        pieces = stream(text) if stream is not None else [self.tts.synthesize(text)]
+        for audio, sample_rate in pieces:
+            yield audio, sample_rate, False
 
     def _queue_test_output(self) -> None:
         """Loads the pre-rendered "Testing 1 2 3" clip and queues it on the
@@ -1109,40 +1307,128 @@ class Pipeline:
         except Exception as exc:
             print(f"[audio] couldn't load the test output clip: {exc!r}")
             return
-        self._audio.put((audio, sample_rate, 0.0, True))
+        self._audio.put(_Clip(audio, sample_rate, force=True))
 
     def _playback_loop(self) -> None:
-        while not self._stop.is_set():
-            item = self._audio.get()
-            audio, sample_rate, pause_before = item[:3]
-            force = item[3] if len(item) > 3 else False  # test-output clips play even with Voice off
-            if not force and not self.control.voice_enabled.is_set():
-                continue  # voice was switched off while this was queued
-            # Broadcast before playing locally, not after: play() blocks for
-            # close to the clip's real duration (it paces with the sound
-            # card draining its buffer), so a connected browser would
-            # otherwise only receive the clip once local playback had
-            # already finished - the 3-5s "streaming delay" this was
-            # written to fix. broadcast_audio itself is fire-and-forget
-            # (schedules onto the server's event loop and returns
-            # immediately), so this doesn't delay local playback at all.
-            if self.broadcaster:
-                self.broadcaster.broadcast_audio(audio, sample_rate)
-            try:
-                self._play(audio, sample_rate, pause_before, force)
-            except Exception as exc:
-                print(f"[audio] playback failed: {exc!r}")
-                # Typically the output device went stale (laptop slept, the
-                # default output changed) - re-initialize audio and give this
-                # same clip one more try instead of dropping it, and then
-                # every clip after it.
-                if self._recover_audio("playback failed"):
-                    try:
-                        self._play(audio, sample_rate, pause_before, force)
-                    except Exception as exc2:
-                        print(f"[audio] playback still failing after re-initializing audio: {exc2!r}")
+        self._run_stage("playback", self._playback_step)
 
-    def _play(self, audio, sample_rate: int, pause_before: float, force: bool = False) -> None:
+    def _playback_step(self) -> None:
+        if self.playback.holding_tail:
+            # The last piece may continue in another streamed chunk: wait for
+            # it only until just before the sound card runs out of what's
+            # already written, then play out the resampler's held-back tail.
+            try:
+                clip = self._audio.get(timeout=max(0.01, self.playback.pending_s() - 0.03))
+            except queue.Empty:
+                self.playback.flush()
+                return
+        else:
+            clip = self._audio.get(timeout=QUEUE_POLL_S)
+        if not clip.force and not self.control.voice_enabled.is_set():
+            return  # voice was switched off while this was queued
+        clip = self._catch_up(clip)
+        # Broadcast before playing locally, not after: play() blocks for
+        # close to the clip's real duration (it paces with the sound
+        # card draining its buffer), so a connected browser would
+        # otherwise only receive the clip once local playback had
+        # already finished - the 3-5s "streaming delay" this was
+        # written to fix. broadcast_audio itself is fire-and-forget
+        # (schedules onto the server's event loop and returns
+        # immediately), so this doesn't delay local playback at all.
+        if self.broadcaster:
+            self.broadcaster.broadcast_audio(clip.audio, clip.sample_rate)
+        try:
+            self._play(clip.audio, clip.sample_rate, clip.pause_before, clip.force, clip.seamless)
+        except Exception as exc:
+            print(f"[audio] playback failed: {exc!r}")
+            # Typically the output device went stale (laptop slept, the
+            # default output changed) - re-initialize audio and give this
+            # same clip one more try instead of dropping it, and then
+            # every clip after it.
+            if self._recover_audio("playback failed"):
+                try:
+                    self._play(clip.audio, clip.sample_rate, clip.pause_before, clip.force)
+                except Exception as exc2:
+                    print(f"[audio] playback still failing after re-initializing audio: {exc2!r}")
+
+    # Whether playback is currently sped up to work off a backlog - see _catch_up.
+    _catching_up = False
+
+    def _playback_backlog_s(self) -> float:
+        """Seconds of synthesized speech waiting to be heard: every queued
+        clip (with its lead-in pause) plus what's left of the one playing."""
+        with self._audio.mutex:
+            queued = sum(clip.seconds for clip in self._audio.queue)
+        return queued + self.playback.pending_s()
+
+    def _catch_up(self, clip: _Clip) -> _Clip:
+        """Speeds `clip` up (pitch preserved) while playback is lagging - see
+        AudioConfig.catchup_*. Only *playback* lag counts: speech already
+        synthesized and waiting its turn, which is what makes the English
+        drift further and further behind the speaker during a long stretch
+        of continuous talking. Hysteresis keeps it from flapping: it starts
+        at catchup_start_s of backlog and keeps going until the backlog is
+        down to catchup_stop_s, then speech is back to normal speed."""
+        if clip.force:
+            return clip
+        cfg = self.cfg.audio
+        if cfg.catchup_max_rate <= 1.0:
+            return clip
+        backlog = self._playback_backlog_s()
+        if cfg.max_backlog_s is not None and backlog > cfg.max_backlog_s:
+            clip, backlog = self._skip_backlog(clip, backlog)
+        if not self._catching_up and backlog >= cfg.catchup_start_s:
+            self._catching_up = True
+            print(f"[audio] speech playback is {backlog:.0f}s behind; speeding it up to catch up")
+        elif self._catching_up and backlog <= cfg.catchup_stop_s:
+            self._catching_up = False
+            print("[audio] speech playback caught up; back to normal speed")
+        if not self._catching_up:
+            return clip
+
+        # Streamed chunks of the same piece that are already waiting are
+        # stretched together with this one, so the speed-up doesn't put a
+        # seam in the middle of a word.
+        parts = [clip]
+        with self._audio.mutex:
+            while self._audio.queue and self._audio.queue[0].seamless:
+                parts.append(self._audio.queue.popleft())
+        if len(parts) > 1:
+            clip = _Clip(
+                np.concatenate([part.audio for part in parts]), clip.sample_rate, clip.pause_before, seamless=clip.seamless
+            )
+        span = max(cfg.catchup_full_s - cfg.catchup_stop_s, 1e-6)
+        rate = cfg.catchup_min_rate + (cfg.catchup_max_rate - cfg.catchup_min_rate) * (backlog - cfg.catchup_stop_s) / span
+        rate = min(cfg.catchup_max_rate, max(cfg.catchup_min_rate, rate))
+        vlog("audio", f"playback {backlog:.1f}s behind; playing the next {clip.seconds:.1f}s at {rate:.2f}x")
+        return _Clip(time_stretch(clip.audio, clip.sample_rate, rate), clip.sample_rate, clip.pause_before / rate, seamless=clip.seamless)
+
+    def _skip_backlog(self, clip: _Clip, backlog: float) -> tuple[_Clip, float]:
+        """Drops the oldest waiting speech, whole sentences at a time (a
+        sentence's streamed chunks go with it), until the backlog is under
+        AudioConfig.max_backlog_s. Returns the clip to play next and the new
+        backlog."""
+        limit = self.cfg.audio.max_backlog_s
+        skipped = 0.0
+        with self._audio.mutex:
+            waiting = self._audio.queue
+            while backlog > limit and waiting:
+                # Drop `clip` (already out of the queue, so not part of
+                # `backlog`) and move on to the next sentence, skipping the
+                # rest of this one's streamed chunks along with it.
+                skipped += clip.seconds
+                clip = waiting.popleft()
+                backlog -= clip.seconds
+                while clip.seamless and waiting:
+                    skipped += clip.seconds
+                    clip = waiting.popleft()
+                    backlog -= clip.seconds
+        if skipped:
+            print(f"[audio] speech playback fell {backlog + skipped:.0f}s behind even sped up; "
+                  f"skipped {skipped:.0f}s of it to catch up")
+        return clip, backlog
+
+    def _play(self, audio, sample_rate: int, pause_before: float, force: bool = False, seamless: bool = False) -> None:
         generation = self._playback_generation
 
         def should_continue() -> bool:
@@ -1154,6 +1440,7 @@ class Pipeline:
             audio, sample_rate=sample_rate, pause_before=pause_before,
             should_continue=should_continue,
             on_chunk=self._broadcast_output_level,
+            seamless=seamless,
         )
 
     def _recover_audio(self, reason: str) -> bool:
@@ -1214,27 +1501,45 @@ class Pipeline:
         if self.capture.is_stalled(INPUT_STALL_S):
             self._recover_audio("input stream stopped delivering audio")
 
+    def _check_stage_threads(self) -> None:
+        """Starts any stage thread that has died again. _run_stage already
+        survives an exception from any one item, so this only catches what
+        gets past that (a BaseException, a bug in the loop itself) - but
+        without it, that stage would be gone for the rest of the session with
+        nothing but a traceback in the log to show for it."""
+        for name, (target, thread) in list(self._threads.items()):
+            if not thread.is_alive() and not self._stop.is_set():
+                print(f"[{name}] stage thread died; restarting it")
+                self._start_thread(name, target)
+
     def _audio_watchdog_loop(self) -> None:
         while not self._stop.wait(1.0):
-            try:
-                self._check_audio_health()
-            except Exception as exc:  # a health check must never take itself down
-                print(f"[audio] health check failed: {exc!r}")
+            for check in (self._check_audio_health, self._check_stage_threads):
+                try:
+                    check()
+                except Exception as exc:  # a health check must never take itself down
+                    print(f"[watchdog] health check failed: {exc!r}")
+
+    def _start_thread(self, name: str, target) -> None:
+        thread = threading.Thread(target=target, name=f"sts-{name}", daemon=True)
+        thread.start()
+        self._threads[name] = (target, thread)
 
     def start(self) -> None:
+        self._commands = queue.Queue()
         self.capture.start()
         self._stage("Listening", ready=True)
-        for target in (
-            self._segment_loop,
-            self._asr_loop,
-            self._translate_loop,
-            self._tts_loop,
-            self._playback_loop,
-            self._audio_watchdog_loop,
+        for name, target in (
+            ("control", lambda: self._run_stage("control", self._control_step)),
+            ("vad", self._segment_loop),
+            ("asr", self._asr_loop),
+            ("translate", self._translate_loop),
+            ("tts", self._tts_loop),
+            ("playback", self._playback_loop),
         ):
-            thread = threading.Thread(target=target, daemon=True)
-            thread.start()
-            self._threads.append(thread)
+            self._start_thread(name, target)
+        # Not in self._threads: it's what watches them.
+        threading.Thread(target=self._audio_watchdog_loop, name="sts-watchdog", daemon=True).start()
         self._broadcast_status()
         self._broadcast_library()
         self._broadcast_devices()
@@ -1242,5 +1547,10 @@ class Pipeline:
 
     def stop(self) -> None:
         self._stop.set()
+        # Every stage wakes up within QUEUE_POLL_S to notice; one in the
+        # middle of a long model call is a daemon thread and doesn't hold up
+        # the exit.
+        for _, thread in self._threads.values():
+            thread.join(timeout=QUEUE_POLL_S * 2)
         self.capture.stop()
         self.playback.stop()

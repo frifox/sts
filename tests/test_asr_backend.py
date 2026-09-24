@@ -38,6 +38,8 @@ def _switch_pipeline(monkeypatch, asr_factory):
     from sts.pipeline import Pipeline
 
     monkeypatch.setattr("sts.pipeline.create_asr", asr_factory)
+    # Keeps _load_asr's free-memory check off whatever GPU the test machine has.
+    monkeypatch.setattr("sts.pipeline.torch.cuda.is_available", lambda: False)
 
     class Broadcaster:
         engines = None
@@ -225,3 +227,58 @@ def test_failed_switch_and_failed_fallback_never_releases_the_lock_without_an_en
 
     assert p._asr_lock.released_without_asr == 0
     assert p.asr.transcribe(None) == ""  # ended on the _NullASR stand-in, not missing
+
+
+def test_switch_is_refused_up_front_when_the_gpu_clearly_lacks_room(monkeypatch):
+    """The real failure: a switch to Parakeet ran out of GPU memory halfway
+    through loading, which left too little for the fallback to Whisper too.
+    Now a switch that can't fit is refused before anything is built, and the
+    previous engine comes back (its reload isn't held to the estimate)."""
+    built = []
+
+    def fake_create_asr(cfg):
+        built.append(cfg.backend)
+        return f"{cfg.backend}-engine"
+
+    p = _switch_pipeline(monkeypatch, fake_create_asr)
+    monkeypatch.setattr("sts.pipeline.torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("sts.pipeline.torch.cuda.mem_get_info", lambda device: (200 * 2**20, 8 * 2**30))
+    p.asr = "whisper-engine"
+    p.cfg.asr.backend = "whisper"
+
+    p._switch_asr_backend("parakeet")
+
+    assert built == ["whisper"]  # parakeet was never attempted
+    assert p.asr == "whisper-engine"
+    assert p.cfg.asr.backend == "whisper"
+
+
+def test_switching_releases_the_old_engine_before_building_the_new_one(monkeypatch):
+    events = []
+
+    class OldEngine:
+        def close(self):
+            events.append("closed old")
+
+    def fake_create_asr(cfg):
+        events.append(f"built {cfg.backend}")
+        return f"{cfg.backend}-engine"
+
+    p = _switch_pipeline(monkeypatch, fake_create_asr)
+    p.asr = OldEngine()
+    p.cfg.asr.backend = "whisper"
+
+    p._switch_asr_backend("parakeet")
+
+    assert events == ["closed old", "built parakeet"]
+
+
+def test_estimate_vram_bytes_scales_with_model_and_compute_type():
+    from sts.asr import estimate_vram_bytes
+
+    int8 = estimate_vram_bytes(ASRConfig(backend="whisper", model_size="large-v3", compute_type="int8_float16"))
+    fp16 = estimate_vram_bytes(ASRConfig(backend="whisper", model_size="large-v3", compute_type="float16"))
+    small = estimate_vram_bytes(ASRConfig(backend="whisper", model_size="small", compute_type="float16"))
+    parakeet = estimate_vram_bytes(ASRConfig(backend="parakeet"))
+    assert small < int8 < fp16
+    assert 1 * 2**30 < parakeet < 2 * 2**30

@@ -601,6 +601,21 @@ close, clean recording. `--qwen-quality-retries N` (off by default) regenerates 
 take that is clearly duller than that voice's own recent ones, at the cost of an
 extra generation each time.
 
+### Streaming and catch-up
+
+With XTTS, each sentence starts playing about one second of audio after
+synthesis begins, and the rest is generated while it plays, instead of the
+whole sentence being rendered first.
+
+If synthesized speech piles up waiting to be heard (a long stretch of
+continuous talking where the English runs longer than the Russian), playback
+speeds up, keeping the pitch, until it has caught up, then returns to normal
+speed. It starts once 8 s is waiting and ramps from 1.1x to at most 1.35x,
+and stops once the backlog is down to 3 s. In the rare case that it falls a
+full minute behind even so, the oldest waiting sentences are skipped. The
+thresholds are the `catchup_*` and `max_backlog_s` settings in `AudioConfig`
+(`sts/config.py`).
+
 ## Translating a recorded video
 
 `translate.py` translates a whole video (Russian -> English) offline and

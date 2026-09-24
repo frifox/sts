@@ -12,7 +12,7 @@ import pytest
 from sts.audio.capture import AudioCapture
 from sts.config import AudioConfig, PipelineConfig
 from sts.control import RecognitionControl
-from sts.pipeline import Pipeline
+from sts.pipeline import Pipeline, _Clip
 
 
 # -- AudioCapture.is_stalled ------------------------------------------------
@@ -213,7 +213,7 @@ class _FlakyPlayback:
         self.played = []
         self.forgot = 0
 
-    def play(self, audio, sample_rate, pause_before, should_continue, on_chunk=None):
+    def play(self, audio, sample_rate, pause_before, should_continue, on_chunk=None, seamless=False):
         if self.fail_times > 0:
             self.fail_times -= 1
             raise RuntimeError("Error opening OutputStream: Internal PortAudio error -9986")
@@ -222,11 +222,16 @@ class _FlakyPlayback:
     def forget_devices(self):
         self.forgot += 1
 
+    holding_tail = False
+
+    def pending_s(self):
+        return 0.0
+
 
 def _run_playback_loop(p):
     p._stop = threading.Event()
     p._audio = queue.Queue()
-    p._audio.put((__import__("numpy").zeros(10, dtype="float32"), 24_000, 0.0))
+    p._audio.put(_Clip(__import__("numpy").zeros(10, dtype="float32"), 24_000))
     p.control = RecognitionControl(16000)
     p.control.enable_voice()
     p._playback_generation = 0

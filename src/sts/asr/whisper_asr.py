@@ -78,6 +78,11 @@ class WhisperASR:
             device = "cpu"
         self.model = WhisperModel(cfg.model_size, device=device, compute_type=cfg.compute_type)
 
+    def close(self) -> None:
+        """Releases the model's GPU memory now, even if something (a
+        traceback, a stray reference) still holds on to this object."""
+        self.model.model.unload_model()
+
     def transcribe(self, audio: np.ndarray | str) -> str:
         # faster-whisper accepts either a raw array (live-captured segments)
         # or a file path (e.g. a pre-supplied --clone reference clip) directly.

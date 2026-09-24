@@ -181,3 +181,52 @@ def test_pipeline_play_is_cut_short_by_a_playback_generation_bump(stub_output):
     written = stub_output["stream"].written
     assert 0 < len(written) < 4  # cut short, not the whole clip
     assert p._playback_generation == 1  # the bump this test made, not reverted
+
+
+def _device_at_44k(monkeypatch):
+    """The real card only takes 44.1kHz, so every 24kHz clip is resampled."""
+
+    def check(**kw):
+        if kw.get("samplerate") != 44_100:
+            raise ValueError("Invalid sample rate")
+
+    monkeypatch.setattr("sts.audio.playback.sd.check_output_settings", check)
+    monkeypatch.setattr(
+        "sts.audio.playback.sd.query_devices",
+        lambda device, kind: {"index": 0, "name": "Stub Output", "default_samplerate": 44_100.0},
+    )
+
+
+def test_seamless_chunks_resample_exactly_like_one_whole_clip(stub_output, monkeypatch):
+    """XTTS streams a sentence in ~1s chunks. Resampled one by one, each
+    chunk's edges would be filtered against silence - a small seam at every
+    join. Resampled as one continuing stream, the joins are exact."""
+    import soxr
+
+    _device_at_44k(monkeypatch)
+    rng = np.random.default_rng(0)
+    audio = (rng.standard_normal(24_000 * 2) * 0.1).astype(np.float32)
+    pb = AudioPlayback(AudioConfig())
+
+    pb.play(audio[:17_000], sample_rate=24_000)
+    pb.play(audio[17_000:30_000], sample_rate=24_000, seamless=True)
+    pb.play(audio[30_000:], sample_rate=24_000, seamless=True)
+    assert pb.holding_tail
+    pb.flush()
+    assert not pb.holding_tail
+
+    written = np.concatenate(stub_output["stream"].written).ravel()
+    whole = soxr.resample(audio, 24_000, 44_100, quality="HQ")
+    assert len(written) == len(whole)
+    assert np.abs(written - whole).max() < 1e-6
+
+
+def test_a_new_piece_plays_out_the_previous_pieces_held_tail_first(stub_output, monkeypatch):
+    _device_at_44k(monkeypatch)
+    pb = AudioPlayback(AudioConfig())
+    one_second = np.full(24_000, 0.1, dtype=np.float32)
+    pb.play(one_second, sample_rate=24_000)
+    pb.play(one_second, sample_rate=24_000)  # not seamless: a new piece
+    pb.flush()
+    written = sum(len(c) for c in stub_output["stream"].written)
+    assert written == 2 * 44_100  # nothing of the first piece was lost

@@ -99,7 +99,11 @@ class CaptionBroadcaster:
     async def _send_to_all(self, message: dict) -> None:
         dead = []
         payload = json.dumps(message)
-        for client in self._clients:
+        # A snapshot: a page connecting or disconnecting during one of the
+        # awaits below changes the set, which would end this loop with
+        # "Set changed size during iteration" - and the message would be
+        # lost for every client after that point.
+        for client in list(self._clients):
             try:
                 await client.send_text(payload)
             except Exception:
@@ -109,7 +113,7 @@ class CaptionBroadcaster:
 
     async def _send_bytes_to_all(self, payload: bytes) -> None:
         dead = []
-        for client in self._clients:
+        for client in list(self._clients):  # a snapshot - see _send_to_all
             try:
                 await client.send_bytes(payload)
             except Exception:

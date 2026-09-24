@@ -10,8 +10,7 @@ import time
 
 import numpy as np
 import sounddevice as sd
-import torch
-import torchaudio
+import soxr
 
 from sts.config import AudioConfig
 from sts.log import vlog
@@ -35,6 +34,13 @@ class AudioPlayback:
         self._lock = threading.Lock()
         self._scheduled_end = 0.0  # monotonic time at which queued audio finishes playing
         self._resolved_rates: dict[int, int] = {}  # clip rate -> device-accepted rate, probed once each
+        # Converts clip rate -> device rate when they differ, as one
+        # continuous stream across the seamless chunks of a piece (see
+        # play()'s `seamless`), so chunk joins resample exactly like the
+        # piece would have in one go - no filter-edge seam every chunk.
+        # It holds back a few ms at the end until flush() or the next clip.
+        self._resampler: soxr.ResampleStream | None = None
+        self._resampler_rates: tuple[int, int] | None = None
 
     def _target_rate(self, requested: int) -> int:
         """The rate to actually open the stream at: `requested` if the output
@@ -75,6 +81,7 @@ class AudioPlayback:
         return self._stream, target
 
     def _close_stream(self) -> None:
+        self._resampler = None
         if self._stream is not None:
             stream, self._stream, self._stream_rate = self._stream, None, None
             try:
@@ -104,6 +111,7 @@ class AudioPlayback:
         pause_before: float = 0.0,
         should_continue=None,
         on_chunk=None,
+        seamless: bool = False,
     ) -> None:
         """Queues `audio` on the output stream. The write blocks only until the
         stream's buffer has room, so back-to-back calls play continuously.
@@ -129,11 +137,22 @@ class AudioPlayback:
         given) rather than as one big write, so `cfg.volume` - read fresh per
         chunk, not baked in once up front - takes effect within ~50ms of the
         operator dragging the volume slider, even mid-clip, instead of only
-        on the next clip pulled off the queue."""
+        on the next clip pulled off the queue.
+
+        `seamless` marks a streamed chunk that continues the previous clip
+        mid-piece: it's resampled as a continuation of it. Otherwise the
+        previous piece's held-back resampler tail is played out first."""
         with self._lock:
             stream, target_rate = self._ensure_stream(sample_rate)
+            duration = len(audio) / sample_rate
+            tail = np.zeros(0, dtype=np.float32)
+            if not seamless or self._resampler_rates != (sample_rate, target_rate):
+                tail = self._take_resampler_tail()
             if target_rate != sample_rate:
-                audio = torchaudio.functional.resample(torch.from_numpy(audio), sample_rate, target_rate).numpy()
+                if self._resampler is None:
+                    self._resampler = soxr.ResampleStream(sample_rate, target_rate, 1, dtype="float32", quality="HQ")
+                    self._resampler_rates = (sample_rate, target_rate)
+                audio = self._resampler.resample_chunk(np.ascontiguousarray(audio, dtype=np.float32))
                 sample_rate = target_rate
             samples = np.ascontiguousarray(audio, dtype=np.float32).reshape(-1, 1)
             now = time.monotonic()
@@ -141,18 +160,48 @@ class AudioPlayback:
             self._scheduled_end = max(now, self._scheduled_end) + pad + len(samples) / sample_rate
             if pad > 0:
                 samples = np.concatenate([np.zeros((int(pad * sample_rate), 1), dtype=np.float32), samples])
-        vlog("audio", f"playing {len(audio) / sample_rate:.1f}s of speech" + (f" after a {pad:.1f}s pause" if pad > 0 else ""))
+            if tail.size:
+                samples = np.concatenate([tail.reshape(-1, 1), samples])
+        vlog("audio", f"playing {duration:.1f}s of speech" + (f" after a {pad:.1f}s pause" if pad > 0 else ""))
         chunk_frames = max(1, int(0.05 * sample_rate))
         for start in range(0, len(samples), chunk_frames):
             if should_continue is not None and not should_continue():
                 with self._lock:
                     self._scheduled_end = 0.0  # what got cut short isn't "queued" anymore
+                    self._resampler = None
                 vlog("audio", "playback cut short")
                 return
             chunk = samples[start : start + chunk_frames] * self.cfg.volume
             stream.write(chunk)
             if on_chunk:
                 on_chunk(chunk)
+
+    def _take_resampler_tail(self) -> np.ndarray:
+        """Ends the current resampling stream and returns what it was still
+        holding back. Call with _lock held."""
+        resampler, self._resampler, self._resampler_rates = self._resampler, None, None
+        if resampler is None:
+            return np.zeros(0, dtype=np.float32)
+        return resampler.resample_chunk(np.zeros(0, dtype=np.float32), last=True)
+
+    def flush(self) -> None:
+        """Plays out the last few ms of the previous piece that the
+        resampler was holding back in case a seamless chunk followed it -
+        to be called once nothing more of that piece is coming soon."""
+        with self._lock:
+            tail = self._take_resampler_tail()
+            stream = self._stream
+        if tail.size and stream is not None:
+            stream.write((tail * self.cfg.volume).reshape(-1, 1))
+
+    @property
+    def holding_tail(self) -> bool:
+        return self._resampler is not None
+
+    def pending_s(self) -> float:
+        """Seconds of already-written audio (and its lead-in pause) still to
+        play out - what's left of the current clip."""
+        return max(0.0, self._scheduled_end - time.monotonic())
 
     def stop(self) -> None:
         """Cuts off whatever is currently playing (used when the operator resets)."""

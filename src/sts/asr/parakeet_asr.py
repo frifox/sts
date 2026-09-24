@@ -9,6 +9,7 @@ Whisper has in testing; revisit if that changes.
 """
 
 import numpy as np
+import torch
 
 from sts.config import ASRConfig
 from sts.textclean import clean_transcript, restore_unk_quotes
@@ -21,15 +22,27 @@ class ParakeetASR:
         self.cfg = cfg
         import nemo.collections.asr as nemo_asr  # heavy (NeMo + lightning); only paid for when selected
 
-        self.model = nemo_asr.models.ASRModel.from_pretrained(model_name=MODEL_NAME)
-        if cfg.device == "cuda":
+        # Loaded onto the CPU first, then converted, then moved: from_pretrained
+        # would otherwise put the fp32 checkpoint (~2.4GB) straight onto the
+        # GPU before .half() halves it - a peak that doesn't fit on an 8GB
+        # card next to translation and TTS, and exactly how a live switch to
+        # Parakeet ran out of memory in real use.
+        self.model = nemo_asr.models.ASRModel.from_pretrained(
+            model_name=MODEL_NAME, map_location=torch.device("cpu")
+        )
+        if cfg.device.startswith("cuda"):
             # Not the fp32 the model loads in by default: Turing and newer
             # have native fp16 tensor cores, measured ~13% less VRAM and
             # ~40% faster than fp32 on an RTX 2070 with no quality loss.
-            self.model = self.model.half()
+            self.model = self.model.half().to(cfg.device)
         else:
             self.model = self.model.to(cfg.device).float()
         self.model.eval()
+
+    def close(self) -> None:
+        """Releases the model's GPU memory now, even if something (a
+        traceback, a stray reference) still holds on to this object."""
+        self.model.to("cpu")
 
     def transcribe(self, audio: np.ndarray | str) -> str:
         # Accepts a raw float32 array (live-captured segments) or a file path

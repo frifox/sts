@@ -198,7 +198,7 @@ def test_tts_loop_broadcasts_voice_rtf_from_its_own_output_duration():
     stage, value = p.broadcaster.rtf[0]
     assert stage == "voice"
     assert value == pytest.approx(0.05, abs=0.05)  # ~0.05s processing / 1s of synthesized audio
-    assert p._audio.get_nowait()[0].size == 24_000
+    assert p._audio.get_nowait().audio.size == 24_000
 
 
 def test_tts_loop_paces_a_continuation_like_the_same_spoken_thought():
@@ -228,5 +228,5 @@ def test_tts_loop_paces_a_continuation_like_the_same_spoken_thought():
 
     pauses = []
     while not p._audio.empty():
-        pauses.append(p._audio.get_nowait()[2])
+        pauses.append(p._audio.get_nowait().pause_before)
     assert pauses == [p.cfg.audio.pause_within_s, p.cfg.audio.pause_between_s]

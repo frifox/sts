@@ -24,3 +24,25 @@ def create_asr(cfg: ASRConfig):
         except ImportError as exc:
             raise SystemExit(_missing_backend("parakeet", exc)) from exc
     raise ValueError(f"unknown ASR backend: {cfg.backend!r} (expected 'whisper' or 'parakeet')")
+
+
+# Approximate parameter counts, for estimate_vram_bytes().
+_WHISPER_PARAMS = {
+    "tiny": 39e6, "base": 74e6, "small": 244e6, "medium": 769e6,
+    "large-v3-turbo": 809e6, "turbo": 809e6, "distil-large-v3": 756e6,
+}
+_WHISPER_LARGE_PARAMS = 1550e6
+_PARAKEET_PARAMS = 600e6
+
+
+def estimate_vram_bytes(cfg: ASRConfig) -> int:
+    """Roughly how much GPU memory loading `cfg`'s engine takes: its weights
+    at the compute type it runs in, plus headroom for activations/workspace.
+    Only precise enough to refuse a load that clearly can't fit - see
+    Pipeline._load_asr."""
+    if cfg.backend == "parakeet":
+        weights = _PARAKEET_PARAMS * 2  # fp16 on CUDA
+    else:
+        params = _WHISPER_PARAMS.get(cfg.model_size, _WHISPER_LARGE_PARAMS)  # large, large-v2, large-v3
+        weights = params * (1 if cfg.compute_type.startswith("int8") else 2)
+    return int(weights * 1.2 + 300 * 2**20)

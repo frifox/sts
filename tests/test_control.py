@@ -89,7 +89,7 @@ def test_pause_threshold_changes_live_and_is_clamped():
     import queue
 
     from sts.config import PipelineConfig
-    from sts.pipeline import Pipeline
+    from sts.pipeline import Pipeline, _Clip
 
     class Broadcaster:
         status = None
@@ -121,7 +121,7 @@ def test_pause_threshold_changes_live_and_is_clamped():
 
 def test_output_volume_changes_live_is_clamped_and_persisted():
     from sts.config import PipelineConfig
-    from sts.pipeline import Pipeline
+    from sts.pipeline import Pipeline, _Clip
 
     class Broadcaster:
         status = None
@@ -173,7 +173,7 @@ def test_voice_off_drops_already_synthesized_but_unplayed_sentences():
     import queue
 
     from sts.config import PipelineConfig
-    from sts.pipeline import Pipeline
+    from sts.pipeline import Pipeline, _Clip
 
     class Broadcaster:
         output_levels = []
@@ -221,7 +221,7 @@ def test_reset_stops_playback_without_touching_the_stream_directly():
     import queue
 
     from sts.config import PipelineConfig
-    from sts.pipeline import Pipeline
+    from sts.pipeline import Pipeline, _Clip
 
     class Broadcaster:
         output_levels = []
@@ -277,11 +277,16 @@ def test_playback_loop_broadcasts_before_playing_locally_not_after():
     import time
 
     from sts.config import PipelineConfig
-    from sts.pipeline import Pipeline
+    from sts.pipeline import Pipeline, _Clip
 
     calls = []
 
     class Playback:
+        holding_tail = False
+
+        def pending_s(self):
+            return 0.0
+
         def play(self, *args, **kwargs):
             calls.append("play")
             time.sleep(0.05)  # stands in for play() blocking near-realtime
@@ -291,6 +296,7 @@ def test_playback_loop_broadcasts_before_playing_locally_not_after():
             calls.append("broadcast")
 
     p = object.__new__(Pipeline)
+    p.cfg = PipelineConfig()
     p.playback = Playback()
     p.broadcaster = Broadcaster()
     p.control = RecognitionControl(16000)
@@ -298,7 +304,7 @@ def test_playback_loop_broadcasts_before_playing_locally_not_after():
     p._audio = queue.Queue()
     p._stop = threading.Event()
     p._playback_generation = 0
-    p._audio.put((np.zeros(10, dtype=np.float32), 24000, 0.0))
+    p._audio.put(_Clip(np.zeros(10, dtype=np.float32), 24000))
 
     thread = threading.Thread(target=p._playback_loop, daemon=True)
     thread.start()
@@ -313,14 +319,15 @@ def test_queue_test_output_loads_the_bundled_clip_and_marks_it_forced():
     Voice off - this is meant to test the hardware output, not the pipeline."""
     import queue
 
-    from sts.pipeline import Pipeline
+    from sts.pipeline import Pipeline, _Clip
 
     p = object.__new__(Pipeline)
     p._audio = queue.Queue()
 
     p._queue_test_output()
 
-    audio, sample_rate, pause_before, force = p._audio.get_nowait()
+    clip = p._audio.get_nowait()
+    audio, sample_rate, pause_before, force = clip.audio, clip.sample_rate, clip.pause_before, clip.force
     assert force is True
     assert pause_before == 0.0
     assert sample_rate > 0
@@ -333,12 +340,17 @@ def test_playback_loop_plays_a_forced_clip_even_with_voice_off():
     import queue
     import threading
 
-    from sts.pipeline import Pipeline
+    from sts.pipeline import Pipeline, _Clip
 
     should_continues = []
 
     class Playback:
-        def play(self, audio, sample_rate, pause_before=0.0, should_continue=None, on_chunk=None):
+        holding_tail = False
+
+        def pending_s(self):
+            return 0.0
+
+        def play(self, audio, sample_rate, pause_before=0.0, should_continue=None, on_chunk=None, seamless=False):
             should_continues.append(should_continue() if should_continue else None)
 
     p = object.__new__(Pipeline)
@@ -348,7 +360,7 @@ def test_playback_loop_plays_a_forced_clip_even_with_voice_off():
     p._audio = queue.Queue()
     p._stop = threading.Event()
     p._playback_generation = 0
-    p._audio.put((np.zeros(10, dtype=np.float32), 24000, 0.0, True))
+    p._audio.put(_Clip(np.zeros(10, dtype=np.float32), 24000, force=True))
 
     thread = threading.Thread(target=p._playback_loop, daemon=True)
     thread.start()
@@ -360,7 +372,7 @@ def test_playback_loop_plays_a_forced_clip_even_with_voice_off():
 
 
 def test_broadcast_input_level_sends_the_frames_rms():
-    from sts.pipeline import Pipeline
+    from sts.pipeline import Pipeline, _Clip
 
     levels = []
 
@@ -380,7 +392,7 @@ def test_broadcast_input_level_sends_the_frames_rms():
 
 
 def test_broadcast_input_level_skips_an_empty_frame():
-    from sts.pipeline import Pipeline
+    from sts.pipeline import Pipeline, _Clip
 
     class Broadcaster:
         def broadcast_input_level(self, level):
@@ -393,7 +405,7 @@ def test_broadcast_input_level_skips_an_empty_frame():
 
 
 def test_broadcast_output_level_sends_the_chunks_rms_throttled():
-    from sts.pipeline import Pipeline
+    from sts.pipeline import Pipeline, _Clip
 
     levels = []
 
@@ -423,7 +435,7 @@ def test_broadcast_output_level_sends_the_chunks_rms_throttled():
 
 
 def test_broadcast_output_level_skips_an_empty_chunk():
-    from sts.pipeline import Pipeline
+    from sts.pipeline import Pipeline, _Clip
 
     class Broadcaster:
         def broadcast_output_level(self, level):
@@ -441,7 +453,7 @@ def _startup_voice_pipeline(tmp_path):
     import queue
 
     from sts.config import PipelineConfig
-    from sts.pipeline import Pipeline
+    from sts.pipeline import Pipeline, _Clip
     from sts.tts.voice_library import VoiceLibrary
 
     bundle = tmp_path / "bundled" / "default"
@@ -465,6 +477,11 @@ def _startup_voice_pipeline(tmp_path):
         def broadcast_output_level(self, level): pass
 
     class Playback:
+        holding_tail = False
+
+        def pending_s(self):
+            return 0.0
+
         def stop(self): pass
 
     p = object.__new__(Pipeline)
