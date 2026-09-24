@@ -188,7 +188,7 @@ def test_tts_loop_broadcasts_voice_rtf_from_its_own_output_duration():
             return np.zeros(24_000, dtype=np.float32), 24_000  # 1s of audio at 24kHz
 
     p.tts = FakeTts()
-    p._translations.put("Hello.")
+    p._translations.put(("Hello.", False))
 
     thread = threading.Thread(target=Pipeline._tts_loop, args=(p,), daemon=True)
     thread.start()
@@ -199,3 +199,34 @@ def test_tts_loop_broadcasts_voice_rtf_from_its_own_output_duration():
     assert stage == "voice"
     assert value == pytest.approx(0.05, abs=0.05)  # ~0.05s processing / 1s of synthesized audio
     assert p._audio.get_nowait()[0].size == 24_000
+
+
+def test_tts_loop_paces_a_continuation_like_the_same_spoken_thought():
+    """The reported bug: a VAD split lands mid-sentence, so the continuation
+    was still spoken with the long between-sentences pause and no lead-in -
+    audibly introducing it as a fresh, unrelated utterance rather than
+    picking up where the (already-spoken) previous sentence left off."""
+    p = _rtf_pipeline()
+    p.cfg = PipelineConfig()
+    p.control = RecognitionControl(16000)
+    p.control.enable_voice()
+    p._translations = queue.Queue()
+    p._audio = queue.Queue()
+    p._stop = threading.Event()
+
+    class FakeTts:
+        def synthesize(self, text):
+            return np.zeros(100, dtype=np.float32), 24_000
+
+    p.tts = FakeTts()
+    p._translations.put(("Continues the previous sentence.", True))
+    p._translations.put(("A fresh, unrelated sentence.", False))
+
+    thread = threading.Thread(target=Pipeline._tts_loop, args=(p,), daemon=True)
+    thread.start()
+    thread.join(timeout=0.5)
+
+    pauses = []
+    while not p._audio.empty():
+        pauses.append(p._audio.get_nowait()[2])
+    assert pauses == [p.cfg.audio.pause_within_s, p.cfg.audio.pause_between_s]

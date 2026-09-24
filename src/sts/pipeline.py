@@ -1036,7 +1036,8 @@ class Pipeline:
         for i, translated in enumerate(self.translator.translate_sentences(text, context=context)):
             processing_s = time.monotonic() - t0
             vlog("translate", f"translated a sentence in {processing_s:.2f}s")
-            if i == 0 and context:
+            continues = i == 0 and bool(context)
+            if continues:
                 translated = _strip_repeated_prefix(translated, self._last_sentence_translated)
             if translated:
                 print(f"    [en] {translated}")
@@ -1047,13 +1048,17 @@ class Pipeline:
                         first_seq,
                     )
                 self._broadcast_rtf("translate", processing_s, self._last_asr_audio_s)
-                self._translations.put(translated)
+                # `continues` rides along so _tts_loop can give this sentence
+                # the short within-a-segment pause instead of the long
+                # between-segments one - it's spoken as the continuation it
+                # actually is, not introduced as a fresh new utterance.
+                self._translations.put((translated, continues))
                 self._last_sentence_translated = translated
             t0 = time.monotonic()
 
     def _tts_loop(self) -> None:
         while not self._stop.is_set():
-            text = self._translations.get()
+            text, continues = self._translations.get()
             if not self.control.voice_enabled.is_set():
                 vlog("tts", "voice is off, skipping synthesis")
                 continue
@@ -1071,8 +1076,13 @@ class Pipeline:
                                 f"({self._translations.qsize()} sentences waiting)")
                     self._broadcast_rtf("voice", processing_s, audio_s)
                     # A longer pause before a new translated text, a shorter one
-                    # between the sentences within it.
-                    pause = self.cfg.audio.pause_between_s if first_piece else self.cfg.audio.pause_within_s
+                    # between the sentences within it - and also for the first
+                    # piece of a sentence ASR itself flagged as continuing the
+                    # previous one (see _translate_segment): VAD split it into
+                    # a separate segment, but it's still one spoken thought, so
+                    # it's paced like a continuation, not introduced fresh.
+                    between_pause = self.cfg.audio.pause_within_s if continues else self.cfg.audio.pause_between_s
+                    pause = between_pause if first_piece else self.cfg.audio.pause_within_s
                     self._audio.put((audio, sample_rate, pause))
                     first_piece = False
                     t0 = time.monotonic()

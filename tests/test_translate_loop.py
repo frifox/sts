@@ -51,14 +51,19 @@ def test_each_sentence_is_pushed_and_broadcast_as_it_is_translated():
     Pipeline._translate_segment(p, "A. B. C.")
 
     assert p.broadcaster.translated == ["A translated.", "B translated.", "C translated."]
-    assert list(p._translations.queue) == ["A translated.", "B translated.", "C translated."]
+    assert list(p._translations.queue) == [
+        ("A translated.", False),
+        ("B translated.", False),
+        ("C translated.", False),
+    ]
     assert order == [
         "about to yield A translated.",
-        "queue after yielding A translated.: ['A translated.']",
+        "queue after yielding A translated.: [('A translated.', False)]",
         "about to yield B translated.",
-        "queue after yielding B translated.: ['A translated.', 'B translated.']",
+        "queue after yielding B translated.: [('A translated.', False), ('B translated.', False)]",
         "about to yield C translated.",
-        "queue after yielding C translated.: ['A translated.', 'B translated.', 'C translated.']",
+        "queue after yielding C translated.: "
+        "[('A translated.', False), ('B translated.', False), ('C translated.', False)]",
     ]
 
 
@@ -73,7 +78,7 @@ def test_empty_translated_sentences_are_not_queued_or_broadcast():
     Pipeline._translate_segment(p, "text")
 
     assert p.broadcaster.translated == ["Kept.", "Also kept."]
-    assert list(p._translations.queue) == ["Kept.", "Also kept."]
+    assert list(p._translations.queue) == [("Kept.", False), ("Also kept.", False)]
 
 
 def test_each_translation_is_broadcast_with_its_originals_sequence_number():
@@ -225,3 +230,24 @@ def test_translate_segment_does_not_strip_when_there_is_no_context():
     Pipeline._translate_segment(p, "text")
 
     assert p.broadcaster.translated == ["These are the words of our Lord Jesus Christ, spoken plainly."]
+
+
+def test_translate_segment_marks_only_the_continuing_first_sentence_for_tts_pacing():
+    """_tts_loop paces a detected continuation like it's still part of the
+    same spoken thought (see its own pause_within_s/pause_between_s choice) -
+    only the very first sentence of a commit that actually used context is
+    the continuation; anything after it is a fresh, unrelated sentence."""
+    p = _stub_pipeline(lambda text: iter(["Continuation.", "Fresh sentence."]))
+    p._last_sentence_translated = "Previous."
+
+    Pipeline._translate_segment(p, "text", context="Previous.")
+
+    assert list(p._translations.queue) == [("Continuation.", True), ("Fresh sentence.", False)]
+
+
+def test_translate_segment_never_marks_a_sentence_as_continuing_without_context():
+    p = _stub_pipeline(lambda text: iter(["A.", "B."]))
+
+    Pipeline._translate_segment(p, "text")
+
+    assert list(p._translations.queue) == [("A.", False), ("B.", False)]
