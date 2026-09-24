@@ -13,6 +13,11 @@ a diff. The buffer only grows, so later re-transcriptions cost more than
 earlier ones - by design, since capping or windowing it would just be VAD
 under another name. Meant for short exploratory runs, not left running.
 
+Press "x" to clear: the buffer (and whatever audio was already captured
+into it) is dropped, and recognition starts over from the next thing said -
+e.g. to start fresh on a new speaker, or once the growing buffer has made
+each re-transcription slow.
+
 Usage:
   sts-caption --input-device 4
   sts-caption --input-device 4 --interval-ms 1000
@@ -22,7 +27,9 @@ Usage:
 import argparse
 import queue
 import sys
+import threading
 import time
+from collections.abc import Callable
 
 import numpy as np
 
@@ -41,6 +48,51 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def watch_keys(on_key: Callable[[str], None]) -> Callable[[], None]:
+    """Calls `on_key(char)` for each key pressed in the terminal, without
+    waiting for Enter, on a background thread. Returns a function that puts
+    the terminal back how it was. Does nothing when stdin isn't a terminal
+    (piped input, a service)."""
+    if not sys.stdin.isatty():
+        return lambda: None
+    try:
+        import msvcrt  # Windows
+
+        def read() -> str:
+            return msvcrt.getwch()
+
+        def restore() -> None:
+            pass
+    except ImportError:
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+        # cbreak, not raw: keys arrive one at a time and aren't echoed, but
+        # Ctrl+C still raises KeyboardInterrupt in the main thread.
+        tty.setcbreak(fd)
+
+        def read() -> str:
+            return sys.stdin.read(1)
+
+        def restore() -> None:
+            termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+    def loop() -> None:
+        while True:
+            try:
+                key = read()
+            except (OSError, ValueError):  # the terminal went away
+                return
+            if not key:
+                return
+            on_key(key)
+
+    threading.Thread(target=loop, name="caption-keys", daemon=True).start()
+    return restore
+
+
 def main() -> None:
     args = build_parser().parse_args()
 
@@ -56,14 +108,29 @@ def main() -> None:
     capture = AudioCapture(AudioConfig(input_device=args.input_device))
     capture.start()
     print(
-        f"[caption] listening on input device {args.input_device!r}; Ctrl+C to stop", file=sys.stderr, flush=True
+        f"[caption] listening on input device {args.input_device!r}; x to clear, Ctrl+C to stop",
+        file=sys.stderr,
+        flush=True,
     )
+
+    clear = threading.Event()
+    restore_terminal = watch_keys(lambda key: clear.set() if key.lower() == "x" else None)
 
     buffer: list[np.ndarray] = []
     last_run = time.monotonic()
     interval_s = args.interval_ms / 1000
     try:
         while True:
+            if clear.is_set():
+                clear.clear()
+                buffer.clear()
+                while True:  # audio captured before the key press belongs to what's being cleared
+                    try:
+                        capture.frames.get_nowait()
+                    except queue.Empty:
+                        break
+                last_run = time.monotonic()
+                print("[caption] cleared - listening for new speech", file=sys.stderr, flush=True)
             try:
                 buffer.append(capture.frames.get(timeout=0.1))
             except queue.Empty:
@@ -78,6 +145,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        restore_terminal()
         capture.stop()
 
 
