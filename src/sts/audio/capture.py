@@ -25,6 +25,10 @@ def list_devices() -> str:
 _KEEP_CURRENT_DEVICE = object()
 
 
+# Input buffer depth - see AudioCapture._open_stream.
+CAPTURE_BUFFER_S = 0.5
+
+
 class AudioCapture:
     """Streams mono float32 frames from an input device.
 
@@ -149,13 +153,17 @@ class AudioCapture:
             channels=self.cfg.channels,
             blocksize=block_size,
             # PortAudio's default latency (tuned for low-latency pro
-            # interfaces) is too tight for some real hardware codecs - a real
+            # interfaces) is too tight for real hardware codecs - a real
             # Line-In here overflowed constantly at the default even with a
-            # trivial callback, while the virtual ALSA Loopback device (no
-            # real hardware timing to miss) never has this problem. "high"
-            # asks for a bigger buffer; a little extra capture latency is
-            # nothing next to the seconds ASR/translation/TTS already add.
-            latency="high",
+            # trivial callback. Its "high" preset isn't much better on raw
+            # ALSA "hw" devices: ~35 ms of buffer, which any moment the
+            # callback can't get the GIL for that long overruns - e.g.
+            # while NeMo transcribes a long buffer, measured as a steady
+            # stream of overflows (dropped audio, garbled words) in
+            # sts-caption. The buffer is only headroom: blocks are still
+            # delivered every block_ms as they're captured, so a deep one
+            # costs no delay unless the callback actually falls behind.
+            latency=CAPTURE_BUFFER_S,
             dtype="float32",
             callback=self._callback,
         )

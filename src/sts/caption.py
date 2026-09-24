@@ -9,8 +9,9 @@ whole buffer is re-transcribed from scratch every --interval-ms. Parakeet
 sees more context each time, and can (and does) revise earlier wording as a
 result - showing the *complete* current transcript every cycle, not just
 whatever's new, is what makes that revision visible instead of hidden behind
-a diff. In a terminal it's one line rewritten in place as it grows and
-changes; piped elsewhere, each changed transcript is its own line. The
+a diff. In a terminal it's one block, one sentence per line, rewritten in
+place as it grows and changes; piped elsewhere, each changed transcript is
+printed in full. The
 buffer only grows, so later re-transcriptions cost more than
 earlier ones - by design, since capping or windowing it would just be VAD
 under another name. Meant for short exploratory runs, not left running.
@@ -27,7 +28,10 @@ Usage:
 """
 
 import argparse
+import contextlib
+import io
 import queue
+import re
 import shutil
 import sys
 import threading
@@ -51,42 +55,129 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# End of a sentence: ., ?, ! or … (possibly several, possibly followed by a
+# closing quote/bracket), with more text after it.
+_SENTENCE_END = re.compile(r'([.?!…]+["»”)]*)\s+(?=\S)')
+
+
+def one_sentence_per_line(text: str) -> str:
+    """`text` with a line break after each sentence-ending mark that has
+    more text after it (none after the last - there's nothing to put on
+    the next line yet)."""
+    return _SENTENCE_END.sub("\\1\n", text)
+
+
+def screen_rows(text: str, width: int) -> list[str]:
+    """How `text` lays out on a terminal `width` columns wide: each of its
+    lines, cut into rows of at most `width` characters."""
+    rows = []
+    for line in text.split("\n"):
+        rows.extend([line[i : i + width] for i in range(0, len(line), width)] or [""])
+    return rows
+
+
 class LiveLine:
-    """Shows the transcript as one line that's rewritten in place as it
-    grows or is revised, instead of printing a new line for every
-    re-transcription. A transcript longer than the terminal is wide wraps
-    onto several rows, so a rewrite moves the cursor back up over all of
-    them and clears to the end of the screen before printing the new text.
+    """Shows the transcript as one block, one sentence per line, that's
+    rewritten in place as it grows or is revised, instead of printing it all
+    again for every re-transcription. Parakeet can revise punctuation as well
+    as words, so a sentence break can appear or disappear between two
+    re-transcriptions - every update redraws the whole block (from where it
+    starts on screen) rather than patching it.
+
+    The one thing a terminal can't do is move the cursor above the top of
+    the screen: once the block is taller than the window, its first rows
+    have scrolled away and can no longer be rewritten. Those are taken as
+    settled ("frozen"), and only the rows below them are redrawn - a
+    revision to a sentence that has scrolled out of view isn't shown.
+
+    Anything else printed meanwhile (a capture warning, say) has to go
+    through print_above(), which puts it above the block and redraws the
+    block under it - written straight to the terminal, it would land in the
+    middle of the block and throw off where the next redraw starts (see
+    main(), which routes all other output there).
+
     When stdout isn't a terminal (piped to a file) there's no cursor to
-    move: every changed transcript is printed as its own line instead."""
+    move: every changed transcript is printed in full instead."""
 
     def __init__(self, stream=None):
         self.stream = stream or sys.stdout
         self.live = self.stream.isatty()
         self.text = ""
-        self._rows = 0  # rows the current text occupies on screen
+        self._frozen = 0  # leading rows of the block that can't be redrawn any more
+        self._drawn = 0  # rows drawn after those, ending at the cursor's row
+        self._lock = threading.Lock()  # other output can arrive from any thread
 
     def update(self, text: str) -> None:
-        if text == self.text:
-            return
-        self.text = text
-        if not self.live:
-            print(text, file=self.stream, flush=True)
-            return
-        width = max(1, shutil.get_terminal_size().columns)
-        up = f"\x1b[{self._rows - 1}A" if self._rows > 1 else ""
-        self.stream.write(f"\r{up}\x1b[J{text}")
-        self.stream.flush()
-        self._rows = max(1, -(-len(text) // width))
+        with self._lock:
+            if text == self.text:
+                return
+            self.text = text
+            if not self.live:
+                print(one_sentence_per_line(text), file=self.stream, flush=True)
+                return
+            self._redraw(self._erase())
+
+    def print_above(self, message: str) -> None:
+        with self._lock:
+            if not self.live or not (self._drawn or self._frozen):
+                self.stream.write(message + "\n")
+                self.stream.flush()
+                return
+            prefix = self._erase() + message + "\n"
+            self._drawn = 0  # everything still redrawable goes below the message now
+            self._redraw(prefix)
 
     def finish(self) -> None:
         """Leaves the current text on screen and moves below it, so whatever
         is printed next starts on a fresh line."""
-        if self.live and self._rows:
-            self.stream.write("\n")
-            self.stream.flush()
-        self.text = ""
-        self._rows = 0
+        with self._lock:
+            if self.live and (self._drawn or self._frozen):
+                self.stream.write("\n")
+                self.stream.flush()
+            self.text = ""
+            self._frozen = self._drawn = 0
+
+    def _size(self) -> tuple[int, int]:
+        size = shutil.get_terminal_size()
+        return max(1, size.columns), max(2, size.lines)
+
+    def _erase(self) -> str:
+        """Escape codes that move the cursor to the first drawn row the
+        screen still shows and clear from there down. Rows that have
+        scrolled off meanwhile are frozen."""
+        _, height = self._size()
+        on_screen = min(self._drawn, height)
+        self._frozen += self._drawn - on_screen
+        self._drawn = on_screen
+        up = f"\x1b[{on_screen - 1}A" if on_screen > 1 else ""
+        return f"\r{up}\x1b[J"
+
+    def _redraw(self, prefix: str) -> None:
+        width, _ = self._size()
+        rows = screen_rows(one_sentence_per_line(self.text), width)
+        rows = rows[min(self._frozen, len(rows) - 1) :]
+        self.stream.write(prefix + "\n".join(rows))
+        self.stream.flush()
+        self._drawn = len(rows)
+
+
+class _AboveLiveLine(io.TextIOBase):
+    """A stdout/stderr stand-in that prints each complete line above the
+    live transcript (see LiveLine.print_above)."""
+
+    def __init__(self, line: LiveLine):
+        self._line = line
+        self._pending = ""
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, text: str) -> int:
+        self._pending += text
+        *complete, self._pending = self._pending.split("\n")
+        for message in complete:
+            self._line.print_above(message)
+        return len(text)
 
 
 def watch_keys(on_key: Callable[[str], None]) -> Callable[[], None]:
@@ -168,7 +259,11 @@ def main() -> None:
     buffer: list[np.ndarray] = []
     last_run = time.monotonic()
     interval_s = args.interval_ms / 1000
+    other_output = _AboveLiveLine(line)
+    redirect = contextlib.ExitStack()
     try:
+        redirect.enter_context(contextlib.redirect_stdout(other_output))
+        redirect.enter_context(contextlib.redirect_stderr(other_output))
         while True:
             if clear.is_set():
                 clear.clear()
@@ -195,6 +290,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        redirect.close()
         line.finish()
         restore_terminal()
         capture.stop()
