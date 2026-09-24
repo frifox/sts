@@ -275,11 +275,13 @@
      meter's fixed color zones. How many are actually lit is the only thing
      that changes as the level moves. */
   #volume-meter, #output-meter {
+    position: relative;
     display: flex;
     align-items: flex-end;
     gap: 2px;
     height: 1.5em;
     padding: 0 0.2em;
+    cursor: pointer;
   }
   .volume-bar {
     width: 0.3em;
@@ -327,23 +329,7 @@
   #btn-create-voice[hidden] { display: none; }
 
   .engine { position: relative; display: flex; }
-  /* These need to out-specificity the `#controls button` base rule (an ID
-     selector), so they're qualified with `#controls` too - a bare class
-     selector loses that fight and the corners/border silently stay rounded. */
-  #controls .engine-toggle { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none; }
-  #controls .engine-caret {
-    font: inherit;
-    font-size: 0.75rem;
-    padding: 0.5em 0.7em;
-    border-radius: 0 6px 6px 0;
-    border: 1px solid #444;
-    background: #1a1a1e;
-    color: #ccc;
-    cursor: pointer;
-  }
-  #controls .engine-caret:hover { border-color: #777; }
   #controls .engine-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
-  #controls .engine-toggle.is-active + .engine-caret { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   /* Disabled: starting up, mid ASR-engine switch, disconnected, or (for
      Translate/Voice) an upstream stage they'd have nothing to work with is
      off - toggling wouldn't do anything, so don't invite the click. */
@@ -455,10 +441,17 @@
         <span class="volume-bar"></span>
         <span class="volume-bar"></span>
         <span class="volume-bar"></span>
+        <div class="engine-dropdown" id="dropdown-input">
+          <label for="cfg-input">Input device (microphone / line in)</label>
+          <select id="cfg-input"></select>
+          <div class="mic-row">
+            <button type="button" id="btn-browser-mic" title="Stream this browser's own microphone in as the input, instead of the server's sound card">🎤 Use this browser's mic</button>
+          </div>
+          <div id="mic-status"></div>
+        </div>
       </div>
       <div class="engine" id="engine-asr">
         <button class="engine-toggle" id="btn-asr-toggle">Caption</button>
-        <button class="engine-caret" id="caret-asr" aria-label="Caption settings">▾</button>
         <div class="engine-dropdown" id="dropdown-asr">
           <div class="engine-info">
             <div>Model: <b id="asr-info-model">–</b></div>
@@ -475,17 +468,10 @@
             <input id="pause-slider" type="range" min="200" max="1500" step="50" value="500" />
             <span id="pause-value">500 ms</span>
           </label>
-          <label for="cfg-input">Input device (microphone / line in)</label>
-          <select id="cfg-input"></select>
-          <div class="mic-row">
-            <button type="button" id="btn-browser-mic" title="Stream this browser's own microphone in as the input, instead of the server's sound card">🎤 Use this browser's mic</button>
-          </div>
-          <div id="mic-status"></div>
         </div>
       </div>
       <div class="engine" id="engine-translate">
         <button class="engine-toggle" id="btn-translate-toggle">Translate</button>
-        <button class="engine-caret" id="caret-translate" aria-label="Translate settings">▾</button>
         <div class="engine-dropdown" id="dropdown-translate">
           <div class="engine-info">
             <div>Model: <b id="translate-info-model">–</b></div>
@@ -500,7 +486,6 @@
       </div>
       <div class="engine" id="engine-tts">
         <button class="engine-toggle" id="btn-tts-toggle">Voice</button>
-        <button class="engine-caret" id="caret-tts" aria-label="Voice settings">▾</button>
         <div class="engine-dropdown" id="dropdown-tts">
           <div class="engine-info">
             <div>Model: <b id="tts-info-model">–</b></div>
@@ -514,12 +499,6 @@
             <button id="btn-save-voice" disabled title="Save the trained voice to the library">Save Voice</button>
             <button id="btn-delete-voice" hidden title="Delete the selected saved voice">Delete</button>
           </div>
-          <label for="cfg-output">Output device (where the translated voice plays)</label>
-          <select id="cfg-output"></select>
-          <label class="stream-row" title="Play the synthesized voice in this browser too">
-            <input type="checkbox" id="stream-toggle" />
-            Stream voice to this browser
-          </label>
         </div>
       </div>
       <div id="output-meter" title="Output level (synthesized voice audio)">
@@ -533,6 +512,14 @@
         <span class="volume-bar"></span>
         <span class="volume-bar"></span>
         <span class="volume-bar"></span>
+        <div class="engine-dropdown" id="dropdown-output">
+          <label for="cfg-output">Output device (where the translated voice plays)</label>
+          <select id="cfg-output"></select>
+          <label class="stream-row" title="Play the synthesized voice in this browser too">
+            <input type="checkbox" id="stream-toggle" />
+            Stream voice to this browser
+          </label>
+        </div>
       </div>
       <button id="btn-reset">Reset</button>
     </div>
@@ -1136,25 +1123,36 @@
   translateToggleBtn.addEventListener('click', () => send(lastStatus.translation_enabled ? 'translate_off' : 'translate_on'));
   ttsToggleBtn.addEventListener('click', () => send(lastStatus.voice_enabled ? 'voice_off' : 'voice_on'));
 
-  // -- Engine dropdowns (hovering the caret opens the Caption/Translate/Voice settings panel) --
+  // -- Dropdowns (hovering the Caption/Translate/Voice buttons or either level
+  // meter opens its settings panel) --
   const engineDropdowns = document.querySelectorAll('.engine-dropdown');
   function closeDropdowns(except) {
     engineDropdowns.forEach((d) => { if (d !== except) d.classList.remove('show'); });
   }
-  document.querySelectorAll('.engine-caret').forEach((caret) => {
-    const engine = caret.closest('.engine');
-    const dropdown = engine.querySelector('.engine-dropdown');
-    caret.addEventListener('mouseenter', () => {
+  // trigger: the element whose hover opens the dropdown. container: the
+  // element whose mouseleave closes it again - wider than the trigger alone
+  // (or, for the meters, the same element the dropdown lives inside of) so
+  // moving the mouse down into the open dropdown doesn't immediately hide it.
+  function wireHoverDropdown(trigger, dropdown, container, opts = {}) {
+    trigger.addEventListener('mouseenter', () => {
       closeDropdowns(dropdown);
       dropdown.classList.add('show');
-      send('refresh_devices');  // pick up devices plugged in since the page loaded
+      if (opts.refreshDevices) send('refresh_devices');  // pick up devices plugged in since the page loaded
     });
-    // Leaving the whole group (not just the caret) closes it, so moving the
-    // mouse down into the open dropdown doesn't immediately hide it again.
-    engine.addEventListener('mouseleave', () => dropdown.classList.remove('show'));
+    container.addEventListener('mouseleave', () => dropdown.classList.remove('show'));
+  }
+  document.querySelectorAll('.engine').forEach((engine) => {
+    wireHoverDropdown(engine.querySelector('.engine-toggle'), engine.querySelector('.engine-dropdown'), engine);
+  });
+  ['volume-meter', 'output-meter'].forEach((id) => {
+    const meter = document.getElementById(id);
+    wireHoverDropdown(meter, meter.querySelector('.engine-dropdown'), meter, { refreshDevices: true });
   });
   document.addEventListener('click', (event) => {
-    if (!event.target.closest('.engine-dropdown') && !event.target.closest('.engine-caret')) closeDropdowns();
+    if (!event.target.closest('.engine-dropdown') && !event.target.closest('.engine-toggle')
+        && !event.target.closest('#volume-meter') && !event.target.closest('#output-meter')) {
+      closeDropdowns();
+    }
   });
 
   const asrBackendSelect = document.getElementById('asr-backend-select');
