@@ -16,6 +16,15 @@ def list_devices() -> str:
     return str(sd.query_devices())
 
 
+# switch_to_alsa's default: distinct from `None`, which is a real, valid
+# input_device value (PortAudio/ALSA's own "system default" device) - using
+# it as the "no device given" sentinel too meant explicitly picking "System
+# default" from the UI (which sends None for exactly that) silently turned
+# into "keep whatever device was already open" instead, since None and None
+# were indistinguishable.
+_KEEP_CURRENT_DEVICE = object()
+
+
 class AudioCapture:
     """Streams mono float32 frames from an input device.
 
@@ -30,7 +39,14 @@ class AudioCapture:
         self._stop = threading.Event()
         self._last_frame_at = time.monotonic()
         self._capture_rate = cfg.sample_rate  # set for real in start(); see _resolve_capture_rate
-        self._resample_buffer = np.empty(0, dtype=np.float32)
+        # Resampling (when the device doesn't support cfg.sample_rate
+        # directly) runs on its own thread, never inside _callback - see
+        # _resample_worker for why.
+        self._raw_frames: queue.Queue[np.ndarray] = queue.Queue()
+        self._resample_thread: threading.Thread | None = None
+        self._resample_stop = threading.Event()
+        self._overflow_count = 0
+        self._last_overflow_log = 0.0
 
     def is_stalled(self, timeout_s: float) -> bool:
         """True if a local input stream is supposed to be running but has
@@ -50,26 +66,56 @@ class AudioCapture:
         return time.monotonic() - self._last_frame_at > timeout_s
 
     def _callback(self, indata, frames, time_info, status):
-        self._last_frame_at = time.monotonic()
+        # Kept deliberately trivial: this runs on PortAudio's real-time ALSA
+        # thread, which has to be serviced every block_ms or the driver's own
+        # buffer overflows (dropped audio, logged as "input status: input
+        # overflow" - not a warning to ignore, it means the pipeline missed
+        # that audio entirely). resample_poly's filter design/convolution is
+        # too slow to risk here - it's what caused that overflow in practice
+        # when it ran inline - so a device needing resampling just hands the
+        # raw frame to a separate thread (_resample_worker) instead.
+        now = time.monotonic()
+        self._last_frame_at = now
         if status:
-            # Overflows/underflows show up here; surfaced rather than raised
-            # since dropping a frame is preferable to killing capture.
-            print(f"[audio] input status: {status}")
-        mono = indata[:, 0]
+            # print() is itself a blocking syscall (a pipe to journald under
+            # systemd) - calling it here on *every* overflow was observed to
+            # cascade into hundreds more within the same second, each print
+            # delaying the callback's return past the next deadline. Throttled
+            # to once/sec so a burst gets reported without becoming the cause
+            # of a bigger one.
+            self._overflow_count += 1
+            if now - self._last_overflow_log >= 1.0:
+                print(f"[audio] input status: {status} ({self._overflow_count}x in the last "
+                      f"{now - self._last_overflow_log:.1f}s)")
+                self._overflow_count = 0
+                self._last_overflow_log = now
+        mono = indata[:, 0].copy()
         if self._capture_rate == self.cfg.sample_rate:
-            self.frames.put(mono.copy())
-            return
-        # Captured at the device's own native rate (see _resolve_capture_rate)
-        # - resample down to what the VAD/ASR need, buffering across callbacks
-        # since the ratio rarely divides the callback's block size evenly, and
-        # slice off exact block_ms frames (Silero needs exactly 512 samples at
-        # 16kHz, not "close enough").
-        resampled = resample_poly(mono, self.cfg.sample_rate, self._capture_rate).astype(np.float32)
-        self._resample_buffer = np.concatenate([self._resample_buffer, resampled])
+            self.frames.put(mono)
+        else:
+            self._raw_frames.put(mono)
+
+    def _resample_worker(self, stop_event: threading.Event) -> None:
+        """Off PortAudio's real-time thread (see _callback): resamples from
+        the device's native rate down to cfg.sample_rate, buffering across
+        callbacks since the ratio rarely divides the callback's block size
+        evenly, and slices off exact block_ms frames (Silero needs exactly
+        512 samples at 16kHz, not "close enough"). Runs until `stop_event` is
+        set - a fresh Event per start(), not the shared self._stop, since
+        that one is never cleared once set and this thread is recreated on
+        every device switch."""
+        buffer = np.empty(0, dtype=np.float32)
         block_size = int(self.cfg.sample_rate * self.cfg.block_ms / 1000)
-        while len(self._resample_buffer) >= block_size:
-            self.frames.put(self._resample_buffer[:block_size].copy())
-            self._resample_buffer = self._resample_buffer[block_size:]
+        while not stop_event.is_set():
+            try:
+                raw = self._raw_frames.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            resampled = resample_poly(raw, self.cfg.sample_rate, self._capture_rate).astype(np.float32)
+            buffer = np.concatenate([buffer, resampled])
+            while len(buffer) >= block_size:
+                self.frames.put(buffer[:block_size].copy())
+                buffer = buffer[block_size:]
 
     def _resolve_capture_rate(self, device: int | None) -> int:
         """The rate to actually open the input stream at: cfg.sample_rate if
@@ -89,6 +135,33 @@ class AudioCapture:
             info = sd.query_devices(device, "input")
             return int(info["default_samplerate"])
 
+    def _open_stream(self, block_size: int) -> sd.InputStream:
+        """Opens and starts the InputStream. No retry here on purpose: a
+        failing open on this box's hardware (two ALSA "hw:" devices on the
+        same physical codec, tried right after one another) took PortAudio
+        itself several seconds per attempt to give up on internally, so
+        retrying a few times turned a single failure into a 30+ second hang
+        before the operator saw anything - worse than just failing fast and
+        letting them try a different device."""
+        stream = sd.InputStream(
+            device=self.cfg.input_device,
+            samplerate=self._capture_rate,
+            channels=self.cfg.channels,
+            blocksize=block_size,
+            # PortAudio's default latency (tuned for low-latency pro
+            # interfaces) is too tight for some real hardware codecs - a real
+            # Line-In here overflowed constantly at the default even with a
+            # trivial callback, while the virtual ALSA Loopback device (no
+            # real hardware timing to miss) never has this problem. "high"
+            # asks for a bigger buffer; a little extra capture latency is
+            # nothing next to the seconds ASR/translation/TTS already add.
+            latency="high",
+            dtype="float32",
+            callback=self._callback,
+        )
+        stream.start()
+        return stream
+
     def start(self) -> None:
         """Opens the configured source. A no-op for `source == "browser"`:
         frames arrive via `push_browser_frame` instead of a local stream."""
@@ -96,35 +169,43 @@ class AudioCapture:
             vlog("audio", "waiting for browser microphone frames")
             return
         self._capture_rate = self._resolve_capture_rate(self.cfg.input_device)
-        self._resample_buffer = np.empty(0, dtype=np.float32)
-        block_size = int(self._capture_rate * self.cfg.block_ms / 1000)
-        self._stream = sd.InputStream(
-            device=self.cfg.input_device,
-            samplerate=self._capture_rate,
-            channels=self.cfg.channels,
-            blocksize=block_size,
-            dtype="float32",
-            callback=self._callback,
-        )
-        self._stream.start()
+        resampling = self._capture_rate != self.cfg.sample_rate
+        # A forced blocksize not evenly related to the hardware's own period
+        # size (e.g. 1411 samples/32ms at 44100 Hz - not a "nice" number for
+        # ALSA) made a real Line-In codec overflow continuously even with
+        # generous latency; _resample_worker already buffers arbitrary chunk
+        # sizes, so when resampling let PortAudio pick its own natural period
+        # (0) instead of dictating one it may not handle cleanly.
+        block_size = 0 if resampling else int(self._capture_rate * self.cfg.block_ms / 1000)
+        self._stream = self._open_stream(block_size)
         self._last_frame_at = time.monotonic()
+        if resampling:
+            with self._raw_frames.mutex:
+                self._raw_frames.queue.clear()
+            self._resample_stop = threading.Event()
+            self._resample_thread = threading.Thread(
+                target=self._resample_worker, args=(self._resample_stop,), daemon=True
+            )
+            self._resample_thread.start()
         info = sd.query_devices(self.cfg.input_device, "input")
         note = f" (resampled from {self._capture_rate} Hz)" if self._capture_rate != self.cfg.sample_rate else ""
         vlog("audio", f"listening on input [{info['index']}] {info['name']} "
                       f"({self.cfg.sample_rate} Hz, {self.cfg.block_ms} ms frames){note}")
 
-    def switch_to_alsa(self, device: int | None = None) -> None:
+    def switch_to_alsa(self, device: int | None | object = _KEEP_CURRENT_DEVICE) -> None:
         """Moves capture to a local ALSA input device, switching away from the
-        browser-mic source if that was active. `device=None` keeps whatever
-        device was already configured - used when only the source itself
-        needs to change back, not the device index. If the device won't
-        open, capture goes back to the previous source/device and the error
-        is raised."""
+        browser-mic source if that was active. Omitting `device` entirely
+        keeps whatever device was already configured - used when only the
+        source itself needs to change back, not the device index (e.g.
+        mic_stop). Pass `device=None` to mean PortAudio/ALSA's own "system
+        default" input, same as any other explicit device value - it is one,
+        not the absence of one. If the device won't open, capture goes back
+        to the previous source/device and the error is raised."""
         previous_device = self.cfg.input_device
         previous_source = self.cfg.source
         self.stop()
         self.cfg.source = "alsa"
-        if device is not None:
+        if device is not _KEEP_CURRENT_DEVICE:
             self.cfg.input_device = device
         try:
             self.start()
@@ -156,6 +237,10 @@ class AudioCapture:
 
     def stop(self) -> None:
         self._stop.set()
+        self._resample_stop.set()
+        if self._resample_thread is not None:
+            self._resample_thread.join(timeout=1)
+            self._resample_thread = None
         if self._stream is not None:
             stream, self._stream = self._stream, None
             try:

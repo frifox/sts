@@ -1258,13 +1258,13 @@
   // -- Audio devices (input in the Caption dropdown, output in the Voice one) --
   const deviceValue = (index) => (index == null ? '' : String(index));
 
-  function fillDeviceSelect(select, devices, selected, defaultIndex) {
+  function fillDeviceSelect(select, devices, selected) {
+    // No "System default" option: it can resolve to a device that conflicts
+    // with another real device on the same physical hardware (seen here
+    // with two ALSA views of one onboard codec) in a way that's outside
+    // this app's control to fix, and the operator always wants a specific,
+    // predictable device for a fixed A/V setup like this anyway.
     select.innerHTML = '';
-    const defaultName = devices.find((d) => d.index === defaultIndex)?.name;
-    const systemDefault = document.createElement('option');
-    systemDefault.value = '';
-    systemDefault.textContent = defaultName ? `System default (${defaultName})` : 'System default';
-    select.appendChild(systemDefault);
     for (const device of devices) {
       const option = document.createElement('option');
       option.value = String(device.index);
@@ -1279,13 +1279,13 @@
     // Don't rebuild the lists under the user's cursor while they're choosing,
     // and never while a change of theirs is what's actually being applied.
     if (document.activeElement !== cfgInput && document.activeElement !== cfgOutput) {
-      fillDeviceSelect(cfgInput, msg.inputs, msg.input, msg.default_input);
-      fillDeviceSelect(cfgOutput, msg.outputs, msg.output, msg.default_output);
+      fillDeviceSelect(cfgInput, msg.inputs, msg.input);
+      fillDeviceSelect(cfgOutput, msg.outputs, msg.output);
     }
     if (msg.error) {
       console.warn(`[audio] ${msg.error}`);
-      fillDeviceSelect(cfgInput, msg.inputs, msg.input, msg.default_input);   // show what is really in use
-      fillDeviceSelect(cfgOutput, msg.outputs, msg.output, msg.default_output);
+      fillDeviceSelect(cfgInput, msg.inputs, msg.input);   // show what is really in use
+      fillDeviceSelect(cfgOutput, msg.outputs, msg.output);
     }
   }
 

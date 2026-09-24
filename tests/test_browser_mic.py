@@ -91,20 +91,29 @@ def test_switch_to_alsa_without_a_device_argument_keeps_the_configured_index(stu
     assert capture.cfg.input_device == 7
 
 
+def test_switch_to_alsa_with_device_none_means_system_default_not_keep_current(stub_sounddevice):
+    """The bug this guards: picking "System default" in the UI sends
+    device=None meaning "use PortAudio/ALSA's own default input" - a real,
+    explicit choice, not "leave the device alone". Passing None used to be
+    indistinguishable from calling switch_to_alsa() with no argument at all
+    (mic_stop's "keep whatever was configured" case), so selecting System
+    default from an already-selected device silently just reopened that same
+    device instead of actually switching to the default."""
+    capture = _capture()
+    capture.cfg.input_device = 4  # some specific device already selected
+    capture.switch_to_alsa(device=None)  # explicitly requesting System default
+    assert capture.cfg.input_device is None
+
+
 def test_switch_to_alsa_restores_previous_source_and_device_on_failure(stub_sounddevice, monkeypatch):
     capture = _capture()
     capture.cfg.input_device = 7
     capture.switch_to_browser()
 
-    calls = {"n": 0}
+    def always_fails(**kw):
+        raise RuntimeError("device busy")
 
-    def flaky_stream(**kw):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("device busy")
-        return _StubStream(**kw)
-
-    monkeypatch.setattr("sts.audio.capture.sd.InputStream", flaky_stream)
+    monkeypatch.setattr("sts.audio.capture.sd.InputStream", always_fails)
     with pytest.raises(RuntimeError):
         capture.switch_to_alsa(device=9)
     # Failed to open device 9 - back to being a browser source with the old index intact.
