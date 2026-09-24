@@ -71,7 +71,7 @@
 
   /* In each column the newest line stays bright and older ones are faded.
      For the original captions that means the newest final sentence; the
-     text that isn't final yet (.recent) is bright too, in its own paragraph
+     text that isn't final yet (.recent) is faded too, in its own paragraph
      below them (the last row in portrait), and doesn't count as a line. */
   .line.old { opacity: 0.4; transition: opacity 0.6s ease; }
 
@@ -114,7 +114,9 @@
      doesn't scale with its container (the landscape paragraph's font is
      already large; em would double it). After .portrait-cell so it wins
      there too (same specificity - order decides). */
-  .recent { font-size: 2rem; line-height: 1.25; }
+  /* Faded like older lines (.line.old). No fade-in: that runs to full
+     opacity, so it would flash bright every time the live text appears. */
+  .recent { font-size: 2rem; line-height: 1.25; opacity: 0.4; animation: none; }
 
   /* Portrait mode has no separate original/translated panels to hide (both
      columns live in one shared panel) - Caption/Translate turning off is
