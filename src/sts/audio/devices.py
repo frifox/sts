@@ -32,8 +32,18 @@ def describe_devices(input_device: int | None, output_device: int | None) -> dic
 
 
 def check_input(device: int | None, sample_rate: int, channels: int) -> None:
-    """Raises if the device can't capture with these settings."""
-    sd.check_input_settings(device=device, channels=channels, samplerate=sample_rate, dtype="float32")
+    """Raises if the device can't capture at all - not necessarily at
+    `sample_rate` exactly. PortAudio's raw ALSA "hw" access (no "plug"
+    layer) means many real sound cards - an onboard Line-In codec, say -
+    only accept a couple of fixed hardware rates like 44100/48000 and
+    flatly reject an arbitrary one like the pipeline's 16kHz; AudioCapture
+    falls back to the device's own rate and resamples, so this check
+    should accept exactly what AudioCapture will actually end up doing."""
+    try:
+        sd.check_input_settings(device=device, channels=channels, samplerate=sample_rate, dtype="float32")
+    except Exception:
+        info = sd.query_devices(device, "input")
+        sd.check_input_settings(device=device, channels=channels, samplerate=info["default_samplerate"], dtype="float32")
 
 
 def check_output(device: int | None, sample_rate: int) -> None:

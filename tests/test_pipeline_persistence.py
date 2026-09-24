@@ -271,8 +271,10 @@ def test_handle_device_action_persists_input_and_output_when_both_change(tmp_pat
     monkeypatch.setattr("sts.audio.devices.check_input", lambda *a, **k: None)
     monkeypatch.setattr("sts.audio.devices.check_output", lambda *a, **k: None)
     monkeypatch.setattr("sts.audio.capture.sd.InputStream", lambda **kw: _StubStream(**kw))
+    monkeypatch.setattr("sts.audio.capture.sd.check_input_settings", lambda **kw: None)
     monkeypatch.setattr(
-        "sts.audio.capture.sd.query_devices", lambda device, kind: {"index": device or 0, "name": "Stub"}
+        "sts.audio.capture.sd.query_devices",
+        lambda device, kind: {"index": device or 0, "name": "Stub", "default_samplerate": 16_000.0},
     )
     pc = PersistentConfig(str(tmp_path / "sts.db"))
     p = _device_pipeline(pc)
@@ -287,8 +289,10 @@ def test_handle_device_action_only_persists_what_changed(tmp_path, monkeypatch):
     monkeypatch.setattr("sts.audio.devices.check_input", lambda *a, **k: None)
     monkeypatch.setattr("sts.audio.devices.check_output", lambda *a, **k: None)
     monkeypatch.setattr("sts.audio.capture.sd.InputStream", lambda **kw: _StubStream(**kw))
+    monkeypatch.setattr("sts.audio.capture.sd.check_input_settings", lambda **kw: None)
     monkeypatch.setattr(
-        "sts.audio.capture.sd.query_devices", lambda device, kind: {"index": device or 0, "name": "Stub"}
+        "sts.audio.capture.sd.query_devices",
+        lambda device, kind: {"index": device or 0, "name": "Stub", "default_samplerate": 16_000.0},
     )
     pc = PersistentConfig(str(tmp_path / "sts.db"))
     p = _device_pipeline(pc)
@@ -303,8 +307,10 @@ def test_handle_device_action_persists_system_default_as_empty_string(tmp_path, 
     monkeypatch.setattr("sts.audio.devices.check_input", lambda *a, **k: None)
     monkeypatch.setattr("sts.audio.devices.check_output", lambda *a, **k: None)
     monkeypatch.setattr("sts.audio.capture.sd.InputStream", lambda **kw: _StubStream(**kw))
+    monkeypatch.setattr("sts.audio.capture.sd.check_input_settings", lambda **kw: None)
     monkeypatch.setattr(
-        "sts.audio.capture.sd.query_devices", lambda device, kind: {"index": device or 0, "name": "Stub"}
+        "sts.audio.capture.sd.query_devices",
+        lambda device, kind: {"index": device or 0, "name": "Stub", "default_samplerate": 16_000.0},
     )
     pc = PersistentConfig(str(tmp_path / "sts.db"))
     p = _device_pipeline(pc)
@@ -330,8 +336,10 @@ def test_handle_device_action_does_not_persist_on_a_failed_apply(tmp_path, monke
 
 def test_mic_start_stop_do_not_touch_persistence(tmp_path, monkeypatch):
     monkeypatch.setattr("sts.audio.capture.sd.InputStream", lambda **kw: _StubStream(**kw))
+    monkeypatch.setattr("sts.audio.capture.sd.check_input_settings", lambda **kw: None)
     monkeypatch.setattr(
-        "sts.audio.capture.sd.query_devices", lambda device, kind: {"index": device or 0, "name": "Stub"}
+        "sts.audio.capture.sd.query_devices",
+        lambda device, kind: {"index": device or 0, "name": "Stub", "default_samplerate": 16_000.0},
     )
     pc = PersistentConfig(str(tmp_path / "sts.db"))
     p = _device_pipeline(pc)

@@ -30,8 +30,12 @@ class _StubStream:
 def stub_sounddevice(monkeypatch):
     monkeypatch.setattr("sts.audio.capture.sd.InputStream", lambda **kw: _StubStream(**kw))
     monkeypatch.setattr(
-        "sts.audio.capture.sd.query_devices", lambda device, kind: {"index": device or 0, "name": "Stub Device"}
+        "sts.audio.capture.sd.query_devices",
+        lambda device, kind: {"index": device or 0, "name": "Stub Device", "default_samplerate": 16_000.0},
     )
+    # Accepts the pipeline's own rate directly by default, i.e. no resampling
+    # needed - test_capture_rate.py covers the "device rejects it" fallback.
+    monkeypatch.setattr("sts.audio.capture.sd.check_input_settings", lambda **kw: None)
 
 
 def _capture() -> AudioCapture:

@@ -6,6 +6,7 @@ import time
 
 import numpy as np
 import sounddevice as sd
+from scipy.signal import resample_poly
 
 from sts.config import AudioConfig
 from sts.log import vlog
@@ -28,6 +29,8 @@ class AudioCapture:
         self._stream: sd.InputStream | None = None
         self._stop = threading.Event()
         self._last_frame_at = time.monotonic()
+        self._capture_rate = cfg.sample_rate  # set for real in start(); see _resolve_capture_rate
+        self._resample_buffer = np.empty(0, dtype=np.float32)
 
     def is_stalled(self, timeout_s: float) -> bool:
         """True if a local input stream is supposed to be running but has
@@ -52,7 +55,39 @@ class AudioCapture:
             # Overflows/underflows show up here; surfaced rather than raised
             # since dropping a frame is preferable to killing capture.
             print(f"[audio] input status: {status}")
-        self.frames.put(indata[:, 0].copy())
+        mono = indata[:, 0]
+        if self._capture_rate == self.cfg.sample_rate:
+            self.frames.put(mono.copy())
+            return
+        # Captured at the device's own native rate (see _resolve_capture_rate)
+        # - resample down to what the VAD/ASR need, buffering across callbacks
+        # since the ratio rarely divides the callback's block size evenly, and
+        # slice off exact block_ms frames (Silero needs exactly 512 samples at
+        # 16kHz, not "close enough").
+        resampled = resample_poly(mono, self.cfg.sample_rate, self._capture_rate).astype(np.float32)
+        self._resample_buffer = np.concatenate([self._resample_buffer, resampled])
+        block_size = int(self.cfg.sample_rate * self.cfg.block_ms / 1000)
+        while len(self._resample_buffer) >= block_size:
+            self.frames.put(self._resample_buffer[:block_size].copy())
+            self._resample_buffer = self._resample_buffer[block_size:]
+
+    def _resolve_capture_rate(self, device: int | None) -> int:
+        """The rate to actually open the input stream at: cfg.sample_rate if
+        the device accepts it directly, else the device's own default rate.
+        PortAudio's raw ALSA "hw" access (no "plug" layer) means many real
+        sound cards - an onboard Line-In codec, say - only accept a couple of
+        fixed hardware rates like 44100/48000 and flatly reject the
+        pipeline's 16kHz; captured audio is resampled back down to
+        cfg.sample_rate in _callback, same idea as AudioPlayback._target_rate
+        for output."""
+        try:
+            sd.check_input_settings(
+                device=device, channels=self.cfg.channels, samplerate=self.cfg.sample_rate, dtype="float32"
+            )
+            return self.cfg.sample_rate
+        except Exception:
+            info = sd.query_devices(device, "input")
+            return int(info["default_samplerate"])
 
     def start(self) -> None:
         """Opens the configured source. A no-op for `source == "browser"`:
@@ -60,10 +95,12 @@ class AudioCapture:
         if self.cfg.source == "browser":
             vlog("audio", "waiting for browser microphone frames")
             return
-        block_size = int(self.cfg.sample_rate * self.cfg.block_ms / 1000)
+        self._capture_rate = self._resolve_capture_rate(self.cfg.input_device)
+        self._resample_buffer = np.empty(0, dtype=np.float32)
+        block_size = int(self._capture_rate * self.cfg.block_ms / 1000)
         self._stream = sd.InputStream(
             device=self.cfg.input_device,
-            samplerate=self.cfg.sample_rate,
+            samplerate=self._capture_rate,
             channels=self.cfg.channels,
             blocksize=block_size,
             dtype="float32",
@@ -72,8 +109,9 @@ class AudioCapture:
         self._stream.start()
         self._last_frame_at = time.monotonic()
         info = sd.query_devices(self.cfg.input_device, "input")
+        note = f" (resampled from {self._capture_rate} Hz)" if self._capture_rate != self.cfg.sample_rate else ""
         vlog("audio", f"listening on input [{info['index']}] {info['name']} "
-                      f"({self.cfg.sample_rate} Hz, {self.cfg.block_ms} ms frames)")
+                      f"({self.cfg.sample_rate} Hz, {self.cfg.block_ms} ms frames){note}")
 
     def switch_to_alsa(self, device: int | None = None) -> None:
         """Moves capture to a local ALSA input device, switching away from the
