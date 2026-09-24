@@ -344,6 +344,10 @@
   #controls .engine-caret:hover { border-color: #777; }
   #controls .engine-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   #controls .engine-toggle.is-active + .engine-caret { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
+  /* Disabled: starting up, mid ASR-engine switch, disconnected, or (for
+     Translate/Voice) an upstream stage they'd have nothing to work with is
+     off - toggling wouldn't do anything, so don't invite the click. */
+  #controls .engine-toggle:disabled { opacity: 0.4; cursor: default; }
   .engine-dropdown {
     display: none;
     position: absolute;
@@ -938,6 +942,32 @@
     training_seconds: 0, training_target_seconds: 0, cloned: false, active_speaker_id: null,
     audio_source: 'alsa',
   };
+  // Mirrors the last 'stage' message's `ready` flag: false while starting up
+  // *and* while switching ASR engines (Pipeline._stage defaults ready to
+  // False for every non-"Listening" stage, so this comes for free).
+  let systemReady = false;
+
+  // A toggle is only meaningful when what it controls can actually do
+  // something: Translate has nothing to translate with Caption off, Voice
+  // has nothing to speak unless both upstream stages are actually running.
+  function updateEngineAvailability() {
+    const connected = ws && ws.readyState === WebSocket.OPEN;
+    const ready = systemReady && connected;
+    asrToggleBtn.disabled = !ready;
+    translateToggleBtn.disabled = !ready || !lastStatus.active;
+    ttsToggleBtn.disabled = !ready || !lastStatus.active || !lastStatus.translation_enabled;
+  }
+
+  function resetEngineInfo() {
+    // Stale model/device info left over from before a restart/reconnect is
+    // actively misleading, not just cosmetically outdated - a fresh
+    // 'engines' message replaces this once the backend is back.
+    for (const id of ['asr-info-model', 'asr-info-device', 'asr-info-source',
+                       'translate-info-model', 'translate-info-device',
+                       'tts-info-model', 'tts-info-device']) {
+      document.getElementById(id).textContent = '–';
+    }
+  }
 
   // -- Caption/Translated panels: hidden while their engine is off, "System
   // Idle" shown once neither has anything left to display. --------------------
@@ -1073,6 +1103,8 @@
     // local capture without sending a redundant mic_stop back.
     if (status.audio_source !== 'browser' && micActive) stopBrowserMic(false);
     updateMicButton();
+
+    updateEngineAvailability();
   }
 
   function applyLibrary(msg) {
@@ -1497,7 +1529,11 @@
     ws.onclose = () => {
       stage.textContent = 'Reconnecting…';
       stage.className = '';
+      systemReady = false;
       volumeBars.forEach((bar) => bar.classList.remove('lit-quiet', 'lit-good'));
+      closeDropdowns();  // don't leave one open showing now-stale info across a reconnect
+      resetEngineInfo();
+      updateEngineAvailability();
       setTimeout(connect, 1000);
     };
     ws.onmessage = (event) => {
@@ -1513,6 +1549,8 @@
       else if (msg.type === 'stage') {
         stage.textContent = msg.text;
         stage.className = msg.ready ? 'ready' : '';
+        systemReady = !!msg.ready;
+        updateEngineAvailability();
       }
       else if (msg.type === 'status') applyStatus(msg);
       else if (msg.type === 'library') applyLibrary(msg);
