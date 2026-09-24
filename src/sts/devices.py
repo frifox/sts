@@ -30,8 +30,20 @@ def detect_device() -> str:
     return "cpu"
 
 
-def resolve_devices(device: str, asr_device_override: str | None) -> tuple[str, str, str]:
+def resolve_devices(
+    device: str,
+    asr_device_override: str | None,
+    translation_device_override: str | None = None,
+    tts_device_override: str | None = None,
+) -> tuple[str, str, str]:
     """Returns (asr_device, translation_device, tts_device).
+
+    ASR, translation, and TTS are three independently-loaded models, not one
+    that would need splitting *across* GPUs - so multi-GPU here just means
+    pinning whole stages to whichever card via these overrides (e.g.
+    `--tts-device cuda:1`), each one still running entirely on a single
+    device. No model parallelism, no data crossing cards except the small
+    text/audio handed between stages already.
 
     faster-whisper's CTranslate2 backend has no Metal/MPS support (only
     cpu/cuda), so on Apple Silicon ASR runs on cpu (still fast there -
@@ -45,5 +57,9 @@ def resolve_devices(device: str, asr_device_override: str | None) -> tuple[str, 
             print(f"[device] using --asr-device {asr_device} instead of falling back to cpu for mps")
         else:
             print("[device] mps has no faster-whisper support - ASR runs on cpu, translation/TTS on mps")
-        return asr_device, "mps", "mps"
-    return (asr_device_override or device), device, device
+        return asr_device, translation_device_override or "mps", tts_device_override or "mps"
+    return (
+        asr_device_override or device,
+        translation_device_override or device,
+        tts_device_override or device,
+    )

@@ -21,8 +21,21 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--asr-device",
         default=None,
-        help="Override just the ASR device (e.g. force 'cpu' when --device is cuda/mps for some other reason). "
-        "faster-whisper only supports cpu/cuda, never mps.",
+        help="Override just the ASR device: 'cpu' (e.g. to free VRAM for translation/TTS), or a specific "
+        "GPU like 'cuda:1' if you have more than one card. faster-whisper only supports cpu/cuda, never mps.",
+    )
+    parser.add_argument(
+        "--translation-device",
+        default=None,
+        help="Override just the translation device, e.g. 'cuda:1' to run it on a second GPU instead of "
+        "sharing one with ASR/TTS. Each stage is an independent model - this pins the whole stage to a "
+        "card, not model parallelism, so there's no NVLink/bandwidth requirement between cards.",
+    )
+    parser.add_argument(
+        "--tts-device",
+        default=None,
+        help="Override just the TTS device, e.g. 'cuda:1' to run voice synthesis on a second GPU instead "
+        "of sharing one with ASR/translation.",
     )
     parser.add_argument("--whisper-model", default="large-v3", help="faster-whisper model size/name")
     parser.add_argument(
@@ -151,7 +164,9 @@ def build_engine_config(args: argparse.Namespace, prefer_backend: str = "xtts") 
         transformers.utils.logging.set_verbosity_error()
     except ImportError:
         pass
-    devices = resolve_devices(args.device or detect_device(), args.asr_device)
+    devices = resolve_devices(
+        args.device or detect_device(), args.asr_device, args.translation_device, args.tts_device
+    )
     asr_device, translation_device, tts_device = devices
 
     cfg = PipelineConfig()

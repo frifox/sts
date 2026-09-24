@@ -35,6 +35,32 @@ def test_asr_device_override_is_respected_for_mps():
     assert tts == "mps"
 
 
+def test_translation_and_tts_device_overrides_pin_independent_gpus():
+    # Each stage is an independent model, so a second card is just another
+    # override, same shape as --asr-device - no model-parallelism needed.
+    asr, translation, tts = resolve_devices("cuda", None, "cuda:1", "cuda:1")
+    assert asr == "cuda"
+    assert translation == "cuda:1"
+    assert tts == "cuda:1"
+
+
+def test_all_three_stages_can_be_pinned_to_different_devices():
+    asr, translation, tts = resolve_devices("cuda", "cpu", "cuda:0", "cuda:1")
+    assert (asr, translation, tts) == ("cpu", "cuda:0", "cuda:1")
+
+
+def test_translation_and_tts_overrides_apply_under_mps_too():
+    asr, translation, tts = resolve_devices("mps", None, "cuda:1", "cuda:1")
+    assert asr == "cpu"  # still no faster-whisper support on mps
+    assert translation == "cuda:1"
+    assert tts == "cuda:1"
+
+
+def test_no_overrides_still_defaults_every_stage_to_the_single_shared_device():
+    # The default (no second card): unchanged behavior, everything on one GPU.
+    assert resolve_devices("cuda", None, None, None) == ("cuda", "cuda", "cuda")
+
+
 def test_pascal_gtx_1080_ti_does_not_support_bf16_or_flash_attention():
     assert supports_bf16_and_flash_attention(6) is False  # compute capability 6.1
 
