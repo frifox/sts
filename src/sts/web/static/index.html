@@ -358,15 +358,11 @@
   .engine-dropdown label { display: block; margin: 0.6rem 0 0.3rem; color: #9a9aa5; }
   .engine-dropdown select { width: 100%; box-sizing: border-box; padding: 0.5rem; font: inherit; }
   .engine-dropdown .dropdown-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
-  .engine-dropdown .stream-row {
-    display: flex; align-items: center; gap: 0.5em; margin-top: 0.9rem; color: #9a9aa5; cursor: pointer;
-  }
-  .engine-dropdown .stream-row input { cursor: pointer; }
   .engine-dropdown .mic-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.7rem; }
   .engine-dropdown .mic-row button { flex: 0 0 auto; }
   #mic-status { font-size: 0.78rem; color: #9a9aa5; }
   #mic-status.error { color: #e08a8a; }
-  #btn-browser-mic.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
+  #btn-browser-mic.is-active, #stream-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   /* Dark styling for the modal dialogs' own buttons and fields (the header's are styled via #controls). */
   #design-dialog button, #save-dialog button {
     font: inherit;
@@ -515,10 +511,9 @@
         <div class="engine-dropdown" id="dropdown-output">
           <label for="cfg-output">Output device (where the translated voice plays)</label>
           <select id="cfg-output"></select>
-          <label class="stream-row" title="Play the synthesized voice in this browser too">
-            <input type="checkbox" id="stream-toggle" />
-            Stream voice to this browser
-          </label>
+          <div class="mic-row">
+            <button type="button" id="stream-toggle" title="Play the synthesized voice in this browser too">🔊 Stream voice to this browser</button>
+          </div>
         </div>
       </div>
       <button id="btn-reset">Reset</button>
@@ -1496,15 +1491,20 @@
     return audioCtx;
   }
 
-  streamToggle.checked = streamEnabled;
+  function updateStreamButton() {
+    streamToggle.textContent = streamEnabled ? '⏹ Stop streaming to this browser' : '🔊 Stream voice to this browser';
+    streamToggle.classList.toggle('is-active', streamEnabled);
+  }
+  updateStreamButton();
 
-  streamToggle.addEventListener('change', () => {
-    streamEnabled = streamToggle.checked;
+  streamToggle.addEventListener('click', () => {
+    streamEnabled = !streamEnabled;
     try { localStorage.setItem('sts-stream-audio', streamEnabled ? '1' : '0'); } catch {}
     if (streamEnabled) {
       // Start fresh from "now" rather than dumping whatever arrived while off.
       nextStartTime = ensureAudioContext().currentTime;
     }
+    updateStreamButton();
   });
 
   // Each binary frame: 4-byte LE sample rate header + raw float32 LE mono PCM
