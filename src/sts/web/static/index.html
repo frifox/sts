@@ -365,6 +365,10 @@
   #mic-status { font-size: 0.78rem; color: #9a9aa5; }
   #mic-status.error { color: #e08a8a; }
   #btn-browser-mic.is-active, #stream-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
+  /* Landscape / Portrait: two buttons side by side, the current one lit. */
+  .engine-dropdown .render-mode { display: flex; gap: 0.5rem; }
+  .engine-dropdown .render-mode button { flex: 1 1 0; }
+  .render-mode button.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   /* Dark styling for the modal dialogs' own buttons and fields (the header's are styled via #controls). */
   #design-dialog button, #save-dialog button {
     font: inherit;
@@ -465,11 +469,11 @@
             <div>Model: <b id="translate-info-model">–</b></div>
             <div>Device: <b id="translate-info-device">–</b></div>
           </div>
-          <label for="render-mode-select" title="Landscape: original and translated stacked, each its own flowing paragraph. Portrait: side-by-side columns, each snippet its own row so both languages line up.">Render</label>
-          <select id="render-mode-select">
-            <option value="landscape">Landscape</option>
-            <option value="portrait">Portrait</option>
-          </select>
+          <label id="render-mode-label">Render</label>
+          <div class="render-mode" role="group" aria-labelledby="render-mode-label">
+            <button type="button" data-mode="landscape" title="Original and translated stacked, each its own flowing paragraph">Landscape</button>
+            <button type="button" data-mode="portrait" title="Side-by-side columns, each sentence its own row so both languages line up">Portrait</button>
+          </div>
         </div>
       </div>
       <div class="engine" id="engine-tts">
@@ -1038,7 +1042,7 @@
   const translatedPanel = document.getElementById('translated-panel');
   const portraitPanel = document.getElementById('portrait-panel');
   const idleMessage = document.getElementById('idle-message');
-  const renderModeSelect = document.getElementById('render-mode-select');
+  const renderModeButtons = document.querySelectorAll('.render-mode button');
 
   // Per-viewer display preference, not an operator setting - each connected
   // screen picks its own (e.g. a portrait-mounted display vs a landscape
@@ -1048,13 +1052,24 @@
   try {
     renderMode = localStorage.getItem('sts-render-mode') || 'landscape';
   } catch { /* private browsing / storage blocked - default stands */ }
-  renderModeSelect.value = renderMode;
+  function showRenderMode() {
+    for (const button of renderModeButtons) {
+      const current = button.dataset.mode === renderMode;
+      button.classList.toggle('is-active', current);
+      button.setAttribute('aria-pressed', String(current));
+    }
+  }
+  showRenderMode();
   updatePanelVisibility();  // apply it immediately, before the first status message arrives
 
-  renderModeSelect.addEventListener('change', () => {
-    const newMode = renderModeSelect.value;
+  for (const button of renderModeButtons) {
+    button.addEventListener('click', () => setRenderMode(button.dataset.mode));
+  }
+
+  function setRenderMode(newMode) {
     if (newMode === renderMode) return;
     renderMode = newMode;
+    showRenderMode();
     // Reveal the target panel *before* transforming into it - the pruning
     // inside addPortraitOriginal/addLine measures the container's real
     // rendered height, which is 0 while it's still `hidden`.
@@ -1064,7 +1079,7 @@
     if (newMode === 'portrait') transformLandscapeToPortrait(); else transformPortraitToLandscape();
     renderRecentOriginal();
     try { localStorage.setItem('sts-render-mode', renderMode); } catch { /* ignore */ }
-  });
+  }
 
   function updatePanelVisibility() {
     const portrait = renderMode === 'portrait';
