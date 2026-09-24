@@ -229,6 +229,15 @@ class CaptionBroadcaster:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all({"type": "input_level", "level": level}), self.loop)
 
+    def broadcast_output_level(self, level: float) -> None:
+        """RMS (0..~1) of the most recently played output chunk (synthesized
+        voice audio) - drives the volume-bar meter next to the Voice button.
+        Same reasoning as broadcast_input_level: not cached/replayed on
+        connect, a fresh value follows quickly and a stale one would mislead."""
+        if self.loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_to_all({"type": "output_level", "level": level}), self.loop)
+
     def broadcast_engines(self, message: dict) -> None:
         """Static ASR/translation/TTS model + device info for the header dropdowns."""
         self._last_engines = {"type": "engines", **message}

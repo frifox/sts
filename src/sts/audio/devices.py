@@ -47,8 +47,18 @@ def check_input(device: int | None, sample_rate: int, channels: int) -> None:
 
 
 def check_output(device: int | None, sample_rate: int) -> None:
-    """Raises if the device can't play mono audio at this rate."""
-    sd.check_output_settings(device=device, channels=1, samplerate=sample_rate, dtype="float32")
+    """Raises if the device can't play mono audio at all - not necessarily
+    at `sample_rate` exactly. Same reasoning as check_input: a real hardware
+    codec's Line Out, opened via PortAudio's raw ALSA "hw" access, may only
+    accept its own fixed rate (e.g. 44100/48000) and reject the TTS model's
+    native rate outright; AudioPlayback._target_rate already resamples for
+    exactly this case, so this check should accept whatever it will end up
+    actually doing instead of failing before playback ever gets a chance to."""
+    try:
+        sd.check_output_settings(device=device, channels=1, samplerate=sample_rate, dtype="float32")
+    except Exception:
+        info = sd.query_devices(device, "output")
+        sd.check_output_settings(device=device, channels=1, samplerate=info["default_samplerate"], dtype="float32")
 
 
 def reinitialize_audio_system() -> None:

@@ -213,7 +213,7 @@ class _FlakyPlayback:
         self.played = []
         self.forgot = 0
 
-    def play(self, audio, sample_rate, pause_before, should_continue):
+    def play(self, audio, sample_rate, pause_before, should_continue, on_chunk=None):
         if self.fail_times > 0:
             self.fail_times -= 1
             raise RuntimeError("Error opening OutputStream: Internal PortAudio error -9986")

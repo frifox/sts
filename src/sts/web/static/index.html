@@ -269,12 +269,12 @@
     gap: 0.6em;
   }
 
-  /* Live input-level meter: 10 bars, tallest on the right, colored by
-     position (not by whether the current level reaches them) - bars 1-5
-     read as "quiet", 6-10 as "good", same idea as a hardware VU meter's
-     fixed color zones. How many are actually lit is the only thing that
-     changes as the level moves. */
-  #volume-meter {
+  /* Live input/output level meters: 10 bars each, tallest on the right,
+     colored by position (not by whether the current level reaches them) -
+     bars 1-5 read as "quiet", 6-10 as "good", same idea as a hardware VU
+     meter's fixed color zones. How many are actually lit is the only thing
+     that changes as the level moves. */
+  #volume-meter, #output-meter {
     display: flex;
     align-items: flex-end;
     gap: 2px;
@@ -521,6 +521,18 @@
             Stream voice to this browser
           </label>
         </div>
+      </div>
+      <div id="output-meter" title="Output level (synthesized voice audio)">
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
+        <span class="volume-bar"></span>
       </div>
       <button id="btn-reset">Reset</button>
     </div>
@@ -1172,30 +1184,35 @@
     el.classList.toggle('slow', msg.value >= 1.0);
   }
 
-  // -- Input level meter (10 bars, left of the Caption button) ----------------
-  // The server sends raw RMS (0..~1) of the currently selected input,
-  // throttled to ~100ms; everything about turning that into a bar count and
-  // coloring lives here so it's tunable without touching the backend.
+  // -- Input/output level meters (10 bars each, either side of Caption/Voice) --
+  // The server sends raw RMS (0..~1) - input throttled to ~100ms, output per
+  // ~100ms of actually-playing audio; everything about turning that into a
+  // bar count and coloring lives here so it's tunable without touching the
+  // backend.
   const volumeBars = Array.from(document.querySelectorAll('#volume-meter .volume-bar'));
+  const outputBars = Array.from(document.querySelectorAll('#output-meter .volume-bar'));
   const VOLUME_FLOOR_DB = -50;  // at/below this: silence, no bars lit
   const VOLUME_CEILING_DB = -6; // at/above this: all 10 bars lit
 
-  function levelToBarCount(rms) {
+  function levelToBarCount(rms, bars) {
     if (!(rms > 0)) return 0;
     const db = 20 * Math.log10(rms);
     if (db <= VOLUME_FLOOR_DB) return 0;
     const frac = Math.min(1, (db - VOLUME_FLOOR_DB) / (VOLUME_CEILING_DB - VOLUME_FLOOR_DB));
-    return Math.round(frac * volumeBars.length);
+    return Math.round(frac * bars.length);
   }
 
-  function applyInputLevel(msg) {
-    const lit = levelToBarCount(msg.level);
-    volumeBars.forEach((bar, i) => {
+  function applyLevel(bars, rms) {
+    const lit = levelToBarCount(rms, bars);
+    bars.forEach((bar, i) => {
       const position = i + 1;
       bar.classList.toggle('lit-quiet', position <= lit && position <= 5);
       bar.classList.toggle('lit-good', position <= lit && position > 5);
     });
   }
+
+  const applyInputLevel = (msg) => applyLevel(volumeBars, msg.level);
+  const applyOutputLevel = (msg) => applyLevel(outputBars, msg.level);
 
   // Switching reloads the whole ASR engine (several seconds to about a
   // minute for a cold Parakeet load), during which the #stage indicator
@@ -1531,6 +1548,7 @@
       stage.className = '';
       systemReady = false;
       volumeBars.forEach((bar) => bar.classList.remove('lit-quiet', 'lit-good'));
+      outputBars.forEach((bar) => bar.classList.remove('lit-quiet', 'lit-good'));
       closeDropdowns();  // don't leave one open showing now-stale info across a reconnect
       resetEngineInfo();
       updateEngineAvailability();
@@ -1559,6 +1577,7 @@
       else if (msg.type === 'engines') applyEngines(msg);
       else if (msg.type === 'rtf') applyRtf(msg);
       else if (msg.type === 'input_level') applyInputLevel(msg);
+      else if (msg.type === 'output_level') applyOutputLevel(msg);
     };
   }
 

@@ -133,6 +133,7 @@ class Pipeline:
         # None/half-built ASR object mid-swap (see _switch_asr_backend).
         self._asr_lock = threading.Lock()
         self._asr_busy = False  # a switch is already in flight; ignore a repeat click
+        self._last_output_level_broadcast = 0.0
 
         self._segments: queue.Queue = queue.Queue()
         # (text, first_seq) per committed chunk - see _commit_new_asr_text.
@@ -220,6 +221,11 @@ class Pipeline:
             # mid-write() has been observed to segfault PortAudio's ALSA
             # backend.
             self._drain(self._audio)
+            # No more on_chunk calls will happen until something plays again,
+            # so the output meter would otherwise be stuck showing whatever
+            # level happened to be last, forever - explicitly zero it.
+            if self.broadcaster:
+                self.broadcaster.broadcast_output_level(0.0)
         elif action == "translate_on":
             self.control.enable_translation()
         elif action == "translate_off":
@@ -696,6 +702,21 @@ class Pipeline:
             rms = float(np.sqrt(np.mean(np.square(frame))))
             self.broadcaster.broadcast_input_level(rms)
 
+    def _broadcast_output_level(self, chunk: np.ndarray) -> None:
+        """RMS of one output chunk as it's written, for the volume-bar meter
+        next to the Voice button. Throttled internally (unlike
+        _broadcast_input_level, whose caller owns a loop-local timestamp)
+        since this runs as AudioPlayback.play()'s on_chunk callback, called
+        from inside its own chunk loop rather than a loop this class owns."""
+        if not self.broadcaster or not chunk.size:
+            return
+        now = time.monotonic()
+        if now - self._last_output_level_broadcast < self._LEVEL_METER_INTERVAL_S:
+            return
+        self._last_output_level_broadcast = now
+        rms = float(np.sqrt(np.mean(np.square(chunk))))
+        self.broadcaster.broadcast_output_level(rms)
+
     def _broadcast_library(self) -> None:
         if self.broadcaster:
             speakers = [
@@ -724,11 +745,12 @@ class Pipeline:
 
     # -- pipeline stages -----------------------------------------------
 
-    # Frames arrive in fixed block_ms (32ms) chunks, so a plain ">= 0.1s"
-    # gate would fire on the first boundary *past* 100ms (128ms: 4 frames),
-    # not the closest one (96ms: 3 frames, only 4ms off) - this trims the
-    # threshold just under 3 frames' worth so it catches that one instead.
-    _INPUT_LEVEL_INTERVAL_S = 0.095
+    # Shared by both the input and output volume-bar meters. Input frames
+    # arrive in fixed block_ms (32ms) chunks, so a plain ">= 0.1s" gate would
+    # fire on the first boundary *past* 100ms (128ms: 4 frames), not the
+    # closest one (96ms: 3 frames, only 4ms off) - this trims the threshold
+    # just under 3 frames' worth so it catches that one instead.
+    _LEVEL_METER_INTERVAL_S = 0.095
 
     def _segment_loop(self) -> None:
         self._frames_since_partial = 0
@@ -736,7 +758,7 @@ class Pipeline:
         while not self._stop.is_set():
             frame = self.capture.frames.get()
             now = time.monotonic()
-            if now - last_level_broadcast >= self._INPUT_LEVEL_INTERVAL_S:
+            if now - last_level_broadcast >= self._LEVEL_METER_INTERVAL_S:
                 self._broadcast_input_level(frame)
                 last_level_broadcast = now
             self._process_captured_frame(frame)
@@ -1008,6 +1030,7 @@ class Pipeline:
         self.playback.play(
             audio, sample_rate=sample_rate, pause_before=pause_before,
             should_continue=self.control.voice_enabled.is_set,
+            on_chunk=self._broadcast_output_level,
         )
 
     def _recover_audio(self, reason: str) -> bool:

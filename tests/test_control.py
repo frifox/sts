@@ -135,8 +135,13 @@ def test_voice_off_drops_already_synthesized_but_unplayed_sentences():
     from sts.pipeline import Pipeline
 
     class Broadcaster:
+        output_levels = []
+
         def broadcast_status(self, **kwargs):
             pass
+
+        def broadcast_output_level(self, level):
+            self.output_levels.append(level)
 
     class Tts:
         cloned_speaker_wav = None
@@ -158,6 +163,9 @@ def test_voice_off_drops_already_synthesized_but_unplayed_sentences():
 
     assert not p.control.voice_enabled.is_set()
     assert p._audio.empty()  # nothing left for _playback_loop to still play
+    # No more on_chunk calls will happen until something plays again, so the
+    # output meter must be told explicitly, or it'd show a stale level forever.
+    assert p.broadcaster.output_levels == [0.0]
 
 
 def test_playback_loop_broadcasts_before_playing_locally_not_after():
@@ -232,6 +240,50 @@ def test_broadcast_input_level_skips_an_empty_frame():
     p.broadcaster = Broadcaster()
 
     p._broadcast_input_level(np.array([], dtype=np.float32))  # no crash, no broadcast
+
+
+def test_broadcast_output_level_sends_the_chunks_rms_throttled():
+    from sts.pipeline import Pipeline
+
+    levels = []
+
+    class Broadcaster:
+        def broadcast_output_level(self, level):
+            levels.append(level)
+
+    p = object.__new__(Pipeline)
+    p.broadcaster = Broadcaster()
+    p._last_output_level_broadcast = 0.0
+
+    # A full-scale square wave has RMS 1.0 - a clean, exact value to assert on.
+    p._broadcast_output_level(np.array([1.0, -1.0, 1.0, -1.0], dtype=np.float32))
+    assert levels == [1.0]
+
+    # Immediately after: throttled, so a second chunk within the same
+    # window (unlike _broadcast_input_level, this method owns its own
+    # timestamp since it's called from inside AudioPlayback.play()'s chunk
+    # loop, which has no loop-local state of its own to throttle with).
+    p._broadcast_output_level(np.zeros(10, dtype=np.float32))
+    assert levels == [1.0]
+
+    # Once the interval has passed, the next chunk gets through.
+    p._last_output_level_broadcast = 0.0
+    p._broadcast_output_level(np.zeros(10, dtype=np.float32))
+    assert levels == [1.0, 0.0]
+
+
+def test_broadcast_output_level_skips_an_empty_chunk():
+    from sts.pipeline import Pipeline
+
+    class Broadcaster:
+        def broadcast_output_level(self, level):
+            raise AssertionError("should never be called for an empty chunk")
+
+    p = object.__new__(Pipeline)
+    p.broadcaster = Broadcaster()
+    p._last_output_level_broadcast = 0.0
+
+    p._broadcast_output_level(np.array([], dtype=np.float32))  # no crash, no broadcast
 
 
 def _startup_voice_pipeline(tmp_path):

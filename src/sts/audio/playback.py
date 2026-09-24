@@ -103,6 +103,7 @@ class AudioPlayback:
         blocking: bool = True,
         pause_before: float = 0.0,
         should_continue=None,
+        on_chunk=None,
     ) -> None:
         """Queues `audio` on the output stream. The write blocks only until the
         stream's buffer has room, so back-to-back calls play continuously.
@@ -117,7 +118,12 @@ class AudioPlayback:
         the *this* method's own thread, not the caller's, aborting the
         stream from a different thread while this one is mid-write has been
         observed to segfault PortAudio's ALSA backend; polling in small
-        chunks on this same thread gets the same prompt cutoff safely."""
+        chunks on this same thread gets the same prompt cutoff safely.
+
+        `on_chunk`, if given, is called with each chunk as it's written (used
+        to report output level for the volume-bar meter) - safe to do inline
+        here since, unlike audio *capture*, this runs on a plain Python
+        thread (the caller's), not a PortAudio real-time callback."""
         with self._lock:
             stream, target_rate = self._ensure_stream(sample_rate)
             if target_rate != sample_rate:
@@ -132,6 +138,8 @@ class AudioPlayback:
         vlog("audio", f"playing {len(audio) / sample_rate:.1f}s of speech" + (f" after a {pad:.1f}s pause" if pad > 0 else ""))
         if should_continue is None:
             stream.write(samples)
+            if on_chunk:
+                on_chunk(samples)
             return
         chunk_frames = max(1, int(0.05 * sample_rate))
         for start in range(0, len(samples), chunk_frames):
@@ -140,7 +148,10 @@ class AudioPlayback:
                     self._scheduled_end = 0.0  # what got cut short isn't "queued" anymore
                 vlog("audio", "playback cut short")
                 return
-            stream.write(samples[start : start + chunk_frames])
+            chunk = samples[start : start + chunk_frames]
+            stream.write(chunk)
+            if on_chunk:
+                on_chunk(chunk)
 
     def stop(self) -> None:
         """Cuts off whatever is currently playing (used when the operator resets)."""

@@ -192,3 +192,40 @@ def test_check_input_still_raises_when_even_the_devices_own_rate_fails(monkeypat
 
     with pytest.raises(Exception, match="broken device"):
         check_input(device=4, sample_rate=16_000, channels=1)
+
+
+def test_check_output_falls_back_to_the_devices_own_rate(monkeypatch):
+    """Same bug as check_input, on the output side: reported switching the
+    motherboard's Line Out gave the same "Invalid sample rate" error, since
+    check_output had no fallback even though AudioPlayback._target_rate
+    already resamples for exactly this case at actual playback time."""
+    from sts.audio.devices import check_output
+
+    calls = []
+
+    def fake_check(**kw):
+        calls.append(kw["samplerate"])
+        if kw["samplerate"] == 24_000:
+            raise Exception("Invalid sample rate [PaErrorCode -9997]")
+
+    monkeypatch.setattr("sts.audio.devices.sd.check_output_settings", fake_check)
+    monkeypatch.setattr(
+        "sts.audio.devices.sd.query_devices",
+        lambda device, kind: {"default_samplerate": 44_100.0},
+    )
+
+    check_output(device=0, sample_rate=24_000)  # doesn't raise
+
+    assert calls == [24_000, 44_100.0]
+
+
+def test_check_output_still_raises_when_even_the_devices_own_rate_fails(monkeypatch):
+    from sts.audio.devices import check_output
+
+    monkeypatch.setattr(
+        "sts.audio.devices.sd.check_output_settings", lambda **kw: (_ for _ in ()).throw(Exception("broken device"))
+    )
+    monkeypatch.setattr("sts.audio.devices.sd.query_devices", lambda device, kind: {"default_samplerate": 44_100.0})
+
+    with pytest.raises(Exception, match="broken device"):
+        check_output(device=0, sample_rate=24_000)
