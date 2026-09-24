@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 class AudioConfig:
     input_device: int | None = None
     output_device: int | None = None
+    # Software gain applied to audio written to the local sound card only (not
+    # to a browser stream, which has its own volume) - set from the Output
+    # dropdown's slider, 0.0-1.0.
+    volume: float = 1.0
     # "alsa" reads `input_device` via sounddevice, as always; "browser" instead
     # accepts frames pushed over the websocket by a connected browser's
     # microphone (see Pipeline._handle_mic_frame). Switched at runtime by the

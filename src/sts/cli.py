@@ -144,6 +144,12 @@ def main() -> None:
         saved_backend = persistent_config.get("asr_backend")
         if saved_backend:
             cfg.asr.backend = saved_backend
+        saved_volume = persistent_config.get("output_volume")
+        if saved_volume:
+            try:
+                cfg.audio.volume = max(0, min(100, int(saved_volume))) / 100
+            except ValueError:
+                pass
 
     if cfg.asr.backend == "parakeet" and importlib.util.find_spec("nemo") is None:
         # Parakeet is the default (or a saved preference), but this

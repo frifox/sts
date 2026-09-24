@@ -119,6 +119,47 @@ def test_pause_threshold_changes_live_and_is_clamped():
     assert p.cfg.vad.min_silence_ms == 1500
 
 
+def test_output_volume_changes_live_is_clamped_and_persisted():
+    from sts.config import PipelineConfig
+    from sts.pipeline import Pipeline
+
+    class Broadcaster:
+        status = None
+
+        def broadcast_status(self, **kwargs):
+            self.status = kwargs
+
+    class Tts:
+        cloned_speaker_wav = None
+
+    class PersistentConfig:
+        saved = None
+
+        def set(self, key, value):
+            self.saved = (key, value)
+
+    p = object.__new__(Pipeline)
+    p.cfg = PipelineConfig()
+    p.broadcaster = Broadcaster()
+    p.tts = Tts()
+    p.control = RecognitionControl(16000)
+    p._pending_voice = None
+    p._active_speaker_id = None
+    p._persistent_config = PersistentConfig()
+
+    p.handle_control({"action": "set_output_volume", "percent": 40})
+    assert p.cfg.audio.volume == 0.4
+    assert p.broadcaster.status["output_volume"] == 40  # other open pages follow along
+    assert p._persistent_config.saved == ("output_volume", "40")  # remembered across restarts
+
+    p.handle_control({"action": "set_output_volume", "percent": -5})
+    assert p.cfg.audio.volume == 0.0  # clamped to the slider's range
+    p.handle_control({"action": "set_output_volume", "percent": 150})
+    assert p.cfg.audio.volume == 1.0
+    p.handle_control({"action": "set_output_volume", "percent": "abc"})  # junk is ignored
+    assert p.cfg.audio.volume == 1.0
+
+
 def test_voice_off_drops_already_synthesized_but_unplayed_sentences():
     """voice_off must drop anything already synthesized and queued but not
     yet handed to the sound card - not just stop *new* audio from being

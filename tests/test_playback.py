@@ -70,6 +70,17 @@ def test_play_without_should_continue_writes_the_whole_clip_in_one_call(stub_out
     assert sum(len(c) for c in stream.written) == len(audio)
 
 
+def test_play_applies_the_configured_volume_as_a_gain(stub_output):
+    """The Output dropdown's volume slider sets cfg.volume - play() must
+    scale samples by it (a local-only gain; a connected browser's own stream
+    gets the unscaled clip, see broadcast_audio's call site)."""
+    pb = AudioPlayback(AudioConfig(volume=0.5))
+    audio = np.full(100, 0.8, dtype=np.float32)
+    pb.play(audio, sample_rate=24_000)
+    written = np.concatenate(stub_output["stream"].written).reshape(-1)
+    assert np.allclose(written, 0.4)
+
+
 def test_should_continue_false_cuts_playback_short_instead_of_finishing_the_clip(stub_output):
     """The regression this guards: unchecking Voice mid-sentence must stop
     the sound actually coming out, not just prevent the *next* sentence from

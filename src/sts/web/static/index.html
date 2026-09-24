@@ -155,6 +155,15 @@
   #pause-slider { width: 7.5em; accent-color: #7a8aa0; cursor: pointer; }
   #pause-value { min-width: 4.2em; font-variant-numeric: tabular-nums; }
 
+  #volume-control {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    cursor: default;
+  }
+  #volume-slider { width: 7.5em; accent-color: #7a8aa0; cursor: pointer; }
+  #volume-value { min-width: 3em; font-variant-numeric: tabular-nums; }
+
   #stage {
     display: flex;
     align-items: center;
@@ -509,6 +518,11 @@
         <span class="volume-bar"></span>
         <span class="volume-bar"></span>
         <div class="engine-dropdown" id="dropdown-output">
+          <label id="volume-control" title="Volume of the local sound card output only - doesn't affect a browser stream's own volume">
+            Volume
+            <input id="volume-slider" type="range" min="0" max="100" step="1" value="100" />
+            <span id="volume-value">100%</span>
+          </label>
           <label for="cfg-output">Output device (where the translated voice plays)</label>
           <select id="cfg-output"></select>
           <div class="mic-row">
@@ -917,6 +931,9 @@
   const pauseSlider = document.getElementById('pause-slider');
   const pauseValue = document.getElementById('pause-value');
   let draggingPause = false;
+  const volumeSlider = document.getElementById('volume-slider');
+  const volumeValue = document.getElementById('volume-value');
+  let draggingVolume = false;
   const createBtn = document.getElementById('btn-create-voice');
   const designDialog = document.getElementById('design-dialog');
   const designPrompt = document.getElementById('design-prompt');
@@ -1087,6 +1104,10 @@
     if (status.min_silence_ms != null && !draggingPause) {
       pauseSlider.value = status.min_silence_ms;
       pauseValue.textContent = `${status.min_silence_ms} ms`;
+    }
+    if (status.output_volume != null && !draggingVolume) {
+      volumeSlider.value = status.output_volume;
+      volumeValue.textContent = `${status.output_volume}%`;
     }
     if (status.voice_groups) defaultVoices = Object.values(status.voice_groups).flat();
     renderVoiceSelect();
@@ -1298,6 +1319,16 @@
     pauseValue.textContent = `${pauseSlider.value} ms`;
     clearTimeout(pauseTimer);
     pauseTimer = setTimeout(() => send('set_min_silence', { ms: Number(pauseSlider.value) }), 80);
+  });
+
+  // Live output volume: same pattern as the pause slider above.
+  let volumeTimer = null;
+  volumeSlider.addEventListener('pointerdown', () => { draggingVolume = true; });
+  window.addEventListener('pointerup', () => { draggingVolume = false; });
+  volumeSlider.addEventListener('input', () => {
+    volumeValue.textContent = `${volumeSlider.value}%`;
+    clearTimeout(volumeTimer);
+    volumeTimer = setTimeout(() => send('set_output_volume', { percent: Number(volumeSlider.value) }), 80);
   });
 
   // -- Audio devices (input in the Caption dropdown, output in the Voice one) --

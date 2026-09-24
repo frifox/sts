@@ -129,7 +129,7 @@ class AudioPlayback:
             if target_rate != sample_rate:
                 audio = torchaudio.functional.resample(torch.from_numpy(audio), sample_rate, target_rate).numpy()
                 sample_rate = target_rate
-            samples = np.ascontiguousarray(audio, dtype=np.float32).reshape(-1, 1)
+            samples = np.ascontiguousarray(audio, dtype=np.float32).reshape(-1, 1) * self.cfg.volume
             now = time.monotonic()
             pad = pause_needed(now, self._scheduled_end, pause_before) if pause_before > 0 else 0.0
             self._scheduled_end = max(now, self._scheduled_end) + pad + len(samples) / sample_rate

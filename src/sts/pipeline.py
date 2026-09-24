@@ -275,6 +275,19 @@ class Pipeline:
             # Read by the voice detector on every frame, so this applies to the very next pause.
             self.cfg.vad.min_silence_ms = max(MIN_SILENCE_RANGE_MS[0], min(MIN_SILENCE_RANGE_MS[1], ms))
             vlog("vad", f"pause threshold set to {self.cfg.vad.min_silence_ms} ms")
+        elif action == "set_output_volume":
+            try:
+                percent = int(data.get("percent"))
+            except (TypeError, ValueError):
+                return
+            percent = max(0, min(100, percent))
+            # Read by AudioPlayback.play() at the start of each clip, so this
+            # takes effect on whatever plays next (a clip already mid-playback
+            # keeps the gain it started with).
+            self.cfg.audio.volume = percent / 100
+            vlog("audio", f"output volume set to {percent}%")
+            if self._persistent_config is not None:
+                self._persistent_config.set("output_volume", str(percent))
         elif action == "delete_voice":
             self._delete_voice(str(data.get("speaker_id") or ""))
         elif action == "select_speaker":
@@ -666,6 +679,7 @@ class Pipeline:
                 cloned=self.tts.cloned_speaker_wav is not None,
                 can_save=self._pending_voice is not None,
                 min_silence_ms=self.cfg.vad.min_silence_ms,
+                output_volume=round(self.cfg.audio.volume * 100),
                 audio_source=self.cfg.audio.source,
                 can_design=hasattr(self.tts, "design_reference"),
                 default_voice=self.cfg.tts.resolve_voice(self.cfg.tts.default_voice),
