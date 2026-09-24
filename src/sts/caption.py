@@ -7,9 +7,11 @@ one can be transcribed and handed off independently), this never cuts
 anything: captured audio piles into one buffer for the whole run, and that
 whole buffer is re-transcribed from scratch every --interval-ms. Parakeet
 sees more context each time, and can (and does) revise earlier wording as a
-result - printing the *complete* current transcript every cycle, not just
+result - showing the *complete* current transcript every cycle, not just
 whatever's new, is what makes that revision visible instead of hidden behind
-a diff. The buffer only grows, so later re-transcriptions cost more than
+a diff. In a terminal it's one line rewritten in place as it grows and
+changes; piped elsewhere, each changed transcript is its own line. The
+buffer only grows, so later re-transcriptions cost more than
 earlier ones - by design, since capping or windowing it would just be VAD
 under another name. Meant for short exploratory runs, not left running.
 
@@ -26,6 +28,7 @@ Usage:
 
 import argparse
 import queue
+import shutil
 import sys
 import threading
 import time
@@ -46,6 +49,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--list-devices", action="store_true", help="List audio devices and exit")
     return parser
+
+
+class LiveLine:
+    """Shows the transcript as one line that's rewritten in place as it
+    grows or is revised, instead of printing a new line for every
+    re-transcription. A transcript longer than the terminal is wide wraps
+    onto several rows, so a rewrite moves the cursor back up over all of
+    them and clears to the end of the screen before printing the new text.
+    When stdout isn't a terminal (piped to a file) there's no cursor to
+    move: every changed transcript is printed as its own line instead."""
+
+    def __init__(self, stream=None):
+        self.stream = stream or sys.stdout
+        self.live = self.stream.isatty()
+        self.text = ""
+        self._rows = 0  # rows the current text occupies on screen
+
+    def update(self, text: str) -> None:
+        if text == self.text:
+            return
+        self.text = text
+        if not self.live:
+            print(text, file=self.stream, flush=True)
+            return
+        width = max(1, shutil.get_terminal_size().columns)
+        up = f"\x1b[{self._rows - 1}A" if self._rows > 1 else ""
+        self.stream.write(f"\r{up}\x1b[J{text}")
+        self.stream.flush()
+        self._rows = max(1, -(-len(text) // width))
+
+    def finish(self) -> None:
+        """Leaves the current text on screen and moves below it, so whatever
+        is printed next starts on a fresh line."""
+        if self.live and self._rows:
+            self.stream.write("\n")
+            self.stream.flush()
+        self.text = ""
+        self._rows = 0
 
 
 def watch_keys(on_key: Callable[[str], None]) -> Callable[[], None]:
@@ -100,10 +141,17 @@ def main() -> None:
         print(list_devices())
         return
 
+    if args.asr_device.startswith("cuda"):
+        import torch
+
+        if not torch.cuda.is_available():
+            sys.exit("[caption] --asr-device cuda, but PyTorch sees no CUDA GPU here; pass --asr-device cpu to run anyway")
     print(f"[caption] loading Parakeet on {args.asr_device}…", file=sys.stderr, flush=True)
     from sts.asr.parakeet_asr import ParakeetASR  # heavy (NeMo + lightning); deferred past --list-devices
 
     asr = ParakeetASR(ASRConfig(device=args.asr_device))
+    param = next(asr.model.parameters())
+    print(f"[caption] Parakeet loaded on {param.device} ({param.dtype})", file=sys.stderr, flush=True)
 
     capture = AudioCapture(AudioConfig(input_device=args.input_device))
     capture.start()
@@ -116,6 +164,7 @@ def main() -> None:
     clear = threading.Event()
     restore_terminal = watch_keys(lambda key: clear.set() if key.lower() == "x" else None)
 
+    line = LiveLine()
     buffer: list[np.ndarray] = []
     last_run = time.monotonic()
     interval_s = args.interval_ms / 1000
@@ -130,6 +179,7 @@ def main() -> None:
                     except queue.Empty:
                         break
                 last_run = time.monotonic()
+                line.finish()  # the cleared text stays on screen, above the new one
                 print("[caption] cleared - listening for new speech", file=sys.stderr, flush=True)
             try:
                 buffer.append(capture.frames.get(timeout=0.1))
@@ -141,10 +191,11 @@ def main() -> None:
                 audio = np.concatenate(buffer)
                 text = asr.transcribe(audio)
                 if text:
-                    print(text, flush=True)
+                    line.update(text)
     except KeyboardInterrupt:
         pass
     finally:
+        line.finish()
         restore_terminal()
         capture.stop()
 
