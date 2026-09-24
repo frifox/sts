@@ -1,4 +1,16 @@
+from dataclasses import dataclass
+
 from sts.config import ASRConfig
+
+
+@dataclass
+class TimedWord:
+    """One recognized word (with any punctuation attached, e.g. "плода,")
+    and when it was spoken, in seconds from the start of the audio given."""
+
+    text: str
+    start: float
+    end: float
 
 
 def _missing_backend(backend: str, exc: ImportError) -> str:

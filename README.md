@@ -615,10 +615,13 @@ uv pip install --python .venv-gigaam/bin/python -e '.[gigaam]' \
 .venv-xtts/bin/sts-caption --input-device 7 --asr-backend parakeet   # Parakeet instead, from a NeMo venv
 ```
 
-GigaAM takes at most about 25 s of audio at a time. Longer audio is cut
-into chunks of about 20 s at quiet moments. A chunk that's complete is
-transcribed once and then stays fixed, so only the most recent ~20 s of text
-keeps changing.
+A sentence is locked once two more sentences have followed it, or 30 s after
+it ended (`--final-after-sentences N`, `--final-after-seconds S`; 0 turns
+either rule off). A locked sentence is printed once, above a blank line, and
+never changes again; below the line are the sentences that may still be
+revised. If the model starts a sentence with a lowercase letter, it's joined
+back onto the previous one (the speaker only paused). Piped to a file, only
+locked sentences are written.
 
 ## Benchmarking hardware
 

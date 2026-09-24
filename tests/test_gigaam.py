@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from sts.asr import create_asr
+from sts.asr import TimedWord, create_asr
 from sts.asr.gigaam_asr import MAX_CHUNK_S, MIN_CHUNK_S, SAMPLE_RATE, GigaAMASR, chunk_bounds
 from sts.config import ASRConfig
 
@@ -46,13 +46,16 @@ def test_finished_chunks_are_transcribed_once():
 
     asr._cache = OrderedDict()
     calls = []
-    asr._transcribe_chunk = lambda chunk: calls.append(len(chunk)) or f"part{len(calls)}."
+    asr._chunk_words = lambda chunk: calls.append(len(chunk)) or [TimedWord(f"part{len(calls)}.", 0.1, 0.5)]
     audio = _speech_with_pauses(50)
 
-    asr.transcribe(audio[: 45 * SAMPLE_RATE])
+    asr.transcribe_words(audio[: 45 * SAMPLE_RATE])
     first = len(calls)
-    asr.transcribe(audio)
+    words = asr.transcribe_words(audio)
     assert len(calls) == first + 1  # only the still-open last chunk again
+    # Each chunk's word times are shifted to where that chunk starts in the audio.
+    starts = chunk_bounds(audio)[:-1]
+    assert [w.start for w in words] == pytest.approx([b / SAMPLE_RATE + 0.1 for b in starts])
 
 
 def test_create_asr_dispatches_to_gigaam(monkeypatch):
@@ -67,3 +70,16 @@ def test_create_asr_gigaam_missing_dependency_gives_install_hint(monkeypatch):
     monkeypatch.setattr("sts.asr.gigaam_asr.GigaAMASR", raise_import_error)
     with pytest.raises(SystemExit, match=r"\.venv-gigaam"):
         create_asr(ASRConfig(backend="gigaam"))
+
+
+def test_a_cut_goes_in_a_real_pause_not_a_brief_dip_inside_a_word():
+    """A stop consonant's closure is the quietest 20 ms around, but it's
+    inside a word ("в Н|ём"); the cut belongs in the actual pause."""
+    rng = np.random.default_rng(1)
+    audio = (rng.standard_normal(30 * SAMPLE_RATE) * 0.1).astype(np.float32)
+    dip = int(16.0 * SAMPLE_RATE)
+    audio[dip : dip + SAMPLE_RATE // 50] = 0.0  # 20 ms of total silence mid-word
+    pause = int(19.0 * SAMPLE_RATE)
+    audio[pause : pause + int(0.4 * SAMPLE_RATE)] *= 0.02  # a real, if not perfectly silent, pause
+    cut = chunk_bounds(audio)[1]
+    assert pause <= cut <= pause + int(0.4 * SAMPLE_RATE)

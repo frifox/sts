@@ -11,6 +11,7 @@ if that changes.
 import numpy as np
 import torch
 
+from sts.asr import TimedWord
 from sts.config import ASRConfig
 from sts.textclean import clean_transcript, restore_unk_quotes
 
@@ -53,3 +54,12 @@ class ParakeetASR:
         # mark, so it emits its "unknown token" placeholder for one instead;
         # restored to a plain '"' before disfluency cleanup sees it.
         return clean_transcript(restore_unk_quotes(text.strip()))
+
+    def transcribe_words(self, audio: np.ndarray) -> list[TimedWord]:
+        """Each word with its timing (see TimedWord). Not disfluency-cleaned:
+        the caller decides what a sentence is before cleaning its text."""
+        out = self.model.transcribe([audio], timestamps=True, verbose=False)
+        return [
+            TimedWord(restore_unk_quotes(w["word"]), float(w["start"]), float(w["end"]))
+            for w in out[0].timestamp["word"]
+        ]
