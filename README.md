@@ -682,6 +682,31 @@ timeline where the Russian sentence began.
   speech step, plus transcription time; a one-hour video takes on the order
   of an hour or more. Progress and a time estimate are printed.
 
+## Caption diagnostic (sts-caption)
+
+`sts-caption` streams an input device straight into a speech recognizer and
+shows its raw output live: no voice-activity detection (VAD), no
+translation, one sentence per line, redrawn in place as the model revises
+it. Press `x` to clear and start over. It uses Sber's
+[GigaAM-v3](https://huggingface.co/ai-sage/GigaAM-v3) `e2e_rnnt` by default,
+a Russian-only model with punctuation. GigaAM's model code needs
+torch 2.8 and transformers 4.57, newer than XTTS allows, so it gets its own
+virtualenv:
+
+```bash
+uv venv --python 3.11 .venv-gigaam
+uv pip install --python .venv-gigaam/bin/python -e '.[gigaam]' \
+  --extra-index-url https://download.pytorch.org/whl/cu126 --index-strategy unsafe-best-match
+.venv-gigaam/bin/sts-caption --list-devices
+.venv-gigaam/bin/sts-caption --input-device 7
+.venv-xtts/bin/sts-caption --input-device 7 --asr-backend parakeet   # Parakeet instead, from a NeMo venv
+```
+
+GigaAM takes at most about 25 s of audio at a time. Longer audio is cut
+into chunks of about 20 s at quiet moments. A chunk that's complete is
+transcribed once and then stays fixed, so only the most recent ~20 s of text
+keeps changing.
+
 ## Benchmarking hardware
 
 `benchmark.py` times each pipeline stage - ASR (faster-whisper and Parakeet),

@@ -75,7 +75,9 @@ class VADConfig:
 
 @dataclass
 class ASRConfig:
-    backend: str = "parakeet"  # "whisper" (faster-whisper) or "parakeet" (NVIDIA Parakeet TDT, via NeMo)
+    # "whisper" (faster-whisper), "parakeet" (NVIDIA Parakeet TDT, via NeMo), or
+    # "gigaam" (Sber GigaAM-v3 e2e_rnnt, Russian-only - its own virtualenv; see sts.asr.gigaam_asr)
+    backend: str = "parakeet"
     model_size: str = "large-v3"
     device: str = "cuda"
     compute_type: str = "float16"

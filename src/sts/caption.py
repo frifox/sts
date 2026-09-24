@@ -1,29 +1,37 @@
-"""Diagnostic tool: streams an input device straight into Parakeet with no
-VAD segmentation and none of the pipeline's commit/confirm logic on top -
-just the model's own raw output, printed to stdout exactly as it comes back.
+"""Diagnostic tool: streams an input device straight into a speech
+recognizer with no VAD segmentation and none of the pipeline's
+commit/confirm logic on top - just the model's own raw output, printed to
+stdout exactly as it comes back.
+
+The recognizer is Sber's GigaAM-v3 (e2e_rnnt, Russian-only, punctuated
+output) by default - run it from .venv-gigaam, which has the newer torch/
+transformers its model code needs (see sts.asr.gigaam_asr).
+`--asr-backend parakeet` uses NVIDIA's Parakeet TDT instead, from a
+virtualenv with NeMo (e.g. .venv-xtts).
 
 Unlike the live pipeline (which cuts speech into segments on silence, so each
 one can be transcribed and handed off independently), this never cuts
 anything: captured audio piles into one buffer for the whole run, and that
-whole buffer is re-transcribed from scratch every --interval-ms. Parakeet
-sees more context each time, and can (and does) revise earlier wording as a
-result - showing the *complete* current transcript every cycle, not just
-whatever's new, is what makes that revision visible instead of hidden behind
-a diff. In a terminal it's one block, one sentence per line, rewritten in
-place as it grows and changes; piped elsewhere, each changed transcript is
-printed in full. The
-buffer only grows, so later re-transcriptions cost more than
-earlier ones - by design, since capping or windowing it would just be VAD
-under another name. Meant for short exploratory runs, not left running.
+whole buffer is re-transcribed every --interval-ms. The model sees more
+context each time, and can (and does) revise earlier wording as a result -
+showing the *complete* current transcript every cycle, not just whatever's
+new, is what makes that revision visible instead of hidden behind a diff.
+In a terminal it's one block, one sentence per line, rewritten in place as
+it grows and changes; piped elsewhere, each changed transcript is printed in
+full. With Parakeet the buffer is re-transcribed from scratch, so later
+re-transcriptions cost more than earlier ones. GigaAM can only take ~25 s at
+a time, so it cuts longer audio into ~20 s chunks at quiet moments; finished
+chunks are transcribed once, then stay fixed, and only the last one keeps
+changing. Meant for short exploratory runs, not left running.
 
 Press "x" to clear: the buffer (and whatever audio was already captured
 into it) is dropped, and recognition starts over from the next thing said -
-e.g. to start fresh on a new speaker, or once the growing buffer has made
-each re-transcription slow.
+e.g. to start fresh on a new speaker.
 
 Usage:
-  sts-caption --input-device 4
-  sts-caption --input-device 4 --interval-ms 1000
+  .venv-gigaam/bin/sts-caption --input-device 7
+  .venv-gigaam/bin/sts-caption --input-device 7 --interval-ms 1000
+  .venv-xtts/bin/sts-caption --input-device 7 --asr-backend parakeet
   sts-caption --list-devices
 """
 
@@ -47,6 +55,10 @@ from sts.config import ASRConfig, AudioConfig
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--input-device", type=int, default=None, help="ALSA input device index")
+    parser.add_argument(
+        "--asr-backend", choices=("gigaam", "parakeet"), default="gigaam",
+        help="gigaam (GigaAM-v3 e2e_rnnt, Russian-only; run from .venv-gigaam) or parakeet (default: gigaam)",
+    )
     parser.add_argument("--asr-device", default="cuda", help="cuda | cpu | mps (default: cuda)")
     parser.add_argument(
         "--interval-ms", type=int, default=500, help="How often to re-transcribe the whole buffer (default: 500)"
@@ -79,7 +91,7 @@ def screen_rows(text: str, width: int) -> list[str]:
 class LiveLine:
     """Shows the transcript as one block, one sentence per line, that's
     rewritten in place as it grows or is revised, instead of printing it all
-    again for every re-transcription. Parakeet can revise punctuation as well
+    again for every re-transcription. The model can revise punctuation as well
     as words, so a sentence break can appear or disappear between two
     re-transcriptions - every update redraws the whole block (from where it
     starts on screen) rather than patching it.
@@ -237,12 +249,13 @@ def main() -> None:
 
         if not torch.cuda.is_available():
             sys.exit("[caption] --asr-device cuda, but PyTorch sees no CUDA GPU here; pass --asr-device cpu to run anyway")
-    print(f"[caption] loading Parakeet on {args.asr_device}…", file=sys.stderr, flush=True)
-    from sts.asr.parakeet_asr import ParakeetASR  # heavy (NeMo + lightning); deferred past --list-devices
+    name = {"gigaam": "GigaAM-v3 e2e_rnnt", "parakeet": "Parakeet"}[args.asr_backend]
+    print(f"[caption] loading {name} on {args.asr_device}…", file=sys.stderr, flush=True)
+    from sts.asr import create_asr  # heavy model imports; deferred past --list-devices
 
-    asr = ParakeetASR(ASRConfig(device=args.asr_device))
+    asr = create_asr(ASRConfig(backend=args.asr_backend, device=args.asr_device))
     param = next(asr.model.parameters())
-    print(f"[caption] Parakeet loaded on {param.device} ({param.dtype})", file=sys.stderr, flush=True)
+    print(f"[caption] {name} loaded on {param.device} ({param.dtype})", file=sys.stderr, flush=True)
 
     capture = AudioCapture(AudioConfig(input_device=args.input_device))
     capture.start()
