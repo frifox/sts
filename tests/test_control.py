@@ -209,6 +209,62 @@ def test_voice_off_drops_already_synthesized_but_unplayed_sentences():
     assert p.broadcaster.output_levels == [0.0]
 
 
+def test_reset_stops_playback_without_touching_the_stream_directly():
+    """Reset must cut whatever's currently playing (the reported bug: it
+    used to leave it playing to the end), but the same way voice_off does -
+    bumping _playback_generation so _play()'s should_continue notices on its
+    next ~50ms poll and _playback_loop's own thread stops writing - not by
+    calling playback.stop() (abort()/close() on the stream) from this
+    thread, which has been observed to segfault PortAudio's ALSA backend
+    when _playback_loop's thread is mid-write(). The stub Playback below has
+    no stop() method at all, so calling it would fail this test outright."""
+    import queue
+
+    from sts.config import PipelineConfig
+    from sts.pipeline import Pipeline
+
+    class Broadcaster:
+        output_levels = []
+
+        def broadcast_status(self, **kwargs):
+            pass
+
+        def broadcast_reset(self):
+            pass
+
+        def broadcast_output_level(self, level):
+            self.output_levels.append(level)
+
+    class Tts:
+        cloned_speaker_wav = None
+        def reset_voice(self): pass
+
+    p = object.__new__(Pipeline)
+    p.cfg = PipelineConfig()
+    p.cfg.tts.startup_voice = None  # skip voice_library.get() - irrelevant to what this test covers
+    p.broadcaster = Broadcaster()
+    p.tts = Tts()
+    p._pending_voice = None
+    p._active_speaker_id = None
+    p._committed_text = ""
+    p._pending_confirmation = None
+    p._last_sentence_original = None
+    p._last_sentence_translated = None
+    p._frames_since_partial = 0
+    p._playback_generation = 0
+    p.control = RecognitionControl(16000)
+    p.control.enable_voice()
+    for name in ("_segments", "_transcripts", "_translations", "_audio"):
+        setattr(p, name, queue.Queue())
+    p._audio.put((None, 24000, 0.0))  # a sentence already synthesized ahead of playback
+
+    p.handle_control({"action": "reset"})
+
+    assert p._audio.empty()  # nothing left for _playback_loop to still play
+    assert p._playback_generation == 1  # _play()'s should_continue will now see a mismatch and stop
+    assert p.broadcaster.output_levels == [0.0]
+
+
 def test_playback_loop_broadcasts_before_playing_locally_not_after():
     """playback.play() blocks for close to a clip's real duration (it paces
     with the sound card draining its buffer), so broadcasting to connected
@@ -241,6 +297,7 @@ def test_playback_loop_broadcasts_before_playing_locally_not_after():
     p.control.enable_voice()
     p._audio = queue.Queue()
     p._stop = threading.Event()
+    p._playback_generation = 0
     p._audio.put((np.zeros(10, dtype=np.float32), 24000, 0.0))
 
     thread = threading.Thread(target=p._playback_loop, daemon=True)
@@ -290,6 +347,7 @@ def test_playback_loop_plays_a_forced_clip_even_with_voice_off():
     p.control = RecognitionControl(16000)  # voice_enabled left off
     p._audio = queue.Queue()
     p._stop = threading.Event()
+    p._playback_generation = 0
     p._audio.put((np.zeros(10, dtype=np.float32), 24000, 0.0, True))
 
     thread = threading.Thread(target=p._playback_loop, daemon=True)
@@ -404,6 +462,7 @@ def _startup_voice_pipeline(tmp_path):
         def broadcast_status(self, **kwargs): Broadcaster.status = kwargs
         def broadcast_library(self, speakers): Broadcaster.library = speakers
         def broadcast_reset(self): pass
+        def broadcast_output_level(self, level): pass
 
     class Playback:
         def stop(self): pass
@@ -416,6 +475,7 @@ def _startup_voice_pipeline(tmp_path):
     p._pending_voice = None
     p._active_speaker_id = None
     p._persistent_config = None
+    p._playback_generation = 0
     for name in ("_segments", "_transcripts", "_translations", "_audio"):
         setattr(p, name, queue.Queue())
     mine = p.voice_library.save("Mine", wav)

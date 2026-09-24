@@ -28,6 +28,7 @@ def _stub_pipeline(translate_sentences):
     p.broadcaster = Broadcaster()
     p._translations = queue.Queue()
     p._last_asr_audio_s = 0.0  # no segment transcribed yet - _broadcast_rtf("translate", ...) is a no-op
+    p._last_sentence_translated = None
     return p
 
 
@@ -145,3 +146,82 @@ def test_translations_carry_their_commits_batch_id_however_slowly_they_arrive():
     Pipeline._translate_segment(p, "x. y.", first_seq=4)
 
     assert p.broadcaster.batches == [4, 4]
+
+
+# -- _strip_repeated_prefix ---------------------------------------------------
+# The real bug this guards: translating a continuation with the previous
+# sentence as context (see _commit_new_asr_text) sometimes has NLLB restate
+# that whole sentence verbatim before continuing, rather than picking up
+# mid-thought - reproduced against real transcripts (and the real model): a
+# caption showing "These are the words of our Lord Jesus Christ." followed
+# immediately by "These are the words of our Lord Jesus Christ during his
+# last long talk..." reads as a broken, duplicated repeat.
+
+
+def test_strip_repeated_prefix_removes_an_exact_leading_duplicate():
+    from sts.pipeline import _strip_repeated_prefix
+
+    previous = "These are the words of our Lord Jesus Christ."
+    combined = "These are the words of our Lord Jesus Christ during his last long talk with his disciples."
+
+    assert _strip_repeated_prefix(combined, previous) == "during his last long talk with his disciples."
+
+
+def test_strip_repeated_prefix_is_case_insensitive_and_ignores_previous_punctuation():
+    from sts.pipeline import _strip_repeated_prefix
+
+    assert _strip_repeated_prefix("SOMETHING extra here.", "something") == "extra here."
+
+
+def test_strip_repeated_prefix_leaves_a_non_matching_translation_unchanged():
+    """The ordinary, more common case: NLLB paraphrases rather than repeats -
+    nothing to safely strip, so the (mildly redundant but coherent) combined
+    translation is shown as-is."""
+    from sts.pipeline import _strip_repeated_prefix
+
+    previous = "Each one will contain several items, different numbers of items."
+    combined = "Each one will have several items, different numbers of items in each of these sections."
+
+    assert _strip_repeated_prefix(combined, previous) == combined
+
+
+def test_strip_repeated_prefix_handles_no_previous_sentence():
+    from sts.pipeline import _strip_repeated_prefix
+
+    assert _strip_repeated_prefix("Anything.", None) == "Anything."
+
+
+def test_strip_repeated_prefix_falls_back_when_nothing_would_remain():
+    """A pathological case (NLLB adds no new content at all) - better to show
+    the duplicate than nothing."""
+    from sts.pipeline import _strip_repeated_prefix
+
+    assert _strip_repeated_prefix("Exactly the same.", "Exactly the same.") == "Exactly the same."
+
+
+def test_translate_segment_strips_a_repeated_prefix_from_a_continuations_first_sentence():
+    """Integration: _translate_segment applies the strip only to the first
+    sentence of a commit that actually used context, and only ever tracks
+    _last_sentence_translated from what was actually broadcast."""
+    p = _stub_pipeline(lambda text: iter([
+        "These are the words of our Lord Jesus Christ during his last long talk.",
+        "New unrelated sentence.",
+    ]))
+    p._last_sentence_translated = "These are the words of our Lord Jesus Christ."
+
+    Pipeline._translate_segment(p, "text", context="Это слова нашего Господа Иисуса Христа.")
+
+    assert p.broadcaster.translated == ["during his last long talk.", "New unrelated sentence."]
+    assert p._last_sentence_translated == "New unrelated sentence."  # advances to the newest one shown
+
+
+def test_translate_segment_does_not_strip_when_there_is_no_context():
+    """A sentence translated without context (the ordinary case) must never
+    have its start clipped just because it happens to share wording with
+    whatever was last shown."""
+    p = _stub_pipeline(lambda text: iter(["These are the words of our Lord Jesus Christ, spoken plainly."]))
+    p._last_sentence_translated = "These are the words of our Lord Jesus Christ."
+
+    Pipeline._translate_segment(p, "text")
+
+    assert p.broadcaster.translated == ["These are the words of our Lord Jesus Christ, spoken plainly."]

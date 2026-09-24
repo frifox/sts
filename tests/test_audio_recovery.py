@@ -229,6 +229,7 @@ def _run_playback_loop(p):
     p._audio.put((__import__("numpy").zeros(10, dtype="float32"), 24_000, 0.0))
     p.control = RecognitionControl(16000)
     p.control.enable_voice()
+    p._playback_generation = 0
     thread = threading.Thread(target=Pipeline._playback_loop, args=(p,), daemon=True)
     thread.start()
     thread.join(timeout=0.5)  # loops forever on the next get(); a daemon thread is fine to leave

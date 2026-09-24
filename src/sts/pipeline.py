@@ -83,6 +83,27 @@ DESIGN_REFERENCE_TEXT = (
 )
 
 
+def _strip_repeated_prefix(translated: str, previous: str | None) -> str:
+    """`translated` was produced with `previous` as leading context (see
+    Translator.translate_sentences and _commit_new_asr_text) - given as
+    grammatical lead-in, not meant to be shown again. NLLB sometimes restates
+    it verbatim before continuing instead of picking up mid-thought (observed
+    against real transcripts: the whole previous sentence repeated, then the
+    new content tacked on) - a duplicate that reads as a broken repeat next
+    to the caption that already showed it. Detected (case-insensitively,
+    ignoring `previous`'s own trailing punctuation) and removed, so the
+    caption reads as a continuation of it instead. Falls back to `translated`
+    unchanged if there's nothing recognizable to strip, or if stripping would
+    leave nothing at all (better a duplicate than empty content)."""
+    if not previous:
+        return translated
+    lead = previous.rstrip(".!?… ")
+    if not lead or not translated.lower().startswith(lead.lower()):
+        return translated
+    remainder = translated[len(lead):].lstrip(" ,.;:-–—")
+    return remainder or translated
+
+
 class _NullASR:
     """Last-resort stand-in when a live ASR backend switch fails and the
     fallback reload of the previous engine fails too (see
@@ -145,10 +166,13 @@ class Pipeline:
         # (text, first_seq, context) per committed chunk - see _commit_new_asr_text.
         self._transcripts: queue.Queue = queue.Queue()
         self._original_seq = 0  # next sequence number for a broadcast original sentence
-        # The most recently committed sentence's original-language text (any
-        # segment, not just the current one) - see _commit_new_asr_text's use
-        # of it as translation context for a sentence that continues it.
+        # The most recently committed sentence's original-language text and
+        # its own translation (any segment, not just the current one) - see
+        # _commit_new_asr_text's use of the former as translation context for
+        # a sentence that continues it, and _strip_repeated_prefix's use of
+        # the latter to catch NLLB restating that context verbatim.
         self._last_sentence_original: str | None = None
+        self._last_sentence_translated: str | None = None
         # Text already committed (pushed to translation) for the segment
         # currently being spoken, via periodic partial re-transcription - see
         # _segment_loop/_asr_loop. Reset to "" whenever a segment closes.
@@ -171,6 +195,10 @@ class Pipeline:
         self._rtf_window: dict[str, deque] = {}
         self._translations: queue.Queue = queue.Queue()
         self._audio: queue.Queue = queue.Queue()  # synthesized clips waiting to play
+        # Bumped by _reset() to cut whatever _playback_loop is mid-write on
+        # right now, without touching the output stream from this (a
+        # different) thread - see _play().
+        self._playback_generation = 0
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
 
@@ -305,7 +333,8 @@ class Pipeline:
 
     def _reset(self) -> None:
         """New speaker / performance: clear captions, drop stale in-flight
-        text from the previous one, and forget any cloned voice."""
+        text from the previous one, forget any cloned voice, and stop
+        whatever's currently playing."""
         if self.control.training.is_set():
             self.control.stop_training(discard=True)
         self._use_startup_voice()
@@ -313,12 +342,22 @@ class Pipeline:
         self._committed_text = ""
         self._pending_confirmation = None
         self._last_sentence_original = None
+        self._last_sentence_translated = None
         self._frames_since_partial = 0
         self._drain(self._segments)
         self._drain(self._transcripts)
         self._drain(self._translations)
         self._drain(self._audio)
-        self.playback.stop()
+        # Cuts a clip _playback_loop is mid-write on right now, the same safe
+        # way voice_off does: bumping this makes _play()'s should_continue
+        # return False on its next ~50ms poll, so _playback_loop's own thread
+        # stops writing on its own - calling playback.stop() (which
+        # abort()s/close()s the stream) from this thread instead, while that
+        # one is mid-write(), has been observed to segfault PortAudio's ALSA
+        # backend.
+        self._playback_generation += 1
+        if self.broadcaster:
+            self.broadcaster.broadcast_output_level(0.0)
         if self.broadcaster:
             self.broadcaster.broadcast_reset()
 
@@ -988,11 +1027,17 @@ class Pipeline:
         `context`, if given, is the previous sentence committed - passed
         through to Translator.translate_sentences so it can be given as
         leading context for `text`'s own first sentence (see
-        _commit_new_asr_text for when/why)."""
+        _commit_new_asr_text for when/why). NLLB sometimes restates that
+        context verbatim before continuing rather than picking up mid-thought;
+        _strip_repeated_prefix catches and removes it from the first
+        sentence's translation, since the context sentence's own translation
+        was already shown on its own line."""
         t0 = time.monotonic()
         for i, translated in enumerate(self.translator.translate_sentences(text, context=context)):
             processing_s = time.monotonic() - t0
             vlog("translate", f"translated a sentence in {processing_s:.2f}s")
+            if i == 0 and context:
+                translated = _strip_repeated_prefix(translated, self._last_sentence_translated)
             if translated:
                 print(f"[en] {translated}")
                 if self.broadcaster:
@@ -1003,6 +1048,7 @@ class Pipeline:
                     )
                 self._broadcast_rtf("translate", processing_s, self._last_asr_audio_s)
                 self._translations.put(translated)
+                self._last_sentence_translated = translated
             t0 = time.monotonic()
 
     def _tts_loop(self) -> None:
@@ -1087,9 +1133,16 @@ class Pipeline:
                         print(f"[audio] playback still failing after re-initializing audio: {exc2!r}")
 
     def _play(self, audio, sample_rate: int, pause_before: float, force: bool = False) -> None:
+        generation = self._playback_generation
+
+        def should_continue() -> bool:
+            if self._playback_generation != generation:
+                return False  # the operator hit Reset while this clip was playing
+            return True if force else self.control.voice_enabled.is_set()
+
         self.playback.play(
             audio, sample_rate=sample_rate, pause_before=pause_before,
-            should_continue=(lambda: True) if force else self.control.voice_enabled.is_set,
+            should_continue=should_continue,
             on_chunk=self._broadcast_output_level,
         )
 

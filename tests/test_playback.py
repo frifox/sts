@@ -140,3 +140,44 @@ def test_should_continue_true_throughout_writes_the_whole_clip(stub_output):
     pb.play(audio, sample_rate=24_000, should_continue=lambda: True)
     stream = stub_output["stream"]
     assert sum(len(c) for c in stream.written) == len(audio)
+
+
+def test_pipeline_play_is_cut_short_by_a_playback_generation_bump(stub_output):
+    """Integration: Pipeline._reset() cuts whatever's playing right now by
+    bumping _playback_generation rather than calling playback.stop() (see
+    test_control.py's test_reset_stops_playback_without_touching_the_stream_directly
+    for why) - this proves _play()'s should_continue closure actually reacts
+    to that bump, promptly, mid-clip, the same way it reacts to voice_off."""
+    from sts.control import RecognitionControl
+    from sts.pipeline import Pipeline
+
+    p = object.__new__(Pipeline)
+    p.playback = AudioPlayback(AudioConfig())
+    p.control = RecognitionControl(16000)
+    p.control.enable_voice()
+    p._playback_generation = 0
+    p._last_output_level_broadcast = 0.0
+    p.broadcaster = None
+
+    p.playback.play(np.zeros(1, dtype=np.float32), sample_rate=24_000)  # opens the stream this test then patches
+    stub_output["stream"].written.clear()
+
+    chunk_frames = int(0.05 * 24_000)
+    audio = np.zeros(chunk_frames * 4, dtype=np.float32)  # 4 chunks' worth
+
+    calls = {"n": 0}
+    real_write = stub_output["stream"].write
+
+    def write_and_reset_after_first_chunk(samples):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            p._playback_generation += 1  # simulates a Reset landing mid-clip
+        real_write(samples)
+
+    stub_output["stream"].write = write_and_reset_after_first_chunk
+
+    p._play(audio, sample_rate=24_000, pause_before=0.0)
+
+    written = stub_output["stream"].written
+    assert 0 < len(written) < 4  # cut short, not the whole clip
+    assert p._playback_generation == 1  # the bump this test made, not reverted
