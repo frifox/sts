@@ -25,6 +25,7 @@ import torch
 
 from sts.asr import TimedWord
 from sts.config import ASRConfig
+from sts.gpu import gpu_lock
 from sts.textclean import clean_transcript
 
 MODEL_NAME = "ai-sage/GigaAM-v3"
@@ -97,7 +98,8 @@ class GigaAMASR:
     def close(self) -> None:
         """Releases the model's GPU memory now, even if something (a
         traceback, a stray reference) still holds on to this object."""
-        self.model.to("cpu")
+        with gpu_lock(self.cfg.device):
+            self.model.to("cpu")
 
     def transcribe(self, audio: np.ndarray | str) -> str:
         if isinstance(audio, str):
@@ -127,8 +129,14 @@ class GigaAMASR:
             words.extend(TimedWord(w.text, w.start + offset, w.end + offset) for w in chunk_words)
         return words
 
-    @torch.inference_mode()
     def _chunk_words(self, chunk: np.ndarray) -> list[TimedWord]:
+        # On mps this shares the one GPU lock with translation and TTS (see
+        # sts.gpu): captions run on their own thread, and unguarded they
+        # collided with TTS mid-sentence and Metal aborted the process.
+        with torch.inference_mode(), gpu_lock(self.cfg.device):
+            return self._chunk_words_unlocked(chunk)
+
+    def _chunk_words_unlocked(self, chunk: np.ndarray) -> list[TimedWord]:
         # What GigaAM's own transcribe() does after reading its file
         # argument with ffmpeg - called directly on the in-memory audio -
         # except for the decoding, which also notes when each token came out.
