@@ -438,6 +438,23 @@
   #btn-train.is-active { background: #4d3a1f; border-color: #c9a24b; color: #ffe9bf; }
   #btn-reset, #btn-delete-voice { color: #e08a8a; }
   #btn-delete-voice[hidden] { display: none; }
+
+  /* Phones: the header splits into two rows - the controls on the first,
+     the RTF indicators and status on the second - instead of squeezing
+     both sides onto one line. Tighter button padding so the controls fit
+     a phone's width on one row. Last in the sheet so it overrides the
+     #controls button rule above (same specificity). */
+  @media (max-width: 700px) {
+    #header {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.4em;
+      padding: 0.4em 8px;
+    }
+    #controls { gap: 0.4em; }
+    #controls button { padding: 0.45em 0.7em; }
+    #indicators { justify-content: space-between; flex-wrap: wrap; gap: 0.4em 1em; }
+  }
 </style>
 </head>
 <body>
