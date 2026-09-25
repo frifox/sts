@@ -454,6 +454,19 @@
     #controls { gap: 0.4em; }
     #controls button { padding: 0.45em 0.7em; }
     #indicators { justify-content: space-between; flex-wrap: wrap; gap: 0.4em 1em; }
+
+    /* Dropdowns anchor to the whole controls row instead of their own
+       button, spanning its full width, so one opened from a button near
+       the right edge can't run off the screen. */
+    #controls { position: relative; }
+    .engine, #volume-meter, #output-meter { position: static; }
+    .engine-dropdown {
+      left: 0;
+      right: 0;
+      min-width: 0;
+      max-height: 70vh;
+      overflow-y: auto;
+    }
   }
 </style>
 </head>
