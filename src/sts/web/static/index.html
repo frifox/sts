@@ -353,14 +353,14 @@
   .meter-badge.show { display: block; }
   .meter-badge svg {
     position: absolute;
-    top: -0.45em;
+    top: 0;  /* the top of the meter - where the tallest (last) bar's top is */
     left: 0;  /* the badge sits exactly where the first bar starts */
     width: 0.8em;
     height: 0.8em;
     fill: #9cdcfe;
     pointer-events: none;
   }
-  #output-meter .meter-badge svg { width: 0.65em; height: 0.65em; top: -0.4em; }
+  #output-meter .meter-badge svg { width: 0.65em; height: 0.65em; }
   .volume-bar.lit-quiet { background: #c9a24b; }
   .volume-bar.lit-good { background: #4cbb6c; }
 
