@@ -8,6 +8,7 @@ import numpy as np
 import sounddevice as sd
 from scipy.signal import resample_poly
 
+from sts.audio.permission import DENIED_MESSAGE, is_blocked, mic_permission, open_mic_settings
 from sts.config import AudioConfig
 from sts.log import vlog
 
@@ -51,6 +52,9 @@ class AudioCapture:
         self._resample_stop = threading.Event()
         self._overflow_count = 0
         self._last_overflow_log = 0.0
+        # macOS microphone permission as of the last local-device start() (see sts.audio.permission).
+        self.mic_permission: str | None = None
+        self._opened_mic_settings = False
 
     def is_stalled(self, timeout_s: float) -> bool:
         """True if a local input stream is supposed to be running but has
@@ -176,6 +180,7 @@ class AudioCapture:
         if self.cfg.source == "browser":
             vlog("audio", "waiting for browser microphone frames")
             return
+        self._check_mic_permission()
         self._capture_rate = self._resolve_capture_rate(self.cfg.input_device)
         resampling = self._capture_rate != self.cfg.sample_rate
         # A forced blocksize not evenly related to the hardware's own period
@@ -199,6 +204,18 @@ class AudioCapture:
         note = f" (resampled from {self._capture_rate} Hz)" if self._capture_rate != self.cfg.sample_rate else ""
         vlog("audio", f"listening on input [{info['index']}] {info['name']} "
                       f"({self.cfg.sample_rate} Hz, {self.cfg.block_ms} ms frames){note}")
+
+    def _check_mic_permission(self) -> None:
+        """Warns - and, once per run, opens the setting - when macOS won't
+        let this process hear any input device."""
+        self.mic_permission = mic_permission()
+        vlog("audio", f"macOS microphone permission: {self.mic_permission}")
+        if not is_blocked(self.mic_permission):
+            return
+        print(f"[audio] {DENIED_MESSAGE}")
+        if not self._opened_mic_settings:
+            self._opened_mic_settings = True
+            open_mic_settings()
 
     def switch_to_alsa(self, device: int | None | object = _KEEP_CURRENT_DEVICE) -> None:
         """Moves capture to a local ALSA input device, switching away from the

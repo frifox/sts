@@ -536,7 +536,14 @@ class Pipeline:
         except Exception as exc:
             message = {"type": "devices", "inputs": [], "outputs": [], "input": None, "output": None}
             error = error or f"Couldn't list audio devices: {exc}"
-        message.update(error=error, applied=applied)
+        from sts.audio.permission import is_blocked
+
+        message.update(
+            error=error,
+            applied=applied,
+            # Only matters while a local device is the input: the browser mic has its own permission.
+            mic_blocked=self.cfg.audio.source == "alsa" and is_blocked(self.capture.mic_permission),
+        )
         self.broadcaster.broadcast_devices(message)
 
     def _handle_device_action(self, action: str, data: dict) -> None:

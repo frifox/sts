@@ -1533,6 +1533,18 @@
       fillDeviceSelect(cfgInput, msg.inputs, msg.input);   // show what is really in use
       fillDeviceSelect(cfgOutput, msg.outputs, msg.output);
     }
+    // macOS denied the server the microphone: every local input records silence.
+    const micStatus = document.getElementById('mic-status');
+    if (msg.mic_blocked) {
+      micStatus.textContent = 'macOS is blocking microphone access for the app sts was started from, so inputs '
+        + 'record silence. Allow it in System Settings > Privacy & Security > Microphone, then restart sts.';
+      micStatus.classList.add('error');
+      micStatus.dataset.permission = '1';
+    } else if (micStatus.dataset.permission) {
+      micStatus.textContent = '';
+      micStatus.classList.remove('error');
+      delete micStatus.dataset.permission;
+    }
   }
 
   // Each select applies on its own, immediately, carrying the other's current
