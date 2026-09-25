@@ -23,6 +23,7 @@ def _stub():
     p._threads = {}
     p._rtf_window = {}
     p._last_asr_audio_s = 0.0
+    p._finalize_countdown = None
     return p
 
 
@@ -123,6 +124,9 @@ def test_stop_finalizes_what_was_heard_so_it_is_still_translated():
     p._recent_text = "Недосказанное"
 
     class Transcript:
+        silence_s = None
+        after_silence = 15.0
+
         def flush(self):
             return [Sentence("Недосказанное", 3.0, 4.0, False)]
 
@@ -236,3 +240,19 @@ def test_a_broadcast_survives_a_page_disconnecting_mid_send():
     b._clients = {Client("a", leaves=True), Client("b"), Client("c")}
     asyncio.run(b._send_to_all({"type": "x"}))
     assert sorted(received) == ["a", "b", "c"]
+
+
+def test_finalize_countdown_starts_after_5_seconds_of_silence_and_clears():
+    p = _stub()
+    sent = []
+
+    class Broadcaster:
+        def broadcast_finalize_countdown(self, seconds):
+            sent.append(seconds)
+
+    p.broadcaster = Broadcaster()
+    p.transcript = Transcript(None, 2, 30)
+    for silence_s in (None, 2.0, 4.9, 5.0, 5.4, 6.2, 14.1, None):
+        p.transcript.silence_s = silence_s
+        p._publish_finalize_countdown()
+    assert sent == [10, 9, 1, None]  # only changes are sent

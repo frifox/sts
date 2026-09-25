@@ -120,6 +120,10 @@ class Transcript:
         self.after_sentences = after_sentences
         self.after_seconds = after_seconds
         self.after_silence = after_silence  # 0 turns it off
+        # Seconds since the last word was heard while something is still open
+        # (None when nothing is) - as of the last step(); for showing how long
+        # until the silence rule locks it all.
+        self.silence_s: float | None = None
         self.sample_rate = sample_rate
         # add() is called from the capture side while step() runs on another
         # thread; the lock covers the buffer, not the (slow) transcription.
@@ -134,6 +138,7 @@ class Transcript:
             self._offset_s = 0.0  # when the first buffered sample was heard
             self._cut_s = 0.0  # words centered before this are already locked
             self._pending: Sentence | None = None  # locked, not yet returned as final
+            self.silence_s = None
             self._generation += 1  # a step() running across this drops its result
 
     def add(self, frame: np.ndarray) -> None:
@@ -180,6 +185,7 @@ class Transcript:
             if silent and self._pending is not None:
                 final.append(self._pending)
                 self._pending = None
+            self.silence_s = None if silent or last_heard_s is None else now_s - last_heard_s
             if n_locked:
                 self._cut_s = sentences[n_locked - 1].end
             # Audio before the first still-open word (less CONTEXT_S) is done

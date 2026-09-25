@@ -135,3 +135,15 @@ def test_add_and_step_from_two_threads():
     t.step()
     samples = np.concatenate(t._frames)
     assert np.all(np.diff(samples) == 1)  # contiguous: no frame lost or reordered
+
+
+def test_silence_is_counted_from_the_last_word_while_something_is_open():
+    asr = _Asr([("Второе", 1.0, 2.0)])
+    t = Transcript(asr, 2, 30)
+    assert t.silence_s is None
+    t.add(_samples(0, 9))
+    t.step()
+    assert t.silence_s == pytest.approx(7.0)
+    t.add(_samples(9, 17))
+    t.step()  # 15 s: finalized, nothing open any more
+    assert t.silence_s is None

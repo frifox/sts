@@ -155,6 +155,15 @@ class CaptionBroadcaster:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
+    def broadcast_finalize_countdown(self, seconds: int | None) -> None:
+        """Seconds left before the still-open caption text is finalized for
+        lack of new speech, or None to hide the countdown. Not replayed on
+        connect: it changes every second anyway."""
+        if self.loop is None:
+            return
+        message = {"type": "finalize_countdown", "seconds": seconds}
+        asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
+
     def broadcast_translated(self, text: str, seq: int | None = None, batch: int | None = None) -> None:
         """`seq` is the `seq` of the original sentence this translates, and
         `batch` the batch of the commit it belongs to - so a translation that
