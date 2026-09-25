@@ -336,6 +336,31 @@
   .volume-bar:nth-child(8) { height: 91%; }
   .volume-bar:nth-child(9) { height: 100%; }
   .volume-bar:nth-child(10) { height: 100%; }
+  /* Small icon on a meter's top-left edge: the browser's own mic is the
+     input / the voice is streaming to this browser. A zero-width flex item
+     (moved to the front with `order`, but last in the markup so the bars'
+     nth-child heights stay put) that the icon hangs off - it can't be
+     positioned against the meter itself, which is `position: static` on
+     phones so the dropdowns can span the controls row. */
+  .meter-badge {
+    display: none;
+    order: -1;
+    position: relative;
+    align-self: flex-start;
+    width: 0;
+    margin-right: -2px;  /* cancel the meter's gap for this zero-width item */
+  }
+  .meter-badge.show { display: block; }
+  .meter-badge svg {
+    position: absolute;
+    top: -0.45em;
+    left: -0.5em;
+    width: 0.8em;
+    height: 0.8em;
+    fill: #9cdcfe;
+    pointer-events: none;
+  }
+  #output-meter .meter-badge svg { width: 0.65em; height: 0.65em; top: -0.4em; left: -0.4em; }
   .volume-bar.lit-quiet { background: #c9a24b; }
   .volume-bar.lit-good { background: #4cbb6c; }
 
@@ -518,6 +543,7 @@
           </div>
           <div id="mic-status"></div>
         </div>
+        <span class="meter-badge" id="mic-badge" title="Input is this browser's microphone"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a4 4 0 0 0 4-4V5a4 4 0 0 0-8 0v6a4 4 0 0 0 4 4zm7-4a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.92V21H8a1 1 0 0 0 0 2h8a1 1 0 0 0 0-2h-3v-3.08A7 7 0 0 0 19 11z"/></svg></span>
       </div>
       <div class="engine" id="engine-asr">
         <button class="engine-toggle" id="btn-asr-toggle">Caption</button>
@@ -586,6 +612,7 @@
             <button type="button" id="btn-test-output" title="Play a short pre-recorded clip through the selected output device, even with Voice off">🔈 Test Output</button>
           </div>
         </div>
+        <span class="meter-badge" id="stream-badge" title="Voice is streaming to this browser"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg></span>
       </div>
       <button id="btn-reset">Reset</button>
     </div>
@@ -1527,6 +1554,7 @@
   function updateMicButton() {
     micBtn.textContent = micActive ? '⏹ Stop browser mic' : "🎤 Use this browser's mic";
     micBtn.classList.toggle('is-active', micActive);
+    document.getElementById('mic-badge').classList.toggle('show', micActive);
   }
 
   async function startBrowserMic() {
@@ -1636,6 +1664,7 @@
   function updateStreamButton() {
     streamToggle.textContent = streamEnabled ? '⏹ Stop streaming to this browser' : '🔊 Stream voice to this browser';
     streamToggle.classList.toggle('is-active', streamEnabled);
+    document.getElementById('stream-badge').classList.toggle('show', streamEnabled);
   }
   updateStreamButton();
 
