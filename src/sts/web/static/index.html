@@ -18,6 +18,10 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+    /* iPad/iPhone Safari: 100vh is the height with its toolbars hidden, so
+       the bottom of the page ended up behind them; dvh is the height
+       actually visible. (Browsers without dvh keep the line above.) */
+    height: 100dvh;
     width: 100vw;
   }
 
