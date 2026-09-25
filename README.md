@@ -6,23 +6,28 @@ translates to English, and speaks the translation back in a natural voice.
 
 Everything runs locally against on-device models — no audio leaves the
 machine, no per-minute API costs, and it works without internet once the
-models are downloaded. Primary target hardware is a PC/laptop with an NVIDIA
-GPU (`--device cuda`); Apple Silicon (`--device mps`) is also supported —
-see **Apple Silicon / Metal** below.
+models are downloaded. It runs on an NVIDIA GPU (`--device cuda`) or an
+Apple Silicon Mac (`--device mps`) — see **Apple Silicon / Metal** below.
 
 ## Pipeline
 
 ```
-sound card -> live captions (ru) -> MADLAD-400 translation (ru->en) -> XTTS (en) -> sound card out
-                                       |                        |
-                                       v                        v
-                                  original text          translated text
-                                        \______________________/
-                                                   |
-                                             websocket -> browser (live captions)
+sound card or browser mic -> live captions (ru) -> MADLAD-400 translation (en) -> XTTS / Qwen3-TTS (en) -> sound card
+                                    |                          |                             \-> browser (optional)
+                                    v                          v
+                              original text             translated text
+                                    \__________________________/
+                                                 |
+                                   websocket -> caption page (any number of screens)
 ```
 
-- **Capture** (`sts.audio.capture`) — reads raw audio off an input device via `sounddevice`.
+- **Capture** (`sts.audio.capture`) — reads the input device via
+  `sounddevice`, resampling if the device can't do 16 kHz itself. Instead of
+  a local device, a browser tab can send its own microphone (see Operator
+  controls). On macOS, sts checks the Microphone privacy permission at
+  start-up: without it macOS hands every input device's audio over as
+  silence, so sts prints how to fix it, opens System Settings > Privacy &
+  Security > Microphone, and shows the same warning on the caption page.
 - **Captions** (`sts.transcript`, `sts.asr.gigaam_asr`) — Sber's
   [GigaAM-v3](https://huggingface.co/ai-sage/GigaAM-v3) `e2e_rnnt`, a
   Russian-only speech recognizer with punctuation. Captions don't wait for
@@ -31,162 +36,164 @@ sound card -> live captions (ru) -> MADLAD-400 translation (ru->en) -> XTTS (en)
   context and can revise what it heard. A sentence is **locked** once two
   more sentences have followed it, or 30 s after it ended
   (`--final-after-sentences N`, `--final-after-seconds S`; 0 turns either
-  rule off); its audio is then dropped, so it's never reworded again. If the
-  model starts a sentence with a lowercase letter, it's joined back onto the
-  previous one (the speaker only paused) - even a locked one, so a locked
-  sentence becomes **final** once the sentence after it is locked too. Only
-  final sentences go on to translation and voicing; everything before that
-  is shown on the caption page as it's heard (see Live captions). The price
-  of waiting for text to settle is delay: in testing, a sentence became
-  final about 10-20 s after it first appeared (with the defaults), and was
-  translated within a second after that.
+  rule off), and everything still open is locked once nothing new has been
+  recognized for 10 s (`ASRConfig.final_after_silence_seconds`; the caption
+  page counts down the last 5 s). A locked sentence's audio is dropped, so
+  it's never reworded again. If the model starts a sentence with a lowercase
+  letter, it's joined back onto the previous one (the speaker only paused) -
+  even a locked one, so a locked sentence becomes **final** once the
+  sentence after it is locked too. Only final sentences go on to translation
+  and voicing; everything before that is shown on the caption page as it's
+  heard. The price of waiting for text to settle is delay: in testing, a
+  sentence became final about 10-20 s after it first appeared (with the
+  defaults), and was translated within a second after that.
 - **Translation** (`sts.translate.translator`) — MADLAD-400 10B (`ru->en`),
-  chosen over NLLB-200 after comparing both on a recorded sermon
-  (`translate.py`): it renders Bible passages in standard English wording
-  (mostly KJV) without the reading being announced, and was the most accurate
-  on the preacher's own speech. `--translation-model google/madlad400-3b-mt`
-  (or `-7b-mt`) trades a little accuracy for memory. The glossary
+  chosen over NLLB-200, HY-MT1.5 and others after comparing them on a
+  recorded sermon (see **Comparing translation models**): it renders Bible
+  passages in standard English wording (mostly KJV) without the reading
+  being announced, and was the most accurate on the preacher's own speech.
+  `--translation-model google/madlad400-3b-mt` (or `-7b-mt`) trades a little
+  accuracy for memory. Text is translated one sentence at a time; common
+  one-word replies ("Аминь", "Аллилуйя") use a fixed table. The glossary
   (`sts.translate.glossary`, placeholder substitution of Baptist/Christian
   terms) is off by default: MADLAD gets those terms right on its own, and
   mangles the placeholders.
 - **TTS** (`sts.tts`) — two swappable backends. `--tts-backend` picks one; by
   default it's whichever is installed in the Python environment you run from
-  (they live in separate virtualenvs), so `.venv/bin/sts` uses XTTS and
-  `.venv-qwen/bin/sts` uses Qwen3-TTS:
-  - `xtts` (default) — Coqui XTTS v2. Ships natural built-in speakers, plus
-    zero-shot cloning from a short reference clip.
-  - `qwen3` — Qwen3-TTS-Base (`pip install -e '.[qwen3]'`, in its own virtualenv - see Setup), Apache-2.0,
-    self-hosted. Also zero-shot cloning, and officially supports
-    cross-lingual cloning (Russian reference clip -> English output) with a
-    reusable "clone prompt" object built from the clip once. It has no
-    XTTS-style built-in default voice, so synthesis is silent until a voice
-    is picked or trained. Unverified against real hardware in this repo (no
-    GPU here) — see `sts/tts/qwen3.py` for exactly what the integration
-    assumes, taken from the upstream README's example code.
+  (they need conflicting `transformers` versions, so they live in separate
+  virtualenvs): `.venv-xtts/bin/sts` uses XTTS and `.venv-qwen/bin/sts` uses
+  Qwen3-TTS.
+  - `xtts` (default) — Coqui XTTS v2. Natural built-in speakers, plus
+    zero-shot cloning from a short reference clip. Live playback streams:
+    each sentence starts playing about a second after synthesis begins.
+  - `qwen3` — Qwen3-TTS (Apache-2.0). Zero-shot cloning, including
+    cross-lingual (Russian reference clip -> English speech), preset voices
+    (Aiden, Ryan) from its CustomVoice model, and **Create Voice** from a
+    written description (its VoiceDesign model). A clip is generated whole
+    before it plays.
+
   Both back a persistent, cross-session **voice library**
-  (`sts.tts.voice_library`, dropdown on the caption page — see Operator
-  controls below) rather than a one-off in-memory clone.
+  (`sts.tts.voice_library`, the Voice dropdown on the caption page — see
+  Operator controls below) rather than a one-off in-memory clone.
 
 All stages run on separate threads connected by queues (`sts.pipeline`), so a
-slow translation or TTS call doesn't stall audio capture.
+slow translation or TTS call doesn't stall audio capture. On Apple Silicon,
+GPU work from those threads is serialized through one lock (`sts.gpu`),
+since PyTorch's Metal backend aborts the process when two threads submit
+work at once.
 
-- **Live captions** (`sts.web`) — a FastAPI/uvicorn server, on by default (`--no-web` turns it off)
-  that serves a full-screen caption page and pushes recognized/translated
-  text to it over a websocket as it's produced. The page is a top half
-  (original) / bottom half (translated) split. In the original half, final
-  sentences are shown slightly faded, followed by the text that isn't final
-  yet - bright, on the same running line, updated as it's heard. Each new
-  translation fades in at the bottom of its half, dimming the one before.
-  Older lines are dropped once they no longer fit on screen, so the page
-  keeps auto-scrolling without accumulating unbounded DOM/memory over a long
-  service.
+- **Caption page** (`sts.web`) — a FastAPI/uvicorn server, on by default
+  (`--no-web` turns it off; port 8765, `--web-port`), serves a full-screen
+  caption page and pushes text to it over a websocket as it's produced. Any
+  number of screens can have it open; they stay in sync.
+  - **Landscape** (default): original text in the top half, translation in
+    the bottom half, each a flowing paragraph. **Portrait**: side-by-side
+    columns, one row per sentence so each translation lines up with its
+    original (for a portrait-mounted screen). Picked per screen in the
+    Translate dropdown.
+  - The newest final sentence in each half is bright and older ones fade.
+    The text that isn't final yet appears faded below the final sentences,
+    updated as it's heard; the Caption dropdown's **Unfinished text:
+    Show/Hide** turns it off on that screen. A "Finalizing in N s" countdown
+    appears while nothing new is being recognized.
+  - Older lines are dropped once they no longer fit, so the page never
+    accumulates unbounded DOM over a long service. A half is hidden while
+    its stage is off, and "System Idle" shows when both are.
+  - The header shows input and output level meters and, per stage, a
+    real-time factor (processing time / audio duration; at 1.0x or above
+    that stage is falling behind).
 - **Bible reference detection** (`sts.bible`) — the Russian transcript is
   scanned for a spoken reference ("Матфея 1:15", "Первое послание к
   Коринфянам, глава 13, стих 4", "Плач Иеремии 3:22-23", chapter/verse as
   digits or Russian number words). A match looks up the exact verse in a
   bundled, fully offline Russian Synodal + English KJV (Pure Cambridge
-  Edition) dataset and pushes it to the caption page as a banner that slides
-  in over both panels for ~25s. Book-name matching is stem-based (all 66
-  books) rather than an exhaustive alias list, and Psalms gets its chapter
-  number converted between the Synodal (Septuagint) and KJV (Masoretic)
-  numbering traditions so it doesn't show the wrong psalm — see
-  `sts/bible/lookup.py` for what that does and doesn't cover. This is
-  inherently best-effort: it depends on the ASR getting the reference right
-  and only covers phrasing the parser recognizes.
-- **Operator controls** (`sts.control`, buttons on the caption page) — a live
+  Edition) dataset and shows it as a banner over each half for 25 s; a chip
+  in the corner brings the last one back. Book-name matching is stem-based
+  (all 66 books) rather than an exhaustive alias list, and Psalms gets its
+  chapter number converted between the Synodal (Septuagint) and KJV
+  (Masoretic) numbering — see `sts/bible/lookup.py`. This is best-effort:
+  it only fires when the preacher says the reference, the ASR gets it
+  right, and the parser recognizes the phrasing. A passage read without
+  announcing it is still translated well, because MADLAD recognizes
+  Scripture on its own.
+- **Operator controls** (`sts.control`, the caption page's header) — a live
   feed runs across multiple speakers/performances in a session (music,
-  announcements, one voice at a time when someone *is* speaking).
-  Recognition/translation/captions run **by default** - captions are silent,
-  so leaving them running through a musical number is harmless. TTS
-  *voicing* is different (audio played over speakers during music or an
-  announcement would not be harmless) and defaults to **off**, opt-in per
-  button:
-  - **Start / Stop** — pauses/resumes ASR/translation/captions, for when even
-    the captions aren't wanted (e.g. a long musical number). Stop makes
-    whatever was already heard final (so it's still translated), and then
-    nothing more is transcribed, so it doesn't waste GPU time or produce junk
-    captions.
-  - **Voice on / off** — independently gates whether translated text is
-    actually synthesized and played out loud; starts off regardless of
-    Start/Stop, so captions can run continuously while voicing is switched
-    on only when someone is actually preaching.
-  - **Reset** — for a new speaker/performance: clears both caption panels on
-    every connected screen, drops any text already in flight through the
-    pipeline, and forgets the current cloned voice (falls back to the
-    default TTS voice).
-  - **Train voice** — start capturing the live speaker's audio for a voice
-    clone; stops automatically at 18s or on a second click, whichever comes
-    first. What's captured is transcribed (for a higher-quality clone on
-    backends that use a reference transcript) and the clone becomes active
-    right away, so you can listen to it. It is **not** saved yet.
-  - **Create Voice** (Qwen3 backend only) — designs a brand-new voice from a
-    written description, no recording needed. Describe the voice, hit
-    **Generate**, then paste any text into the second box and **Play sample**
-    (plays on the output device) to hear it. Not right? Tweak the description
-    and Generate again - each generation is a *different* voice, so keep
-    regenerating until one fits. When it does, name it and **Save**: it's
-    stored in the voice library like a trained voice and appears in the
-    voice dropdown (Custom group). Uses the Qwen3-TTS VoiceDesign model, which is loaded
-    only while the dialog is open (first use downloads it).
-  - **Save Voice** — enabled once a trained voice is active. Asks for a name
-    and, on Save, stores it in the voice library so it's reusable from the
-    **voice dropdown** (Custom group) in later sessions. Naming an existing voice replaces
-    it. Skip it to keep the voice for this session only. Click Reset before
-    the next speaker so their audio doesn't get folded into the previous
-    one's training sample.
-  - **Configuration** (gear icon, far right of the header) — opens a dialog
-    to choose the **input** and **output** audio devices from everything the
-    machine has (or "System default"). **Apply** switches them live, without
-    restarting: capture moves to the new input, and the next spoken sentence
-    plays on the new output. If a device can't be opened, you get an error
-    and the previous one stays in use. The list refreshes each time the
-    dialog opens, so a device plugged in after start-up shows up. Choices are
-    remembered across restarts (`--config-db`, default `sts.db`); an explicit
-    `--input-device` / `--output-device` on the command line always wins over
-    whatever was last saved.
-  - **Voice dropdown** — a single list with two groups:
-    - **Default** — starts with the bundled **Default** voice, a calm,
-      natural English preacher voice (designed with Qwen3's Create Voice) that
-      ships inside the repo (`src/sts/bundled_voices/default/`). It is the
-      voice Reset always returns to. A session instead *starts* on whichever
-      voice was last picked from this dropdown (remembered via `--config-db`);
-      pass `--default-voice ...` or `--clone ...` to start on something else
-      regardless of what was last picked, or set `TTSConfig.startup_voice =
-      None`. It can't be deleted, but saving
-      your own voice named "Default" replaces it (deleting that copy brings the
-      shipped one back). After it come the built-in (non-trained) voices. XTTS offers 13
-      (defaults to Adde Michal; `--default-voice "Craig Gutsy"` or
-      `male`/`female` sets the starting choice). Qwen3-TTS offers the preset
-      voices Aiden and Ryan, spoken in a calm "preacher" style. The list
-      lives in `TTSConfig.voice_groups` (`sts/config.py`); any of XTTS's 58
-      speakers can be added there.
-    - **Custom** — voices you trained or designed and saved, reusable across
-      sessions. A just-trained voice that isn't saved yet shows up here as
-      "New voice (unsaved)".
+  announcements, one voice at a time when someone *is* speaking). Captions
+  and translation run **by default** - they're silent, so leaving them
+  running through a musical number is harmless. *Voicing* is different
+  (audio played during music or an announcement would not be harmless) and
+  defaults to **off**. Hovering a button or a level meter opens its
+  dropdown:
+  - **Input meter** — the input device (microphone / line in), switched
+    live, and **Use this browser's mic** to stream that browser tab's
+    microphone in instead. Browsers only allow the microphone on a secure
+    page, so for another device on the network serve the page over HTTPS
+    too (`--https-port`, see Usage).
+  - **Caption** — turns recognition on/off (e.g. through a long musical
+    number). Turning it off makes whatever was already heard final, so it's
+    still translated, and then nothing more is transcribed. Dropdown: model
+    and device in use, and Unfinished text Show/Hide.
+  - **Translate** — turns translation on/off, independently of captions.
+    Dropdown: model and device, and the Landscape/Portrait choice.
+  - **Voice** — turns synthesized speech on/off; starts off, so captions can
+    run all service while voicing is switched on only when someone is
+    preaching. Turning it off cuts the current sentence short and drops
+    anything queued. Dropdown:
+    - **Voice** list, in two groups. **Default**: the bundled **Default**
+      voice (a calm English preacher voice designed with Qwen3's Create
+      Voice, shipped in `src/sts/bundled_voices/default/`; the voice Reset
+      returns to), then the built-in voices - 13 for XTTS
+      (`TTSConfig.voice_groups`, from XTTS's 58), Aiden and Ryan for Qwen3.
+      **Custom**: voices you trained or designed and saved; an unsaved
+      just-trained voice shows as "New voice (unsaved)". Picking a voice
+      switches to it immediately. A session starts on whichever voice was
+      last picked (remembered via `--config-db`) unless `--default-voice` or
+      `--clone` says otherwise.
+    - **Train voice** — captures the live speaker's audio for a zero-shot
+      clone; stops at 18 s or on a second click. The clone becomes active
+      right away so you can listen to it, but isn't saved yet.
+    - **Save Voice** — names the active trained voice and stores it in the
+      library, reusable in later sessions (an existing name is replaced).
+      Click Reset before the next speaker so their audio doesn't get folded
+      into the previous one's sample.
+    - **Create Voice** (Qwen3 only) — designs a new voice from a written
+      description: **Generate**, try it on any text with **Play sample**,
+      regenerate until one fits (each generation is a different voice), then
+      name it and **Save**. The VoiceDesign model is loaded only while the
+      dialog is open.
+    - **Delete** (while a Custom voice is selected) — removes it from the
+      library on disk after confirmation; the default voice takes over if it
+      was active. Saving your own voice named "Default" replaces the bundled
+      one; deleting that copy brings the bundled one back.
+  - **Output meter** — the output device, switched live (the next sentence
+    plays on it); a **Volume** slider for the local sound card; **Stream
+    voice to this browser**, to hear the voice in that browser tab too
+    (remembered per browser); and **Test Output**, a short pre-recorded clip
+    played on the output device even with Voice off.
+  - **Reset** — for a new speaker/performance: clears the captions on every
+    connected screen, drops any text in flight through the pipeline, and
+    forgets the current cloned voice.
 
-    Picking any voice switches to it immediately; picking a Default voice
-    drops any cloned/trained one.
-  - **Delete** — appears to the right of the voice dropdown while a Custom
-    voice is selected. Asks for confirmation, then removes that voice from
-    the library on disk (its folder under `--voice-library-dir`). If it was
-    the active voice, the default voice takes over.
+  Device lists refresh each time a dropdown opens, so a device plugged in
+  after start-up shows up. The input/output devices, volume and active voice
+  are remembered across restarts (`--config-db`, default `sts.db`); an
+  explicit `--input-device` / `--output-device` always wins over what was
+  saved. Per-screen choices (Landscape/Portrait, Unfinished text, voice
+  streaming) are stored in that browser.
 
   All of this is relayed over the same websocket the captions arrive on
-  (`{"action": "start"}`, `{"action": "voice_on"}`,
-  `{"action": "train_start"}`, `{"action": "save_voice", "name": "..."}`,
-  `{"action": "select_speaker", "speaker_id": "..."}`, etc.); the server
-  broadcasts current state and the library list back to every connected
-  screen so multiple open tabs stay in sync. Library entries live under
-  `--voice-library-dir` (default `voices/`) as `<speaker-id>/reference.wav`
-  + `meta.json` — the raw reference clip and transcript, not a backend's
-  in-memory prompt object, so they're portable across restarts and backend
-  swaps and a clone prompt only needs recomputing (seconds) when a speaker
-  is actually selected.
+  (`{"action": "start"}`, `{"action": "translate_off"}`,
+  `{"action": "voice_on"}`, `{"action": "save_voice", "name": "..."}`,
+  `{"action": "select_speaker", "speaker_id": "..."}`, etc.). Library
+  entries live under `--voice-library-dir` (default `voices/`) as
+  `<speaker-id>/reference.wav` + `meta.json` — the raw reference clip and
+  transcript, not a backend's in-memory prompt object, so they're portable
+  across restarts and backend swaps.
 
   This is zero-shot clone caching, not true model fine-tuning — a
-  from-scratch per-speaker model needs far more data (10-30 min of clean
-  audio) and training time than a live session realistically gives you. For
-  that, see **True LoRA training**, below.
+  per-speaker model needs far more data (10-30 min of clean audio) and
+  training time than a live session gives you. For that, see **True LoRA
+  training**, below.
 
 ## GPU requirements
 
@@ -232,10 +239,8 @@ This isn't officially supported by the Qwen team — Qwen3-TTS's own
 a third-party community patch
 ([cheeweijie/qwen3-tts-lora-finetuning](https://github.com/cheeweijie/qwen3-tts-lora-finetuning),
 Apache-2.0) pinned to a specific upstream commit; `sts/tts/qwen3.py`'s LoRA
-loading code mirrors that patch's inference script line-for-line for the
-same reason the rest of the Qwen3-TTS integration does: it's unverified
-against real hardware in this repo (no GPU here), so it's built to match
-known-working reference code rather than guessed at.
+loading code mirrors that patch's inference script line-for-line, so it
+matches known-working reference code rather than guessing at the API.
 
 ## Apple Silicon / Metal
 
@@ -251,13 +256,18 @@ support has historically been the less mature of the two float types) — see
 `_dtype_for_device`/`_attn_impl_for_device` in `sts/tts/qwen3.py`. XTTS has
 no such split; `.to("mps")` is all it needs.
 
-This hasn't been run on real Apple hardware in this repo (no Mac available
-in dev) - assuming a high-end chip (M5 Max-class: plenty of GPU cores and
-unified memory), there's no reason to downgrade model sizes (MADLAD-400 10B,
-Qwen3-TTS 1.7B) the way you might on a smaller Mac; unified
-memory also means there's no separate VRAM ceiling to budget against like
-on a discrete GPU. What's unverified is per-op MPS support and real-world
-throughput, not whether the models fit.
+The whole pipeline runs on an Apple Silicon Mac with the default models
+(MADLAD-400 10B, XTTS or Qwen3-TTS 1.7B); unified memory means there's no
+separate VRAM ceiling, but the models need about 25GB of it together, so a
+Mac with 32GB+ is the floor for the defaults (use MADLAD 3B on a smaller
+one). Two Mac-specific behaviors:
+
+- GPU work from the pipeline's threads is serialized through one lock
+  (`sts.gpu`): Metal aborts the process ("A command encoder is already
+  encoding...") when two threads submit work at once.
+- macOS gives an app without Microphone permission silence instead of an
+  error. The permission belongs to the app sts was started from (Terminal,
+  iTerm, an IDE), and sts checks it at start-up - see Capture, above.
 
 ```bash
 sts --device mps                                # XTTS backend
@@ -286,11 +296,10 @@ only triggers based on compute capability, not install failures, so you may
 need to fall back manually; nothing else in the pipeline depends on
 flash-attn being present.
 
-On VRAM: an 11GB card (e.g. a GTX 1080 Ti) is workable for the whole
-pipeline but tight if you also pick Qwen3-TTS's 1.7B variant - the 0.6B
-variant, or the XTTS backend, leaves more headroom. See the GPU requirements
-breakdown earlier in this README for the per-component numbers this is
-based on.
+On VRAM: an 11GB card (e.g. a GTX 1080 Ti) can't hold the default MADLAD
+10B; with `--translation-model google/madlad400-3b-mt` and XTTS it's
+workable but tight. See the GPU requirements breakdown earlier in this
+README for the per-component numbers.
 
 ## Setup
 
@@ -301,8 +310,13 @@ but will lag). Supported on Windows, macOS, and Linux.
 ```bash
 git clone https://github.com/frifox/sts.git
 cd sts
-pip install -e ".[xtts]"
+python3.11 -m venv .venv-xtts && .venv-xtts/bin/pip install -e ".[xtts,dev]"
+python3.11 -m venv .venv-qwen && .venv-qwen/bin/pip install -e ".[qwen3,dev]"   # optional: the Qwen3-TTS backend
 ```
+
+The two TTS backends need conflicting `transformers` versions, so each gets
+its own virtualenv; run `sts` from whichever one has the backend you want.
+`translate.py` needs `.venv-qwen` (a newer `transformers`).
 
 If you already have Python, git, and (for `--device cuda`) a working CUDA
 install of PyTorch on this machine, that's the whole setup — skip to
@@ -343,10 +357,10 @@ the path a Windows + NVIDIA GPU setup - e.g. a GTX 1080 Ti - would follow):
    ```
    git clone https://github.com/frifox/sts.git
    cd sts
-   python -m venv .venv
-   .venv\Scripts\activate
+   python -m venv .venv-xtts
+   .venv-xtts\Scripts\activate
    ```
-   You should see `(.venv)` at the start of the prompt from here on - every
+   You should see `(.venv-xtts)` at the start of the prompt from here on - every
    command below assumes it's still active (reactivate with the same command
    if you close and reopen the terminal).
 
@@ -373,8 +387,9 @@ the path a Windows + NVIDIA GPU setup - e.g. a GTX 1080 Ti - would follow):
    ```
    pip install -e ".[xtts]"
    ```
-   The Qwen3-TTS backend needs a separate virtualenv (`pip install -e ".[qwen3]"`; its
-   transformers requirement conflicts with XTTS's)
+   The Qwen3-TTS backend needs a separate virtualenv (`.venv-qwen`,
+   `pip install -e ".[qwen3]"`; its transformers requirement conflicts with
+   XTTS's)
    — see **Older NVIDIA GPUs (pre-Ampere) and Windows** above for what that
    backend needs on a card like a GTX 1080 Ti specifically.
 
@@ -410,10 +425,10 @@ mps` does and doesn't cover) or Intel Macs with no dev environment yet:
    ```
    git clone https://github.com/frifox/sts.git
    cd sts
-   python3.11 -m venv .venv
-   source .venv/bin/activate
+   python3.11 -m venv .venv-xtts
+   source .venv-xtts/bin/activate
    ```
-   `(.venv)` should appear at the start of the prompt - reactivate with the
+   `(.venv-xtts)` should appear at the start of the prompt - reactivate with the
    same `source` command in any new terminal tab/window.
 
 4. **Install the project:**
@@ -437,8 +452,10 @@ mps` does and doesn't cover) or Intel Macs with no dev environment yet:
    Two macOS-specific prompts to expect the first time: a
    **"Accept incoming network connections?"** firewall prompt for the
    caption web server (allow it), and a **microphone permission** prompt for
-   Terminal/iTerm under System Settings -> Privacy & Security -> Microphone
-   if `--list-devices` doesn't show your input device.
+   the terminal app you run sts from. If access was denied earlier, macOS
+   won't ask again and the input records silence: sts detects this, says
+   so, and opens System Settings -> Privacy & Security -> Microphone, where
+   you enable it for that app and restart sts.
 
 ### Fresh Linux install
 
@@ -452,7 +469,7 @@ the Python side is identical everywhere.
    needs installing separately, or audio capture will fail to import.
    Debian 12 (bookworm) ships Python 3.11, which works. Debian 13 and newer
    ship 3.13, which Coqui TTS can't install on - use `uv` or `pyenv` to get
-   3.11 there (e.g. `uv venv --python 3.11 .venv`).
+   3.11 there (e.g. `uv venv --python 3.11 .venv-xtts`).
    ```
    sudo apt update
    sudo apt install python3 python3-venv python3-pip git libportaudio2
@@ -494,8 +511,8 @@ the Python side is identical everywhere.
    ```
    git clone https://github.com/frifox/sts.git
    cd sts
-   python3 -m venv .venv
-   source .venv/bin/activate
+   python3 -m venv .venv-xtts
+   source .venv-xtts/bin/activate
    ```
 
 4. **Install PyTorch with CUDA support explicitly**, same reasoning as the
@@ -512,8 +529,9 @@ the Python side is identical everywhere.
    ```
    pip install -e ".[xtts]"
    ```
-   The Qwen3-TTS backend needs its own virtualenv (`pip install -e ".[qwen3]"`), because
-   its transformers requirement conflicts with XTTS's.
+   The Qwen3-TTS backend needs its own virtualenv (`.venv-qwen`,
+   `pip install -e ".[qwen3]"`), because its transformers requirement
+   conflicts with XTTS's.
 
 6. **Run it** - see **First run, on any OS** below. Linux generally has no
    OS-level app-permission prompts for mic/network access
@@ -545,6 +563,11 @@ KJV Pure Cambridge Edition (1769) texts, both public domain, sourced from
 ```bash
 sts --list-devices                 # find your sound card's input/output index
 sts --input-device 2 --output-device 3
+sts -v                              # log pipeline activity: segments, timings, device events
+sts --translation-model google/madlad400-3b-mt
+                                    # a smaller translation model (see GPU requirements)
+sts --asr-device cpu --tts-device cuda:1
+                                    # pin single stages to a device (also --translation-device)
 sts --default-voice "Craig Gutsy"   # a different built-in voice (default: Adde Michal)
 sts --accent-voice "Andrew Chipper" --accent-strength 1.0
                                     # steer cloned voices' accent toward a built-in speaker
@@ -569,10 +592,17 @@ sts --web-port 8765                # live captions are served at :8765 by defaul
                                     # (open it full-screen / kiosk mode on a
                                     # second monitor or projector); --no-web
                                     # runs without the page, printing text only
+sts --https-port 443               # also serve the page over HTTPS, needed to use
+                                    # a phone's or laptop's browser mic as the input
+                                    # (browsers only allow the mic on a secure page).
+                                    # Self-signed cert in certs/ by default (--tls-cert,
+                                    # --tls-key); make one with:
+                                    #   openssl req -x509 -newkey rsa:2048 -nodes -keyout certs/key.pem \
+                                    #     -out certs/cert.pem -days 3650 -subj '/CN=sts'
 sts --voice-library-dir /data/sts-voices
                                     # a custom voice library location
 sts --config-db /data/sts.db       # where the operator's input/output
-                                    # device, and active voice are remembered across
+                                    # device, volume and active voice are remembered across
                                     # restarts (default: sts.db in the working
                                     # directory; pass '' to disable persistence)
 
@@ -583,10 +613,15 @@ sts-import-voice "Pastor Ivan" pastor_ivan ./checkpoint-epoch-9 \
 
 ## Sound quality of spoken clips
 
-Both TTS backends' output is level-matched: the models speak very short phrases
-much quieter than long sentences (measured up to about 12 dB), which sounds
-distant next to their neighbors, so every clip is brought to one speech level
-(`TTSConfig.target_level`, default 0.10 RMS, about -20 dBFS; `None` disables it).
+Both TTS backends' output is brought to one speech level
+(`TTSConfig.target_level`, default 0.10 RMS, about -20 dBFS; `None` disables
+it), so a short phrase doesn't sound distant next to a long sentence. Qwen3
+clips are measured and matched whole. XTTS streams, so a sentence starts
+playing before most of it exists: its gain comes from the running level of
+that voice's earlier sentences (XTTS speaks a given voice at a steady
+level), kept per voice, and stays fixed through the sentence. Only a voice's
+first sentence is judged from its own first 0.8 s, and a clip shorter than
+that (e.g. "Amen.") is matched exactly.
 
 With Qwen3, a cloned voice also copies its reference's recording conditions: a
 muffled or distant sample gives a muffled voice. Voices are best trained from a
@@ -633,6 +668,30 @@ same virtualenv:
 
 Piped to a file, only final sentences are written.
 
+## Comparing translation models (translate.py)
+
+`translate.py` transcribes the first minutes of a recording with GigaAM
+(the live pipeline's ASR), splits it into sentences the way the live
+translator does, and translates every sentence with each candidate model -
+NLLB-200 (600M distilled, 1.3B distilled, 1.3B, 3.3B), MADLAD-400 (3B, 7B,
+10B), Tencent HY-MT1.5 (1.8B, 7B) and Google TranslateGemma (4B, 12B, 27B).
+The result is one text file with each Russian sentence followed by every
+model's English, plus each model's load time and seconds per sentence:
+
+```bash
+.venv-qwen/bin/python translate.py                       # videos/k_neyman.mkv, first 5 min, every model
+.venv-qwen/bin/python translate.py --models madlad hy-mt  # only labels containing these
+.venv-qwen/bin/python translate.py --video other.mkv --minutes 10
+```
+
+Models are compared raw (no glossary, no context from earlier sentences,
+greedy decoding). Results are cached per model in
+`benchmark_results/translate/`, so a rerun only translates what's missing
+(`--force` redoes them). All the sizes together are ~200 GB of downloads;
+`--delete-downloads` removes each one it downloaded after its run.
+TranslateGemma is gated: accept its license on huggingface.co and
+`hf auth login` first. This comparison is what picked MADLAD-400 10B.
+
 ## Benchmarking hardware
 
 `benchmark.py` times each pipeline stage - ASR (GigaAM-v3),
@@ -668,10 +727,13 @@ pip install -e ".[dev]"
 pytest
 ```
 
-The glossary term-matching, Bible reference detection/lookup, the
-start/stop/reset/train control state machine (`sts.control`), the voice
-library (`sts.tts.voice_library`, including LoRA entries), and the
-cuda/cpu/mps device-mapping logic (`sts.devices`) are unit tested here — the
-audio/ASR/translation/TTS stages, and everything under
-`training/qwen3_lora/`, need real hardware (mic, GPU) and aren't exercised
-by the test suite.
+Run it from `.venv-xtts` (the XTTS-specific tests skip themselves
+elsewhere). Covered without models or hardware: caption sentence locking
+(`sts.transcript`), Bible reference detection and lookup, the operator
+control state, the voice library (including LoRA entries), saved settings,
+device mapping, capture resampling and device recovery, the browser mic,
+playback, catch-up, loudness matching of streamed XTTS audio, the glossary
+and text cleanup. Loading and running the actual ASR, translation and TTS
+models, and everything under `training/qwen3_lora/`, needs the models and a
+GPU, so the suite doesn't do it - use `benchmark.py` and `translate.py` for
+those.
