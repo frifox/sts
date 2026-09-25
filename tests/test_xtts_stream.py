@@ -13,6 +13,9 @@ from sts.tts.xtts import LEVEL_WINDOW_S, SAMPLE_RATE, XTTSSynthesizer  # noqa: E
 def _synth(chunks):
     synth = object.__new__(XTTSSynthesizer)
     synth.cfg = TTSConfig()
+    synth.cloned_speaker_wav = None
+    synth.default_voice = "Adde Michal"
+    synth._voice_levels = {}
     synth._generate_stream = lambda text: iter(chunks)
     return synth
 
@@ -39,3 +42,24 @@ def test_a_piece_shorter_than_the_level_window_is_leveled_whole():
     out = list(_synth(short)._stream_piece("Amen."))
     assert len(out) == 1 and out[0][2] is False
     assert speech_level(out[0][0], SAMPLE_RATE) == pytest.approx(TTSConfig().target_level, rel=0.15)
+
+
+def test_a_piece_that_starts_quietly_isnt_boosted_once_the_voice_level_is_known():
+    # A normal piece first, then one whose first second is 4x quieter than
+    # the rest. Gaining the second from its own first window boosted all of
+    # it by 12 dB - the "sometimes much louder" sentence.
+    synth = _synth([_speech(0.9, 0.2) for _ in range(4)])
+    list(synth._stream_piece("x"))
+    synth._generate_stream = lambda text: iter([_speech(0.9, 0.05)] + [_speech(0.9, 0.2) for _ in range(3)])
+    out = list(synth._stream_piece("y"))
+    rest = np.concatenate([a for a, _, _ in out[1:]])
+    assert speech_level(rest, SAMPLE_RATE) == pytest.approx(TTSConfig().target_level, rel=0.15)
+
+
+def test_each_voice_keeps_its_own_level():
+    synth = _synth([_speech(0.9, 0.2) for _ in range(4)])
+    list(synth._stream_piece("x"))
+    synth.default_voice = "Ana Florence"
+    synth._generate_stream = lambda text: iter([_speech(0.9, 0.04) for _ in range(4)])
+    audio = np.concatenate([a for a, _, _ in synth._stream_piece("y")])
+    assert speech_level(audio, SAMPLE_RATE) == pytest.approx(TTSConfig().target_level, rel=0.15)

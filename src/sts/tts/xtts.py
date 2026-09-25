@@ -26,7 +26,7 @@ from transformers import StoppingCriteria, StoppingCriteriaList
 from transformers.generation.streamers import BaseStreamer
 
 from sts.config import TTSConfig
-from sts.audioquality import level_gain, match_level
+from sts.audioquality import MAX_LEVEL_GAIN_DB, match_level, speech_level
 from sts.gpu import gpu_lock
 from sts.textclean import split_for_tts
 from sts.tts.voice_library import VoiceEntry
@@ -49,9 +49,12 @@ MAX_CHARS_PER_CHUNK = 220
 # every this many GPT tokens (about 46 ms of speech each, so ~1 s per chunk),
 # and the first chunk can play while the rest is still being generated.
 STREAM_CHUNK_TOKENS = 20
-# How much of a streamed piece is held back to set its loudness from (see
-# stream_chunks) - about one chunk, so it costs next to no extra delay.
+# How much of a streamed piece is held back before its first chunk plays (see
+# stream_chunks) - about one chunk, so it costs next to no extra delay. A
+# piece shorter than this is level-matched exactly, as a whole.
 LEVEL_WINDOW_S = 0.8
+# Weight of the newest piece in the running speech level (see stream_chunks).
+LEVEL_SMOOTHING = 0.3
 # Samples cross-faded between consecutive streamed chunks (XTTS's own default).
 STREAM_OVERLAP_SAMPLES = 1024
 # Xtts.inference()'s own defaults, used for a cloned voice (see _voice_conditioning).
@@ -112,6 +115,8 @@ class XTTSSynthesizer:
         self.cloned_speaker_wav: str | None = cfg.speaker_wav
         self.default_voice = cfg.resolve_voice(cfg.default_voice)
         self._conditioning_cache: dict = {}
+        # Running speech level of the pieces spoken so far, per voice (see stream_chunks).
+        self._voice_levels: dict[tuple, float] = {}
 
     def set_default_voice(self, voice: str) -> None:
         """Picks which built-in voice is used when no cloned voice is active."""
@@ -150,30 +155,46 @@ class XTTSSynthesizer:
         `seamless` is False for the first chunk of each piece (it gets the
         usual pause before it) and True for the rest, which continue it.
 
-        Loudness is matched per piece like synthesize_stream, but only the
-        start of the piece exists when its first chunk has to go out, so the
-        gain is set from its first LEVEL_WINDOW_S (the whole piece, if that's
-        shorter - e.g. "Amen.", the case the matching matters most for) and
-        applied to the rest, peak-limited."""
+        Loudness: only the start of a piece exists when its first chunk has
+        to go out, and the level of that first second was a poor guess at the
+        whole piece's (off by -1 to +3 dB on a recorded sermon), so pieces
+        came out randomly louder or quieter. The gain now comes from the
+        running level of the voice's earlier pieces instead - XTTS speaks a
+        given voice at a steady level - and stays fixed through the piece.
+        Only the first piece in a voice falls back to its first
+        LEVEL_WINDOW_S; a piece shorter than that (e.g. "Amen.") is matched
+        exactly, as a whole."""
         for piece in split_for_xtts(text):
             yield from self._stream_piece(piece)
 
     def _stream_piece(self, text: str):
         target = self.cfg.target_level
         gain = None if target else 1.0
+        voice = (self.cloned_speaker_wav, self.default_voice, self.cfg.accent_voice)
         held: list[np.ndarray] = []
+        spoken: list[np.ndarray] = []
         first = True
         for audio in self._generate_stream(text):
+            spoken.append(audio)
             if gain is None:
                 held.append(audio)
                 if sum(len(part) for part in held) < LEVEL_WINDOW_S * SAMPLE_RATE:
                     continue
                 audio, held = np.concatenate(held), []
-                gain = level_gain(audio, SAMPLE_RATE, target)
+                level = self._voice_levels.get(voice) or speech_level(audio, SAMPLE_RATE)
+                peak = float(np.abs(audio).max())
+                gain = min(target / max(level, 1e-4), 10 ** (MAX_LEVEL_GAIN_DB / 20), 0.95 / max(peak, 1e-4))
             yield np.clip(audio * gain, -0.99, 0.99).astype(np.float32), SAMPLE_RATE, not first
             first = False
         if held:  # the whole piece was shorter than the level window
             yield match_level(np.concatenate(held), SAMPLE_RATE, target), SAMPLE_RATE, not first
+        if target and spoken:
+            level = speech_level(np.concatenate(spoken), SAMPLE_RATE)
+            if level > 1e-4:
+                previous = self._voice_levels.get(voice)
+                self._voice_levels[voice] = (
+                    level if previous is None else (1 - LEVEL_SMOOTHING) * previous + LEVEL_SMOOTHING * level
+                )
 
     def _generate_stream(self, text: str):
         """Raw audio for one piece, yielded every STREAM_CHUNK_TOKENS codes.

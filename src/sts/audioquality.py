@@ -14,6 +14,8 @@ import numpy as np
 from scipy.signal import resample_poly, stft
 
 _RATE = 16_000
+# The most match_level() will boost a clip, so noise isn't boosted.
+MAX_LEVEL_GAIN_DB = 12.0
 
 
 def clarity_db(audio: np.ndarray, sample_rate: int) -> float:
@@ -45,7 +47,7 @@ def speech_level(audio: np.ndarray, sample_rate: int) -> float:
     return float(np.sqrt(np.mean(energy[energy >= np.median(energy)])))
 
 
-def level_gain(audio: np.ndarray, sample_rate: int, target: float, max_gain_db: float = 12.0, peak: float = 0.95) -> float:
+def level_gain(audio: np.ndarray, sample_rate: int, target: float, max_gain_db: float = MAX_LEVEL_GAIN_DB, peak: float = 0.95) -> float:
     """The gain match_level() would apply to `audio` - see there. 1.0 for silence."""
     audio = np.asarray(audio, dtype=np.float32)
     level = speech_level(audio, sample_rate)
@@ -55,7 +57,7 @@ def level_gain(audio: np.ndarray, sample_rate: int, target: float, max_gain_db: 
     return min(target / level, 10 ** (max_gain_db / 20), peak / top)
 
 
-def match_level(audio: np.ndarray, sample_rate: int, target: float, max_gain_db: float = 12.0, peak: float = 0.95) -> np.ndarray:
+def match_level(audio: np.ndarray, sample_rate: int, target: float, max_gain_db: float = MAX_LEVEL_GAIN_DB, peak: float = 0.95) -> np.ndarray:
     """Scales a clip so its speech sits at `target` RMS, so sentences of different lengths play at the
     same loudness. The model speaks very short phrases about 6 dB quieter than long sentences, which
     sounds like someone far away. The gain is capped (so noise isn't boosted) and never pushes a peak past `peak`."""
