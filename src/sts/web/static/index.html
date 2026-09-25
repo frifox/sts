@@ -280,6 +280,7 @@
     pointer-events: none;
   }
   .finalize-countdown.show { display: block; }
+  body.hide-unfinished .finalize-countdown.show { display: none; }  /* nothing on screen for it to finalize */
   #portrait-panel .finalize-countdown { right: calc(50% + 1.5vw); }
   #portrait-panel.hide-translated .finalize-countdown { right: 1.2vw; }
   #portrait-panel.hide-original .finalize-countdown { display: none; }
@@ -556,6 +557,11 @@
             <div>Model: <b id="asr-info-model">–</b></div>
             <div>Device: <b id="asr-info-device">–</b></div>
             <div>Input: <b id="asr-info-source">–</b></div>
+          </div>
+          <label id="unfinished-label">Unfinished text</label>
+          <div class="render-mode" role="group" aria-labelledby="unfinished-label">
+            <button type="button" data-unfinished="show" title="Show the caption text that isn't final yet, faded, below the final sentences">Show</button>
+            <button type="button" data-unfinished="hide" title="Show only final sentences">Hide</button>
           </div>
         </div>
       </div>
@@ -870,6 +876,11 @@
   // re-created, so it doesn't re-run the fade-in on every update. --
   let recentOriginal = '';
   let recentRow = null;  // portrait: [original cell, translated cell] of the live row
+  // Per-viewer, like the render mode: whether the live text is shown at all.
+  let showUnfinished = true;
+  try {
+    showUnfinished = localStorage.getItem('sts-unfinished-text') !== 'hide';
+  } catch { /* storage blocked - default stands */ }
 
   function setRecentOriginal(text) {
     recentOriginal = text;
@@ -878,13 +889,14 @@
 
   function renderRecentOriginal() {
     const portrait = renderMode === 'portrait';
+    const text = showUnfinished ? recentOriginal : '';
     // Drop one left over in the other render mode's layout.
     for (const el of document.querySelectorAll(portrait ? '#original-lines .recent' : '#portrait-grid .recent')) {
       el.remove();
     }
     if (!portrait) recentRow = null;
     if (portrait) {
-      if (!recentOriginal) {
+      if (!text) {
         if (recentRow) recentRow.forEach((el) => el.remove());
         recentRow = null;
         return;
@@ -898,14 +910,14 @@
           return cell;
         });
       }
-      recentRow[0].textContent = recentOriginal;
+      recentRow[0].textContent = text;
       prunePortraitRows();
       return;
     }
     // Landscape: a paragraph of its own, below the final sentences' one.
     const container = document.getElementById('original-lines');
     let para = container.querySelector(':scope > .recent');
-    if (!recentOriginal) {
+    if (!text) {
       para?.remove();
       return;
     }
@@ -915,7 +927,26 @@
       para.style.margin = '0';
       container.appendChild(para);
     }
-    para.textContent = recentOriginal;
+    para.textContent = text;
+  }
+
+  const unfinishedButtons = document.querySelectorAll('.render-mode button[data-unfinished]');
+  function showUnfinishedChoice() {
+    for (const button of unfinishedButtons) {
+      const current = (button.dataset.unfinished === 'show') === showUnfinished;
+      button.classList.toggle('is-active', current);
+      button.setAttribute('aria-pressed', String(current));
+    }
+    document.body.classList.toggle('hide-unfinished', !showUnfinished);
+  }
+  showUnfinishedChoice();
+  for (const button of unfinishedButtons) {
+    button.addEventListener('click', () => {
+      showUnfinished = button.dataset.unfinished === 'show';
+      showUnfinishedChoice();
+      renderRecentOriginal();
+      try { localStorage.setItem('sts-unfinished-text', showUnfinished ? 'show' : 'hide'); } catch { /* ignore */ }
+    });
   }
 
   // -- Switching Render mode: carries the existing transcript over into the
@@ -1148,7 +1179,7 @@
   const translatedPanel = document.getElementById('translated-panel');
   const portraitPanel = document.getElementById('portrait-panel');
   const idleMessage = document.getElementById('idle-message');
-  const renderModeButtons = document.querySelectorAll('.render-mode button');
+  const renderModeButtons = document.querySelectorAll('.render-mode button[data-mode]');
 
   // Per-viewer display preference, not an operator setting - each connected
   // screen picks its own (e.g. a portrait-mounted display vs a landscape
