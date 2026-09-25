@@ -115,7 +115,7 @@ class Transcript:
     CONTEXT_S = 1.5
 
     def __init__(self, asr, after_sentences: int, after_seconds: float, sample_rate: int = 16_000,
-                 after_silence: float = 15.0):
+                 after_silence: float = 10.0):
         self.asr = asr
         self.after_sentences = after_sentences
         self.after_seconds = after_seconds

@@ -115,7 +115,7 @@ def test_caption_step_reports_its_time_over_the_audio_that_arrived_meanwhile(mon
     class Transcript:
         has_audio = True
         silence_s = None
-        after_silence = 15.0
+        after_silence = 10.0
 
         def step(self):
             time.sleep(0.05)

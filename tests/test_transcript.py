@@ -88,22 +88,22 @@ def test_flush_returns_what_is_still_open_as_final_and_empties_the_buffer():
     assert t.flush() == []
 
 
-def test_everything_open_is_final_after_15_seconds_of_silence():
+def test_everything_open_is_final_after_10_seconds_of_silence():
     """An unfinished sentence, and the pending one before it, don't wait for
-    more speech once nothing new has been heard for 15 s."""
+    more speech once nothing new has been heard for 10 s."""
     asr = _Asr([("Первое.", 0.1, 0.9), ("Второе.", 1.0, 1.5), ("Третье", 1.6, 2.0)])
     t = Transcript(asr, 1, 30)
     t.add(_samples(0, 3))
     assert [s.text for s in t.step()[0]] == ["Первое."]  # "Второе." locked too, but pending
-    for second in range(3, 16):
+    for second in range(3, 11):
         t.add(_samples(second, second + 1))
         final, still_open = t.step()
-        assert final == []  # under 15 s since "Третье" ended at 2.0
-    t.add(_samples(16, 17))
+        assert final == []  # under 10 s since "Третье" ended at 2.0
+    t.add(_samples(11, 12))
     final, still_open = t.step()
     assert [s.text for s in final] == ["Второе.", "Третье"]
     assert still_open == []
-    t.add(_samples(17, 18))
+    t.add(_samples(12, 13))
     assert t.step() == ([], [])
 
 
@@ -145,5 +145,5 @@ def test_silence_is_counted_from_the_last_word_while_something_is_open():
     t.step()
     assert t.silence_s == pytest.approx(7.0)
     t.add(_samples(9, 17))
-    t.step()  # 15 s: finalized, nothing open any more
+    t.step()  # 15 s, past 10: finalized, nothing open any more
     assert t.silence_s is None

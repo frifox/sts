@@ -75,7 +75,7 @@ class ASRConfig:
     interval_ms: int = 500
     final_after_sentences: int = 2
     final_after_seconds: float = 30.0
-    final_after_silence_seconds: float = 15.0
+    final_after_silence_seconds: float = 10.0
 
 
 @dataclass

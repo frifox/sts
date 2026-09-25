@@ -125,7 +125,7 @@ def test_stop_finalizes_what_was_heard_so_it_is_still_translated():
 
     class Transcript:
         silence_s = None
-        after_silence = 15.0
+        after_silence = 10.0
 
         def flush(self):
             return [Sentence("Недосказанное", 3.0, 4.0, False)]
@@ -255,4 +255,4 @@ def test_finalize_countdown_starts_after_5_seconds_of_silence_and_clears():
     for silence_s in (None, 2.0, 4.9, 5.0, 5.4, 6.2, 14.1, None):
         p.transcript.silence_s = silence_s
         p._publish_finalize_countdown()
-    assert sent == [10, 9, 1, None]  # only changes are sent
+    assert sent == [5, 4, 1, None]  # only changes are sent
