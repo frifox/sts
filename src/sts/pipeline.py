@@ -198,7 +198,8 @@ class Pipeline:
         # Live captions: capture feeds this while Caption is on, and
         # _caption_step re-transcribes what isn't locked yet.
         self.transcript = Transcript(
-            self.asr, cfg.asr.final_after_sentences, cfg.asr.final_after_seconds, cfg.audio.sample_rate
+            self.asr, cfg.asr.final_after_sentences, cfg.asr.final_after_seconds, cfg.audio.sample_rate,
+            after_silence=cfg.asr.final_after_silence_seconds,
         )
         # (text, seq, spoken seconds, continues, finalized at) per final sentence, for translation.
         self._transcripts: queue.Queue = queue.Queue()

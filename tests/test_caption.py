@@ -297,7 +297,7 @@ def test_transcript_locks_sentences_once_and_stops_rehearing_their_audio():
         ("Третье.", 4.0, 5.0), ("Четвёртое.", 6.0, 7.0), ("Пятое", 8.0, 8.5),
     )
     asr = _ScriptedAsr(script)
-    t = Transcript(asr, after_sentences=2, after_seconds=30)
+    t = Transcript(asr, after_sentences=2, after_seconds=30, after_silence=0)
     fed = [0]
 
     _feed(t, 5.5, fed)

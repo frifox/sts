@@ -88,6 +88,32 @@ def test_flush_returns_what_is_still_open_as_final_and_empties_the_buffer():
     assert t.flush() == []
 
 
+def test_everything_open_is_final_after_15_seconds_of_silence():
+    """An unfinished sentence, and the pending one before it, don't wait for
+    more speech once nothing new has been heard for 15 s."""
+    asr = _Asr([("Первое.", 0.1, 0.9), ("Второе.", 1.0, 1.5), ("Третье", 1.6, 2.0)])
+    t = Transcript(asr, 1, 30)
+    t.add(_samples(0, 3))
+    assert [s.text for s in t.step()[0]] == ["Первое."]  # "Второе." locked too, but pending
+    for second in range(3, 16):
+        t.add(_samples(second, second + 1))
+        final, still_open = t.step()
+        assert final == []  # under 15 s since "Третье" ended at 2.0
+    t.add(_samples(16, 17))
+    final, still_open = t.step()
+    assert [s.text for s in final] == ["Второе.", "Третье"]
+    assert still_open == []
+    t.add(_samples(17, 18))
+    assert t.step() == ([], [])
+
+
+def test_silence_rule_can_be_turned_off():
+    asr = _Asr([("Второе", 1.0, 1.5)])
+    t = Transcript(asr, 2, 30, after_silence=0)
+    t.add(_samples(0, 60))
+    assert t.step() == ([], ["Второе"])
+
+
 def test_add_and_step_from_two_threads():
     t = Transcript(_Asr(), 2, 30)
     stop = threading.Event()

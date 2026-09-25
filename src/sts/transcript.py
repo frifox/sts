@@ -6,7 +6,8 @@ The audio that isn't locked yet is re-transcribed every step, so the model
 keeps hearing more context and can revise what it heard. A sentence is
 locked once `after_sentences` more sentences have followed it, or it ended
 `after_seconds` ago; its audio is then dropped, so it's never re-transcribed
-or reworded again. A "sentence" the model starts with a lowercase letter is
+or reworded again. Once nothing new has been heard for `after_silence`
+seconds, everything still open is locked too, finished sentence or not. A "sentence" the model starts with a lowercase letter is
 the rest of the previous one, split by a pause, and is joined back onto it.
 """
 
@@ -113,10 +114,12 @@ class Transcript:
 
     CONTEXT_S = 1.5
 
-    def __init__(self, asr, after_sentences: int, after_seconds: float, sample_rate: int = 16_000):
+    def __init__(self, asr, after_sentences: int, after_seconds: float, sample_rate: int = 16_000,
+                 after_silence: float = 15.0):
         self.asr = asr
         self.after_sentences = after_sentences
         self.after_seconds = after_seconds
+        self.after_silence = after_silence  # 0 turns it off
         self.sample_rate = sample_rate
         # add() is called from the capture side while step() runs on another
         # thread; the lock covers the buffer, not the (slow) transcription.
@@ -165,7 +168,18 @@ class Transcript:
             sentences = join_continuations(sentences_from_words(words))
             now_s = offset_s + len(audio) / self.sample_rate
             n_locked = count_final(sentences, now_s, self.after_sentences, self.after_seconds)
+            # Nothing new heard for `after_silence` seconds: the speaker has
+            # stopped, so whatever is still open - an unfinished sentence, the
+            # pending one - is final now rather than left hanging on screen,
+            # untranslated, until someone speaks again.
+            last_heard_s = sentences[-1].end if sentences else self._pending.end if self._pending else None
+            silent = self.after_silence > 0 and last_heard_s is not None and now_s - last_heard_s >= self.after_silence
+            if silent:
+                n_locked = len(sentences)
             final = self._lock_in(sentences[:n_locked])
+            if silent and self._pending is not None:
+                final.append(self._pending)
+                self._pending = None
             if n_locked:
                 self._cut_s = sentences[n_locked - 1].end
             # Audio before the first still-open word (less CONTEXT_S) is done

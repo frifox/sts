@@ -69,10 +69,13 @@ class ASRConfig:
     # every `interval_ms`. A sentence is locked - sent on to translation and
     # voicing, and never changed again - once `final_after_sentences` more
     # sentences have followed it, or `final_after_seconds` after it ended
-    # (0 turns either rule off).
+    # (0 turns either rule off). Once nothing new has been recognized for
+    # `final_after_silence_seconds`, everything still open is locked too,
+    # finished sentence or not (0 turns this off).
     interval_ms: int = 500
     final_after_sentences: int = 2
     final_after_seconds: float = 30.0
+    final_after_silence_seconds: float = 15.0
 
 
 @dataclass
