@@ -40,9 +40,9 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "--translation-model",
         default=None,
         metavar="HF_MODEL",
-        help="Hugging Face NLLB model used for translation (default: facebook/nllb-200-distilled-1.3B). "
-        "e.g. facebook/nllb-200-3.3B is larger and slower (about 2x the memory: ~13GB in fp32 on mps) "
-        "for a modest quality gain; facebook/nllb-200-distilled-600M is smaller and faster.",
+        help="Hugging Face MADLAD-400 model used for translation (default: google/madlad400-10b-mt, "
+        "~21GB in bf16). google/madlad400-7b-mt (~15GB) and google/madlad400-3b-mt (~6GB) are "
+        "smaller and a little less accurate (3b plus ASR and TTS needs a 12GB+ GPU).",
     )
     parser.add_argument(
         "--tts-backend",

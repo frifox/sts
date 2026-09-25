@@ -88,7 +88,7 @@ def test_translate_sentences_yields_incrementally_and_translate_still_joins():
     is unchanged for its existing callers - still one joined string."""
     from sts.translate.translator import Translator
 
-    translator = Translator.__new__(Translator)  # skip __init__: no real NLLB model needed for this
+    translator = Translator.__new__(Translator)  # skip __init__: no real translation model needed for this
     calls = []
 
     def fake_translate_sentence(text):

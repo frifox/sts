@@ -80,7 +80,7 @@ def _translating_pipeline(translate):
 
 
 def test_a_locked_sentence_is_translated_whole_and_paired_by_its_number():
-    p = _translating_pipeline(lambda text: iter(["He said so.", "Then left."]))  # split by NLLB's sentence splitter
+    p = _translating_pipeline(lambda text: iter(["He said so.", "Then left."]))  # split by the translator's sentence splitter
     p._translate_sentence("Он так сказал. И ушёл.", seq=7, spoken_s=2.0, continues=True, finalized_at=123.0)
     assert p.broadcaster.translated == [("He said so. Then left.", 7)]
     assert p._translations.get_nowait() == ("He said so. Then left.", True, 123.0)

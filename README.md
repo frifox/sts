@@ -13,7 +13,7 @@ see **Apple Silicon / Metal** below.
 ## Pipeline
 
 ```
-sound card -> live captions (ru) -> NLLB translation (ru->en) -> XTTS (en) -> sound card out
+sound card -> live captions (ru) -> MADLAD-400 translation (ru->en) -> XTTS (en) -> sound card out
                                        |                        |
                                        v                        v
                                   original text          translated text
@@ -40,10 +40,15 @@ sound card -> live captions (ru) -> NLLB translation (ru->en) -> XTTS (en) -> so
   of waiting for text to settle is delay: in testing, a sentence became
   final about 10-20 s after it first appeared (with the defaults), and was
   translated within a second after that.
-- **Translation** (`sts.translate.translator`) — NLLB-200 (`ru->en`). A
-  glossary (`sts.translate.glossary`) force-substitutes known Baptist/Christian
-  terms (grace, repentance, communion, sanctification, ...) so the model
-  can't mistranslate them, matching inflected Russian forms via stemming.
+- **Translation** (`sts.translate.translator`) — MADLAD-400 10B (`ru->en`),
+  chosen over NLLB-200 after comparing both on a recorded sermon
+  (`translate.py`): it renders Bible passages in standard English wording
+  (mostly KJV) without the reading being announced, and was the most accurate
+  on the preacher's own speech. `--translation-model google/madlad400-3b-mt`
+  (or `-7b-mt`) trades a little accuracy for memory. The glossary
+  (`sts.translate.glossary`, placeholder substitution of Baptist/Christian
+  terms) is off by default: MADLAD gets those terms right on its own, and
+  mangles the placeholders.
 - **TTS** (`sts.tts`) — two swappable backends. `--tts-backend` picks one; by
   default it's whichever is installed in the Python environment you run from
   (they live in separate virtualenvs), so `.venv/bin/sts` uses XTTS and
@@ -191,15 +196,18 @@ hardware.
 
 | Part | Models | Rough VRAM |
 |---|---|---|
-| Captions (ASR + translation) | GigaAM-v3 (~240M, ~0.8GB) + NLLB-200-1.3B (fp16) | ~3.5GB |
+| Captions (ASR + translation) | GigaAM-v3 (~240M, ~0.8GB) + MADLAD-400 10B (bf16; 3B with `--translation-model google/madlad400-3b-mt`) | ~22GB (3B: ~7GB) |
 | TTS, zero-shot | XTTS v2 (~460M) or Qwen3-TTS-Base (0.6B/1.7B) | ~2-4GB |
 | TTS, trained (LoRA) | same base model, adapter merged in | same as zero-shot per speaker; each additional *cached* trained speaker is a full extra model load, not a small increment (see `sts/tts/qwen3.py`) |
-| **Whole pipeline together** | all of the above loaded at once | **~6GB measured with XTTS on an 8GB RTX 2070; more with Qwen3-TTS 1.7B** |
+| **Whole pipeline together** | all of the above loaded at once | **~25GB with MADLAD 10B + XTTS (~10GB with MADLAD 3B); more with Qwen3-TTS 1.7B** |
 
-An 8GB card runs the XTTS pipeline with about 2GB to spare. A 12GB+ card
-(RTX 3060 12GB, RTX 4070, ...) is a comfortable floor for Qwen3-TTS's 1.7B
-variant or several cached trained speakers; its 0.6B variant, or XTTS, buys
-back headroom.
+These are estimates from parameter counts; the only measured figure is
+from before MADLAD (~6GB with NLLB-200-1.3B + XTTS on an 8GB RTX 2070). An
+8GB card no longer fits the pipeline even with MADLAD 3B: use a 12GB+ card
+with `--translation-model google/madlad400-3b-mt`, and a 32GB card (or Apple
+Silicon with 32GB+ of unified memory) for the default 10B. Qwen3-TTS's
+1.7B variant or several cached trained speakers need a few GB more; its
+0.6B variant, or XTTS, buys back headroom.
 
 ## True LoRA training (rented GPU, e.g. an H100/H200 droplet)
 
@@ -245,7 +253,7 @@ no such split; `.to("mps")` is all it needs.
 
 This hasn't been run on real Apple hardware in this repo (no Mac available
 in dev) - assuming a high-end chip (M5 Max-class: plenty of GPU cores and
-unified memory), there's no reason to downgrade model sizes (NLLB 1.3B,
+unified memory), there's no reason to downgrade model sizes (MADLAD-400 10B,
 Qwen3-TTS 1.7B) the way you might on a smaller Mac; unified
 memory also means there's no separate VRAM ceiling to budget against like
 on a discrete GPU. What's unverified is per-op MPS support and real-world
@@ -523,7 +531,7 @@ sts --list-devices                 # confirm your mic/speakers show up
 sts
 ```
 
-Model weights (GigaAM, NLLB, XTTS, Silero VAD) download automatically on
+Model weights (GigaAM, MADLAD-400, XTTS, Silero VAD) download automatically on
 first run — that first run needs internet access even though normal
 operation doesn't.
 
@@ -628,7 +636,7 @@ Piped to a file, only final sentences are written.
 ## Benchmarking hardware
 
 `benchmark.py` times each pipeline stage - ASR (GigaAM-v3),
-translation (NLLB), and TTS (both backends), whichever backends are installed - using the exact
+translation (MADLAD-400), and TTS (both backends), whichever backends are installed - using the exact
 same model configs and device-selection logic `sts` itself runs, so the
 numbers reflect real pipeline performance, not a synthetic benchmark of the
 frameworks in isolation. Point of it: run it on different machines/OSes (an

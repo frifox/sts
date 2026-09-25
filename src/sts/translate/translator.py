@@ -1,9 +1,16 @@
-"""Russian -> English translation via NLLB-200, with glossary term forcing."""
+"""Russian -> English translation via MADLAD-400 (optionally with glossary term forcing).
+
+MADLAD-400 (Google's T5-based translation model) was chosen over NLLB-200
+after comparing both on a recorded sermon (translate.py): it reproduces
+Bible passages in standard English wording (mostly KJV) on its own, without
+the reading being announced or looked up, and is the most accurate on the
+preacher's own speech too. Any MADLAD checkpoint works (3b/7b/10b-mt).
+"""
 
 import re
 
 import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import T5ForConditionalGeneration, T5Tokenizer
 
 from sts.config import TranslationConfig
 from sts.gpu import gpu_lock
@@ -14,7 +21,7 @@ from sts.translate import glossary
 _DEGENERATE = re.compile(r"Z{6,}|ZZGLOSS|(\b\w+\b)(?:[\s,.]+\1\b){5,}", re.IGNORECASE)
 
 
-# One- and two-word utterances are what NLLB handles worst: given «Аминь.» on its
+# One- and two-word utterances are what translation models handle worst: NLLB, given «Аминь.» on its
 # own it invents a sentence ("I'm not going to."). These common church replies
 # are translated exactly instead.
 SHORT_PHRASES = {
@@ -55,27 +62,20 @@ def split_sentences(text: str, min_words: int = 2) -> list[str]:
 class Translator:
     def __init__(self, cfg: TranslationConfig):
         self.cfg = cfg
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.model_name, src_lang=cfg.source_lang
-        )
-        # fp16 on cuda roughly halves VRAM versus the default fp32 load - matters
-        # once ASR and TTS are also sharing the same GPU (observed OOM on an 8GB
-        # card loading NLLB fp32 alongside the ASR model + Qwen3-TTS).
+        self.tokenizer = T5Tokenizer.from_pretrained(cfg.model_name)
+        # bf16 halves the memory of fp32 (10b: ~21GB instead of ~43GB). Not
+        # fp16: T5 was trained in bf16 and its activations overflow fp16.
         # `torch_dtype`, not `dtype`: sts supports transformers back to 4.40
         # (the xtts extra pins <4.50), and `dtype` only exists on newer
         # releases - `torch_dtype` still works everywhere, just deprecated
         # (with a one-time warning) on the newest ones.
-        dtype = torch.float16 if cfg.device == "cuda" else torch.float32
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(cfg.model_name, torch_dtype=dtype).to(
+        dtype = torch.float32 if cfg.device == "cpu" else torch.bfloat16
+        self.model = T5ForConditionalGeneration.from_pretrained(cfg.model_name, torch_dtype=dtype).to(
             cfg.device
         )
         self.model.eval()
-
-        # transformers has moved this attribute around across NLLB releases.
-        if hasattr(self.tokenizer, "lang_code_to_id"):
-            self._target_id = self.tokenizer.lang_code_to_id[cfg.target_lang]
-        else:
-            self._target_id = self.tokenizer.convert_tokens_to_ids(cfg.target_lang)
+        # MADLAD detects the source language itself; only the target is named.
+        self._prefix = f"<2{cfg.target_lang}> "
 
     def translate(self, text: str) -> str:
         return " ".join(self.translate_sentences(text)).strip()
@@ -84,9 +84,10 @@ class Translator:
         """Translates `text` one sentence at a time, yielding each translation
         the moment it's ready instead of waiting for the whole passage.
 
-        NLLB is trained on single sentences and silently drops content when
-        handed several at once, so text is translated per sentence either
-        way; `translate()` above just joins them back into one string."""
+        Translation models are trained on single sentences and can silently
+        drop content when handed several at once (NLLB did), so text is
+        translated per sentence either way; `translate()` above just joins
+        them back into one string."""
         if not text.strip():
             return
         for sentence in split_sentences(text):
@@ -111,12 +112,11 @@ class Translator:
         return collapse_repeats(result)
 
     def _generate(self, source: str) -> str:
-        inputs = self.tokenizer(source, return_tensors="pt")
+        inputs = self.tokenizer(self._prefix + source, return_tensors="pt")
         input_tokens = inputs["input_ids"].shape[1]
         with gpu_lock(self.cfg.device):
             generated = self.model.generate(
                 **inputs.to(self.cfg.device),
-                forced_bos_token_id=self._target_id,
                 # Translations are about as long as their source; a hard cap
                 # relative to the input stops a runaway loop early.
                 max_new_tokens=min(256, int(input_tokens * 2) + 10),

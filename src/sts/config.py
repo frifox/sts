@@ -80,11 +80,17 @@ class ASRConfig:
 
 @dataclass
 class TranslationConfig:
-    model_name: str = "facebook/nllb-200-distilled-1.3B"
-    source_lang: str = "rus_Cyrl"
-    target_lang: str = "eng_Latn"
+    # MADLAD-400 checkpoint (see sts.translate.translator). bf16 memory:
+    # 10b ~21GB, 7b ~15GB, 3b ~6GB.
+    model_name: str = "google/madlad400-10b-mt"
+    target_lang: str = "en"  # MADLAD's <2xx> target tag; the source language is detected
     device: str = "cuda"
-    apply_glossary: bool = True
+    # Off: the placeholder masking (sts.translate.glossary) was built for
+    # NLLB. MADLAD misspells the placeholders, so every masked sentence fell
+    # back to a second, plain translation (twice the time, same output), and
+    # masking words mid-sentence breaks its grammar and its recall of Bible
+    # wording anyway. MADLAD renders the glossary's terms correctly on its own.
+    apply_glossary: bool = False
 
 
 @dataclass

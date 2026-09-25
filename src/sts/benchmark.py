@@ -1,5 +1,5 @@
 """Benchmarks each pipeline stage - ASR (Sber GigaAM-v3),
-translation (NLLB), and TTS (both the xtts and qwen3 backends), whichever
+translation (MADLAD-400), and TTS (both the xtts and qwen3 backends), whichever
 backends are installed - using
 the exact same sts model configs and device-selection logic (sts.devices)
 that `sts` itself runs, so a number from this script reflects what the live
@@ -234,7 +234,7 @@ def benchmark_tts(backend: str, device: str, repeats: int) -> StageResult:
     cfg.use_backend_voices()
     # Matches the actual deployed config: only the cloned voice used for
     # synthesis needs loading here, not the CustomVoice preset model too -
-    # loading both on an 8GB-class card alongside NLLB (already resident from
+    # loading both on an 8GB-class card alongside the translation model (already resident from
     # the translation benchmark) reliably OOMs, the same failure this flag
     # was added to sts itself to avoid.
     cfg.qwen3_preload_presets = False
@@ -387,7 +387,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "Default: auto-detect (cuda, then mps, then cpu)")
     parser.add_argument("--asr-device", default=None, help="Override just the ASR device")
     parser.add_argument("--translation-model", default=None, metavar="HF_MODEL",
-                        help="Hugging Face NLLB model to benchmark (default: facebook/nllb-200-distilled-1.3B)")
+                        help="Hugging Face MADLAD-400 model to benchmark (default: google/madlad400-10b-mt)")
     parser.add_argument("--repeats", type=int, default=3, help="Timed repetitions per stage, after 1 untimed warmup call (default: 3)")
     parser.add_argument("--skip-asr", action="store_true")
     parser.add_argument("--skip-translate", action="store_true")
@@ -437,7 +437,7 @@ def main() -> None:
         results.append(benchmark_asr(asr_device, args.repeats))
 
     if not args.skip_translate:
-        print(f"Benchmarking translation ({args.translation_model or 'NLLB'} on {translation_device})...", flush=True)
+        print(f"Benchmarking translation ({args.translation_model or 'MADLAD-400'} on {translation_device})...", flush=True)
         results.append(benchmark_translation(translation_device, args.repeats, args.translation_model))
 
     if not args.skip_tts:

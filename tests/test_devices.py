@@ -181,6 +181,6 @@ def test_translation_model_flag_overrides_the_default():
     assert default_cfg.translation.model_name == TranslationConfig().model_name  # untouched without the flag
 
     cfg, _ = build_engine_config(
-        parser.parse_args(["--device", "cpu", "--tts-backend", "xtts", "--translation-model", "facebook/nllb-200-3.3B"])
+        parser.parse_args(["--device", "cpu", "--tts-backend", "xtts", "--translation-model", "google/madlad400-3b-mt"])
     )
-    assert cfg.translation.model_name == "facebook/nllb-200-3.3B"
+    assert cfg.translation.model_name == "google/madlad400-3b-mt"
