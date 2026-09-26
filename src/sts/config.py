@@ -75,7 +75,7 @@ class ASRConfig:
     # final, end mark or not. 0 turns any of these off.
     interval_ms: int = 500
     final_after_unchanged_seconds: float = 5.0
-    final_force_after_seconds: float = 30.0
+    final_force_after_seconds: float = 0.0  # off for now; 30 caps a run-on sentence's wait
     final_after_silence_seconds: float = 10.0
 
 

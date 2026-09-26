@@ -15,7 +15,7 @@ rewritten in place.
 
 A sentence is final once it ends with a sentence-ending mark and hasn't
 changed (text or punctuation) for --final-after-unchanged seconds (default
-5), --final-force-after seconds after its first word (default 30), or once
+5), --final-force-after seconds after its first word (off by default), or once
 nothing new has been heard for --final-after-silence seconds (default 10,
 end mark or not): its audio is
 dropped, so it's never re-transcribed or reworded again, and it's printed
@@ -63,9 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
         "punctuation) for S seconds (default: 5; 0 turns this rule off)",
     )
     parser.add_argument(
-        "--final-force-after", type=float, default=30.0, metavar="S",
+        "--final-force-after", type=float, default=0.0, metavar="S",
         help="Finalize a sentence S seconds after its first word, even if it's still changing "
-        "(default: 30; 0 turns this rule off)",
+        "(default: 0, off; e.g. 30)",
     )
     parser.add_argument(
         "--final-after-silence", type=float, default=10.0, metavar="S",

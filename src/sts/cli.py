@@ -86,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="S",
         help="Finalize a caption sentence S seconds after its first word, even if it's still changing "
-        "(default 30; 0 turns this rule off)",
+        "(default 0: off; e.g. 30)",
     )
     parser.add_argument(
         "--final-after-silence",
