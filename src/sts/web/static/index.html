@@ -259,9 +259,10 @@
     cursor: pointer;
   }
 
-  /* Before the first not-yet-final sentence: how long until it's finalized
-     (see setFinalizeTimer). Full while no finalize rule is running; empties
-     clockwise from 12 o'clock as one runs out - --left is the fraction left. */
+  /* Before the first not-yet-final sentence, once it's about to be finalized
+     (see setFinalizeTimer): starts full and empties clockwise from 12
+     o'clock as the wait runs out - --left is the fraction left. Hidden, but
+     keeping its place so the text doesn't shift, while nothing is pending. */
   .finalize-clock {
     --left: 1;
     display: inline-block;
@@ -274,6 +275,7 @@
     box-sizing: border-box;
     background: conic-gradient(transparent calc((1 - var(--left)) * 360deg), currentColor 0);
   }
+  .finalize-clock.idle { visibility: hidden; }
 
   .verse-chip:hover { background: rgba(201, 162, 75, 0.18); }
   .verse-chip.show { display: inline-block; }
@@ -933,9 +935,10 @@
     drawFinalizeClocks();
   }
 
-  // -- Finalize clock: the server's (seconds left, whole wait) for the rule
-  // that will finalize the first open sentence soonest, or null while none
-  // is running (Transcript.finalize_timer). Animated between its updates,
+  // -- Finalize clock: the server's (seconds left, whole wait) before the
+  // first open sentence is finalized - once it has its end mark, or in the
+  // last few seconds before the silence/force rules - or null while nothing
+  // is pending (Transcript.finalize_timer). Animated between its updates,
   // which come with every re-transcription (~2/s).
   let finalizeTimer = null;  // {left, total, at: performance.now() when received}
   let finalizeFrame = null;
@@ -950,6 +953,7 @@
       fraction = Math.min(1, Math.max(0, left / finalizeTimer.total));
     }
     for (const clock of document.querySelectorAll('.finalize-clock')) {
+      clock.classList.toggle('idle', !finalizeTimer);
       clock.style.setProperty('--left', fraction.toFixed(4));
     }
     cancelAnimationFrame(finalizeFrame);

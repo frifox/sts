@@ -125,9 +125,9 @@ class Transcript:
     words from it (those centered before the cut) are discarded."""
 
     CONTEXT_S = 1.5
-    # A pause shorter than this is just the gap between words: the silence
-    # rule isn't reported as running (finalize_timer) until it's longer.
-    SILENCE_GRACE_S = 1.0
+    # How long before the silence and force rules finalize a sentence they're
+    # reported (finalize_timer), as a wait of this length.
+    WARN_S = 5.0
 
     def __init__(self, asr, after_unchanged: float = 5.0, force_after: float = 30.0, sample_rate: int = 16_000,
                  after_silence: float = 10.0):
@@ -135,10 +135,11 @@ class Transcript:
         self.after_unchanged = after_unchanged  # 0 turns it off
         self.force_after = force_after  # 0 turns it off
         self.after_silence = after_silence  # 0 turns it off
-        # (seconds left, the rule's whole wait) for whichever time rule will
-        # finalize the first still-open sentence soonest - None while none
-        # is running (nothing open, or the rules off). As of the last step();
-        # for the page's finalize indicator.
+        # (seconds left, the whole wait) before the first still-open sentence
+        # is finalized: by the 5 s rule once it has its end mark, or in the
+        # last WARN_S before the silence or force rule - whichever is soonest.
+        # None otherwise. As of the last step(); for the page's finalize
+        # indicator.
         self.finalize_timer: tuple[float, float] | None = None
         self.sample_rate = sample_rate
         # add() is called from the capture side while step() runs on another
@@ -218,23 +219,22 @@ class Transcript:
 
     @property
     def finalize_in_s(self) -> float | None:
-        """Seconds until the first still-open sentence is finalized by a time rule (see finalize_timer)."""
+        """Seconds left on finalize_timer, if it's running."""
         return self.finalize_timer[0] if self.finalize_timer else None
 
     def _finalize_timer(self, still_open: list[Sentence], unchanged_since: list[float],
                         now_s: float) -> tuple[float, float] | None:
         if not still_open:
             return None
-        timers = []  # (seconds left, whole wait) per running rule
+        timers = []  # (seconds left, whole wait) per rule that's due to be shown
         if self.after_unchanged > 0 and still_open[0].complete:
             timers.append((self.after_unchanged - (now_s - unchanged_since[0]), self.after_unchanged))
-        if self.force_after > 0:
-            timers.append((self.force_after - (now_s - still_open[0].start), self.force_after))
-        silent_s = now_s - still_open[-1].end
-        if self.after_silence > self.SILENCE_GRACE_S and silent_s >= self.SILENCE_GRACE_S:
-            # Counted as running only once the pause is longer than the gaps
-            # between words, and shown as starting then.
-            timers.append((self.after_silence - silent_s, self.after_silence - self.SILENCE_GRACE_S))
+        for rule_s, left in (
+            (self.after_silence, self.after_silence - (now_s - still_open[-1].end)),
+            (self.force_after, self.force_after - (now_s - still_open[0].start)),
+        ):
+            if rule_s > 0 and left <= self.WARN_S:
+                timers.append((left, min(self.WARN_S, rule_s)))
         if not timers:
             return None
         left, whole = min(timers)

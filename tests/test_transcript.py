@@ -136,20 +136,37 @@ def test_finalize_in_counts_down_to_the_first_open_sentence_being_final():
     assert t.finalize_in_s is None
 
 
-def test_finalize_timer_follows_the_rule_that_finalizes_soonest():
-    # Speaking, no end mark yet: only the 30 s rule runs (a pause shorter than
-    # SILENCE_GRACE_S doesn't count as silence).
+def test_finalize_timer_shows_only_what_is_pending():
     asr = _Asr([("Братья", 1.0, 1.5), ("и", 2.6, 2.8)])
     t = Transcript(asr)
+    # Speaking, no end mark yet: nothing pending.
     t.add(_samples(0, 3))
     t.step()
-    assert t.finalize_timer == pytest.approx((28.0, 30.0))
-    # The speaker stopped: 1 s later the silence rule runs, shown from its start.
-    t.add(_samples(3, 3.8))
-    t.step()
-    assert t.finalize_timer == pytest.approx((9.0, 9.0))
-    # An end mark: the 5 s rule starts, and is the soonest.
+    assert t.finalize_timer is None
+    # An end mark: the 5 s wait shows from the start...
     asr.script = [("Братья", 1.0, 1.5), ("и", 2.6, 2.8), ("сёстры.", 2.9, 3.3)]
-    t.add(_samples(3.8, 4.0))
+    t.add(_samples(3, 3.5))
     t.step()
     assert t.finalize_timer == pytest.approx((5.0, 5.0))
+    t.add(_samples(3.5, 5.5))
+    t.step()
+    assert t.finalize_timer == pytest.approx((3.0, 5.0))
+    # ...and starts over when the sentence changes.
+    asr.script = [("Братья", 1.0, 1.5), ("и", 2.6, 2.8), ("сёстры!", 2.9, 3.3)]
+    t.add(_samples(5.5, 6.0))
+    t.step()
+    assert t.finalize_timer == pytest.approx((5.0, 5.0))
+
+
+def test_finalize_timer_shows_the_last_5_seconds_of_silence_without_an_end_mark():
+    asr = _Asr([("Аминь", 1.0, 2.0)])
+    t = Transcript(asr)
+    t.add(_samples(0, 6.9))
+    t.step()
+    assert t.finalize_timer is None  # 4.9 s of silence
+    t.add(_samples(6.9, 7.0))
+    t.step()
+    assert t.finalize_timer == pytest.approx((5.0, 5.0))  # 5 s left of the 10
+    t.add(_samples(7.0, 9.0))
+    t.step()
+    assert t.finalize_timer == pytest.approx((3.0, 5.0))

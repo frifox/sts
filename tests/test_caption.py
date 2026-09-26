@@ -330,7 +330,10 @@ def test_an_unfinished_sentence_waits_for_its_end_mark():
     assert _texts(t.step()) == ([], ["Второе"])
     _feed(t, 20.0, fed)
     assert _texts(t.step()) == ([], ["Второе"])  # 17 s unchanged, but no end mark
-    assert t.finalize_in_s == pytest.approx(12.0)  # the 30 s rule, from its first word at 2.0
+    assert t.finalize_timer is None  # nothing pending yet: the 30 s rule is 12 s away
+    _feed(t, 28.0, fed)
+    t.step()
+    assert t.finalize_timer == pytest.approx((4.0, 5.0))  # its last 5 s are shown
     _feed(t, 32.0, fed)
     assert _texts(t.step()) == (["Второе"], [])
 
