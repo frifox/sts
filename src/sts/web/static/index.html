@@ -206,7 +206,7 @@
      at the right edge, leaves it - most of it going to the slider. */
   .volume-row { display: flex; align-items: center; gap: 0.6em; }
   .volume-row #volume-control { flex: 1 1 auto; min-width: 0; margin: 0; }
-  .volume-row #volume-slider { flex: 1 1 auto; min-width: 0; width: auto; }
+  .volume-row #volume-slider { flex: 1 1 4em; min-width: 0; width: 4em; }
   .volume-row #btn-test-output { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.4em; }
   .button-icon { width: 1.15em; height: 1.15em; fill: currentColor; flex: 0 0 auto; }
   #volume-value { min-width: 3em; font-variant-numeric: tabular-nums; }
@@ -455,6 +455,9 @@
     font-size: 0.85rem;
   }
   .engine-dropdown.show { display: block; }
+  /* The input and output dropdowns: the same width, whatever their content
+     (long device names are cut short with an ellipsis). */
+  #dropdown-input, #dropdown-output { width: 19rem; box-sizing: border-box; }
   .engine-info { color: #9a9aa5; margin-bottom: 0.7rem; display: flex; flex-direction: column; gap: 0.25rem; }
   .engine-info b { color: #ddd; font-weight: 600; }
   .engine-dropdown label { display: block; margin: 0.6rem 0 0.3rem; color: #9a9aa5; }
@@ -603,6 +606,7 @@
        the right edge can't run off the screen. */
     #controls { position: relative; }
     .engine, #volume-meter, #output-meter { position: static; }
+    #dropdown-input, #dropdown-output { width: auto; }
     .engine-dropdown {
       left: 0;
       right: 0;
