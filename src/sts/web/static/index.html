@@ -748,7 +748,7 @@
           <label id="cfg-output-label">Output device (voice playback)</label>
           <div class="device-list" id="cfg-output" role="radiogroup" aria-labelledby="cfg-output-label"></div>
           <div class="mic-row">
-            <button type="button" class="toggle-button" id="stream-toggle" title="Play the synthesized voice in this browser too"><svg class="toggle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg><span class="toggle-label">Stream voice to this browser</span><span class="check"></span></button>
+            <button type="button" class="toggle-button" id="stream-toggle" title="Play the synthesized voice in this browser too"><svg class="toggle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg><span class="toggle-label">Stream to this browser</span><span class="check"></span></button>
           </div>
         </div>
         <span class="meter-badge" id="stream-badge" title="Voice is streaming to this browser"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg></span>
@@ -1934,6 +1934,21 @@
     updateStreamButton();
   });
 
+  // Browsers only let a page make sound once the viewer has interacted with
+  // it, and only an audio context created or resumed during that interaction
+  // plays. With streaming remembered as on from an earlier visit, the context
+  // was otherwise first created when a clip arrived - not during a click - so
+  // it stayed silent. Any click or key press on the page (e.g. the Test
+  // button itself) now starts it, before the clip it asks for arrives.
+  function unlockStreamAudio() {
+    if (!streamEnabled) return;
+    const wasRunning = audioCtx && audioCtx.state === 'running';
+    const ctx = ensureAudioContext();
+    if (!wasRunning) nextStartTime = ctx.currentTime;  // don't play what piled up while it was silent
+  }
+  document.addEventListener('pointerdown', unlockStreamAudio, true);
+  document.addEventListener('keydown', unlockStreamAudio, true);
+
   document.getElementById('btn-test-output').addEventListener('click', () => send('test_output'));
 
   // Each binary frame: 4-byte LE sample rate header + raw float32 LE mono PCM
@@ -1943,6 +1958,12 @@
   function playAudioChunk(buffer) {
     if (!streamEnabled || buffer.byteLength <= 4) return;
     const ctx = ensureAudioContext();
+    if (ctx.state !== 'running') {
+      // Not allowed to play yet (see unlockStreamAudio): drop it rather than
+      // queue it up to burst out all at once later.
+      console.warn('[stream] audio is blocked until this page is clicked');
+      return;
+    }
     const sampleRate = new DataView(buffer).getUint32(0, true);
     const samples = new Float32Array(buffer, 4);
     if (!samples.length) return;
