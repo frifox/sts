@@ -488,6 +488,10 @@
     line-height: 1;
   }
   .toggle-button.is-active .check::after { content: '✓'; }
+  /* With an icon (the mic / speaker): icon at the left edge, the check box
+     moved to the right edge. */
+  .toggle-button .toggle-icon { flex: 0 0 auto; width: 1.15em; height: 1.15em; fill: currentColor; }
+  .toggle-button .toggle-label { flex: 1 1 auto; }
   /* #controls, like the other "on" rules: it has to outrank the general #controls button rule. */
   #controls .toggle-button.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   /* Landscape / Portrait: two buttons side by side, the current one lit. */
@@ -604,7 +608,7 @@
           <label for="cfg-input">Input device (microphone / line in)</label>
           <select id="cfg-input"></select>
           <div class="mic-row">
-            <button type="button" class="toggle-button" id="btn-browser-mic" title="Stream this browser's own microphone in as the input, instead of the server's sound card"><span class="check"></span><span>🎤 Use this browser's mic</span></button>
+            <button type="button" class="toggle-button" id="btn-browser-mic" title="Stream this browser's own microphone in as the input, instead of the server's sound card"><svg class="toggle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a4 4 0 0 0 4-4V5a4 4 0 0 0-8 0v6a4 4 0 0 0 4 4zm7-4a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.92V21H8a1 1 0 0 0 0 2h8a1 1 0 0 0 0-2h-3v-3.08A7 7 0 0 0 19 11z"/></svg><span class="toggle-label">Use this browser's mic</span><span class="check"></span></button>
           </div>
           <div id="mic-status"></div>
         </div>
@@ -677,7 +681,7 @@
           <label for="cfg-output">Output device (voice playback)</label>
           <select id="cfg-output"></select>
           <div class="mic-row">
-            <button type="button" class="toggle-button" id="stream-toggle" title="Play the synthesized voice in this browser too"><span class="check"></span><span>Stream voice to this browser</span></button>
+            <button type="button" class="toggle-button" id="stream-toggle" title="Play the synthesized voice in this browser too"><svg class="toggle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg><span class="toggle-label">Stream voice to this browser</span><span class="check"></span></button>
           </div>
         </div>
         <span class="meter-badge" id="stream-badge" title="Voice is streaming to this browser"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg></span>
