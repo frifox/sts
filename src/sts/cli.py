@@ -127,7 +127,7 @@ def saved_device(persistent_config, key: str, check) -> int | None:
     if persistent_config is None:
         return None
     saved = persistent_config.get(key)
-    if not saved:
+    if not saved or saved == "off":  # "off": that side is turned off (see main); no device to restore
         return None
     try:
         device = int(saved)
@@ -158,6 +158,12 @@ def main() -> None:
             except ValueError:
                 pass
 
+    # A side saved as "off" (clicked off in the caption page's device list)
+    # starts off - unless the command line names a device for it.
+    if args.input_device is None and persistent_config is not None and persistent_config.get("input_device") == "off":
+        cfg.audio.source = "none"
+    if args.output_device is None and persistent_config is not None and persistent_config.get("output_device") == "off":
+        cfg.audio.output_enabled = False
     cfg.audio.input_device = (
         args.input_device
         if args.input_device is not None

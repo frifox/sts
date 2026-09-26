@@ -141,7 +141,14 @@ class AudioPlayback:
 
         `seamless` marks a streamed chunk that continues the previous clip
         mid-piece: it's resampled as a continuation of it. Otherwise the
-        previous piece's held-back resampler tail is played out first."""
+        previous piece's held-back resampler tail is played out first.
+
+        With the local output turned off (`cfg.output_enabled` False) nothing
+        is written anywhere, but the clip still takes its real time - see
+        _play_silently."""
+        if not self.cfg.output_enabled:
+            self._play_silently(audio, sample_rate, pause_before, should_continue, on_chunk)
+            return
         with self._lock:
             stream, target_rate = self._ensure_stream(sample_rate)
             duration = len(audio) / sample_rate
@@ -175,6 +182,29 @@ class AudioPlayback:
             stream.write(chunk)
             if on_chunk:
                 on_chunk(chunk)
+
+    def _play_silently(self, audio, sample_rate, pause_before, should_continue, on_chunk) -> None:
+        """play() with no output device: waits out the clip (and its lead-in
+        pause) in real time instead of writing it - so everything paced by
+        playback (the next clip's timing, catch-up, pending_s, the output
+        meter, voice streamed to browsers) behaves as if it had played."""
+        samples = np.ascontiguousarray(audio, dtype=np.float32)
+        with self._lock:
+            self._resampler = self._resampler_rates = None  # nothing held back for a device
+            now = time.monotonic()
+            pad = pause_needed(now, self._scheduled_end, pause_before) if pause_before > 0 else 0.0
+            start = max(now, self._scheduled_end) + pad
+            self._scheduled_end = start + len(samples) / sample_rate
+        chunk_frames = max(1, int(0.05 * sample_rate))
+        time.sleep(max(0.0, start - time.monotonic()))
+        for i in range(0, len(samples), chunk_frames):
+            if should_continue is not None and not should_continue():
+                with self._lock:
+                    self._scheduled_end = 0.0
+                return
+            if on_chunk:
+                on_chunk(samples[i : i + chunk_frames] * self.cfg.volume)
+            time.sleep(max(0.0, start + (i + chunk_frames) / sample_rate - time.monotonic()))
 
     def _take_resampler_tail(self) -> np.ndarray:
         """Ends the current resampling stream and returns what it was still

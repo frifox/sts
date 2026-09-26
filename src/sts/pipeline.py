@@ -173,6 +173,8 @@ class Pipeline:
         saved = persistent_config.get("show_unfinished") if persistent_config is not None else None
         self._show_unfinished = saved != "0"
         self.capture = AudioCapture(cfg.audio)
+        # The local input ("alsa" or "none") the browser mic returns to when it stops.
+        self._local_source = cfg.audio.source if cfg.audio.source != "browser" else "alsa"
         self.playback = AudioPlayback(cfg.audio)
         self._stage("Loading speech detector…")
         self.segmenter = SpeechSegmenter(cfg.audio, cfg.vad)  # for "Train voice" only
@@ -555,6 +557,9 @@ class Pipeline:
             applied=applied,
             # Only matters while a local device is the input: the browser mic has its own permission.
             mic_blocked=self.cfg.audio.source == "alsa" and is_blocked(self.capture.mic_permission),
+            # A local device side turned off (see _handle_device_action).
+            input_off=self.cfg.audio.source == "none",
+            output_off=not self.cfg.audio.output_enabled,
         )
         self.broadcaster.broadcast_devices(message)
 
@@ -565,58 +570,94 @@ class Pipeline:
             return
         if action == "mic_start":
             with self._device_lock:
+                if self.cfg.audio.source != "browser":
+                    self._local_source = self.cfg.audio.source  # what mic_stop goes back to
                 self.capture.switch_to_browser()
             vlog("audio", "input switched to this browser's microphone")
             self._broadcast_status()
+            self._broadcast_devices()
             return
         if action == "mic_stop":
             with self._device_lock:
-                self.capture.switch_to_alsa()
-            vlog("audio", "input switched back to the local ALSA device")
+                # Back to the local input as it was: a device, or off.
+                if self._local_source == "none":
+                    self.capture.switch_to_none()
+                else:
+                    self.capture.switch_to_alsa()
+            vlog("audio", f"input switched back to the local input ({self.cfg.audio.source})")
             self._broadcast_status()
+            self._broadcast_devices()
             return
 
+        # `input` / `output`: a device index, "" for the system default, or
+        # "off" to turn that side's local device off (nothing captured /
+        # nothing played locally; the browser mic and voice streaming still
+        # work). A side left out of the request stays as it is.
         def parse(value):
+            if value == "off":
+                return "off"
             return None if value in (None, "") else int(value)
 
         try:
-            new_input, new_output = parse(data.get("input")), parse(data.get("output"))
+            new_input = parse(data["input"]) if "input" in data else ...
+            new_output = parse(data["output"]) if "output" in data else ...
         except (TypeError, ValueError):
             return
         audio = self.cfg.audio
-        # Picking an item from the Input dropdown always means "use ALSA with
-        # this device" - including when the browser mic was active and the
-        # index itself hasn't changed, since capture isn't reading it yet.
-        input_changed = new_input != audio.input_device or audio.source != "alsa"
-        output_changed = new_output != audio.output_device
+        # Picking an input device always means "use ALSA with this device" -
+        # including when the browser mic was active (or the input off) and
+        # the index itself hasn't changed, since capture isn't reading it yet.
+        if new_input is ...:
+            input_changed = False
+        elif new_input == "off":
+            input_changed = audio.source != "none"
+        else:
+            input_changed = new_input != audio.input_device or audio.source != "alsa"
+        if new_output is ...:
+            output_changed = False
+        elif new_output == "off":
+            output_changed = audio.output_enabled
+        else:
+            output_changed = new_output != audio.output_device or not audio.output_enabled
         with self._device_lock:
             try:
                 from sts.audio.devices import check_input, check_output
 
-                if input_changed:
+                if input_changed and new_input != "off":
                     check_input(new_input, audio.sample_rate, audio.channels)
-                if output_changed:
+                if output_changed and new_output != "off":
                     check_output(new_output, 24_000)
                 if input_changed:
-                    self.capture.switch_to_alsa(new_input)
+                    if new_input == "off":
+                        self.capture.switch_to_none()
+                    else:
+                        self.capture.switch_to_alsa(new_input)
                 if output_changed:
-                    audio.output_device = new_output
-                    self.playback.stop()  # the output stream reopens on the new device with the next clip
+                    if new_output == "off":
+                        audio.output_enabled = False
+                    else:
+                        audio.output_device = new_output
+                        audio.output_enabled = True
+                    self.playback.stop()  # the output stream reopens on the new device (if any) with the next clip
             except Exception as exc:
                 print(f"[audio] couldn't apply the selected devices: {exc}")
                 self._broadcast_devices(error=f"Couldn't use that device: {exc}")
                 return
-            vlog("audio", f"devices applied: input={audio.input_device}, output={audio.output_device}")
+            vlog("audio", f"devices applied: input={'off' if audio.source == 'none' else audio.input_device}, "
+                          f"output={audio.output_device if audio.output_enabled else 'off'}")
             if self._persistent_config is not None:
-                # Only a real ALSA device is a restorable choice - not the
+                # A real ALSA device, or off, is a restorable choice - not the
                 # browser-mic mode, which is inherently session-only.
                 if input_changed:
                     self._persistent_config.set(
-                        "input_device", "" if audio.input_device is None else str(audio.input_device)
+                        "input_device",
+                        "off" if audio.source == "none" else "" if audio.input_device is None else str(audio.input_device),
                     )
                 if output_changed:
                     self._persistent_config.set(
-                        "output_device", "" if audio.output_device is None else str(audio.output_device)
+                        "output_device",
+                        "off" if not audio.output_enabled
+                        else "" if audio.output_device is None else str(audio.output_device),
                     )
             self._broadcast_devices(applied=True)
         self._broadcast_status()  # audio.source may have just changed too

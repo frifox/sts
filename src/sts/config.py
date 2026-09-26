@@ -13,9 +13,13 @@ class AudioConfig:
     volume: float = 1.0
     # "alsa" reads `input_device` via sounddevice, as always; "browser" instead
     # accepts frames pushed over the websocket by a connected browser's
-    # microphone (see Pipeline._handle_mic_frame). Switched at runtime by the
-    # caption page's "Use this browser's mic" control / the input dropdown.
+    # microphone (see Pipeline._handle_mic_frame); "none" listens to nothing
+    # (the local input turned off). Switched at runtime by the caption page's
+    # "Use this browser's mic" control / the input device list.
     source: str = "alsa"
+    # False: nothing plays on the local output device - the voice still goes
+    # to browsers streaming it, paced as if it played (see AudioPlayback.play).
+    output_enabled: bool = True
     sample_rate: int = 16_000
     channels: int = 1
     # Minimum silence between one translated text and the next when they play

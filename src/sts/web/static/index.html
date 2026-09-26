@@ -1479,7 +1479,8 @@
     updatePanelVisibility();
 
     document.getElementById('asr-info-source').textContent =
-      status.audio_source === 'browser' ? "This browser's mic" : 'ALSA (local device)';
+      status.audio_source === 'browser' ? "This browser's mic"
+        : status.audio_source === 'none' ? 'Off' : 'ALSA (local device)';
     // The server may have switched us back to ALSA on its own (e.g. another
     // tab picked a device, or this tab's mic connection dropped) - stop the
     // local capture without sending a redundant mic_stop back.
@@ -1691,10 +1692,11 @@
       button.classList.toggle('is-active', on);
       button.setAttribute('role', 'radio');
       button.setAttribute('aria-checked', String(on));
+      if (on) button.title = 'In use - click to turn this side off';
       const name = document.createElement('span');
       name.className = 'device-name';
       name.textContent = `${device.index}: ${device.name}`;
-      name.title = name.textContent;
+      if (!on) name.title = name.textContent;
       const check = document.createElement('span');
       check.className = 'device-check';
       button.append(name, check);
@@ -1704,10 +1706,15 @@
 
   function renderDeviceLists() {
     if (!lastDevices) return;
-    // While this browser's mic is the input, no local input device is in use.
-    const inputInUse = lastStatus.audio_source === 'browser' ? null : lastDevices.input;
-    fillDeviceList(cfgInput, lastDevices.inputs, inputInUse);
-    fillDeviceList(cfgOutput, lastDevices.outputs, lastDevices.output);
+    // No local input device is in use while this browser's mic is the input,
+    // or while the local input is turned off; no output device while the
+    // local output is off.
+    // With no device chosen, the system default is the one in use.
+    const inputOff = lastStatus.audio_source === 'browser' || lastDevices.input_off;
+    const input = lastDevices.input ?? lastDevices.default_input;
+    const output = lastDevices.output ?? lastDevices.default_output;
+    fillDeviceList(cfgInput, lastDevices.inputs, inputOff ? null : input);
+    fillDeviceList(cfgOutput, lastDevices.outputs, lastDevices.output_off ? null : output);
   }
 
   function applyDevices(msg) {
@@ -1728,21 +1735,22 @@
     }
   }
 
-  // Each list applies on its own, immediately, carrying the other's current
-  // device along (the backend action always takes both together). The
-  // clicked one lights up right away; the server's device update confirms
-  // it, or puts back what's really in use if the device won't open.
+  // Each list applies on its own, immediately: clicking a device switches
+  // that side to it; clicking the one already in use turns that side's
+  // local device off (the browser mic / voice streaming still work). The
+  // click shows right away; the server's device update confirms it, or puts
+  // back what's really in use if the device won't open.
   function wireDeviceList(list, side) {
     list.addEventListener('click', (event) => {
       const button = event.target.closest('.device-option');
       if (!button || !lastDevices) return;
+      const turningOff = button.classList.contains('is-active');
       for (const other of list.querySelectorAll('.device-option')) {
-        other.classList.toggle('is-active', other === button);
-        other.setAttribute('aria-checked', String(other === button));
+        const on = !turningOff && other === button;
+        other.classList.toggle('is-active', on);
+        other.setAttribute('aria-checked', String(on));
       }
-      const devices = { input: deviceValue(lastDevices.input), output: deviceValue(lastDevices.output) };
-      devices[side] = button.dataset.value;
-      send('set_audio_devices', devices);
+      send('set_audio_devices', { [side]: turningOff ? 'off' : button.dataset.value });
     });
   }
   wireDeviceList(cfgInput, 'input');

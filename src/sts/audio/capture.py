@@ -64,7 +64,7 @@ class AudioCapture:
         silence in the room never looks like a stall. Always False for the
         browser microphone (frames come over the websocket) or when no
         stream is open."""
-        if self._stream is None or self.cfg.source == "browser":
+        if self._stream is None or self.cfg.source != "alsa":
             return False
         try:
             if not self._stream.active:
@@ -175,10 +175,14 @@ class AudioCapture:
         return stream
 
     def start(self) -> None:
-        """Opens the configured source. A no-op for `source == "browser"`:
-        frames arrive via `push_browser_frame` instead of a local stream."""
+        """Opens the configured source. A no-op for `source == "browser"`
+        (frames arrive via `push_browser_frame` instead of a local stream) and
+        `source == "none"` (the local input is turned off)."""
         if self.cfg.source == "browser":
             vlog("audio", "waiting for browser microphone frames")
+            return
+        if self.cfg.source == "none":
+            vlog("audio", "local input is off")
             return
         self._check_mic_permission()
         self._capture_rate = self._resolve_capture_rate(self.cfg.input_device)
@@ -249,6 +253,14 @@ class AudioCapture:
         ALSA device."""
         self.stop()
         self.cfg.source = "browser"
+        with self.frames.mutex:
+            self.frames.queue.clear()
+
+    def switch_to_none(self) -> None:
+        """Turns the local input off: nothing is captured until a device (or
+        the browser mic) is picked again."""
+        self.stop()
+        self.cfg.source = "none"
         with self.frames.mutex:
             self.frames.queue.clear()
 
