@@ -1591,8 +1591,19 @@
     });
   }
 
-  const applyInputLevel = (msg) => applyLevel(volumeBars, msg.level);
-  const applyOutputLevel = (msg) => applyLevel(outputBars, msg.level);
+  // Levels come in while there's audio (~every 100 ms); when they stop - the
+  // browser mic unchecked, the input turned off, playback over, the
+  // connection lost - nothing says so, so a meter with no reading for
+  // LEVEL_STALE_MS drops to no bars instead of freezing on the last one.
+  const LEVEL_STALE_MS = 600;
+  const levelTimers = new Map();
+  function applyFreshLevel(bars, level) {
+    applyLevel(bars, level);
+    clearTimeout(levelTimers.get(bars));
+    if (level > 0) levelTimers.set(bars, setTimeout(() => applyLevel(bars, 0), LEVEL_STALE_MS));
+  }
+  const applyInputLevel = (msg) => applyFreshLevel(volumeBars, msg.level);
+  const applyOutputLevel = (msg) => applyFreshLevel(outputBars, msg.level);
 
   trainBtn.addEventListener('click', () => {
     if (lastStatus.training) {
