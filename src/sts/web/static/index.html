@@ -202,6 +202,12 @@
     cursor: default;
   }
   #volume-slider { width: 7.5em; accent-color: #7a8aa0; cursor: pointer; }
+  /* Output dropdown: the volume control takes the width the Test button,
+     at the right edge, leaves it - most of it going to the slider. */
+  .volume-row { display: flex; align-items: center; gap: 0.6em; }
+  .volume-row #volume-control { flex: 1 1 auto; min-width: 0; margin: 0; }
+  .volume-row #volume-slider { flex: 1 1 auto; min-width: 0; width: auto; }
+  .volume-row #btn-test-output { flex: 0 0 auto; }
   #volume-value { min-width: 3em; font-variant-numeric: tabular-nums; }
 
   #stage {
@@ -660,18 +666,18 @@
         <span class="volume-bar"></span>
         <span class="volume-bar"></span>
         <div class="engine-dropdown" id="dropdown-output">
-          <label id="volume-control" title="Volume of the local sound card output only - doesn't affect a browser stream's own volume">
-            Volume
-            <input id="volume-slider" type="range" min="0" max="100" step="1" value="100" />
-            <span id="volume-value">100%</span>
-          </label>
+          <div class="volume-row">
+            <label id="volume-control" title="Volume of the local sound card output only - doesn't affect a browser stream's own volume">
+              Volume
+              <input id="volume-slider" type="range" min="0" max="100" step="1" value="100" />
+              <span id="volume-value">100%</span>
+            </label>
+            <button type="button" id="btn-test-output" title="Play a short pre-recorded clip through the selected output device, even with Voice off">🔈 Test</button>
+          </div>
           <label for="cfg-output">Output device (voice playback)</label>
           <select id="cfg-output"></select>
           <div class="mic-row">
             <button type="button" class="toggle-button" id="stream-toggle" title="Play the synthesized voice in this browser too"><span class="check"></span><span>Stream voice to this browser</span></button>
-          </div>
-          <div class="mic-row">
-            <button type="button" id="btn-test-output" title="Play a short pre-recorded clip through the selected output device, even with Voice off">🔈 Test Output</button>
           </div>
         </div>
         <span class="meter-badge" id="stream-badge" title="Voice is streaming to this browser"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg></span>
