@@ -462,7 +462,14 @@
   /* Input/output devices: one full-width button per device, stacked; the
      one in use green with a check mark at its right edge. Scrolls if the
      machine has a lot of them. */
-  .device-list { display: flex; flex-direction: column; gap: 0.3rem; max-height: 40vh; overflow-y: auto; }
+  .device-list { display: flex; flex-direction: column; max-height: 40vh; overflow-y: auto; }
+  /* Joined into one block: square inner corners, shared borders (each one
+     overlapping the one above), the selected one drawn over its neighbors. */
+  #controls .device-list .device-option { border-radius: 0; position: relative; }
+  #controls .device-list .device-option + .device-option { margin-top: -1px; }
+  #controls .device-list .device-option:first-child { border-top-left-radius: 6px; border-top-right-radius: 6px; }
+  #controls .device-list .device-option:last-child { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+  #controls .device-list .device-option.is-active { z-index: 1; }
   .device-list .device-option {
     display: flex;
     align-items: center;
