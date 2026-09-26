@@ -90,7 +90,7 @@ def test_flush_returns_what_is_still_open_as_final_and_empties_the_buffer():
 
 def test_time_rules_can_be_turned_off():
     asr = _Asr([("Второе", 1.0, 1.5)])
-    t = Transcript(asr, after_unchanged=0, force_after=0)
+    t = Transcript(asr, after_unchanged=0, force_after=0, after_silence=0)
     t.add(_samples(0, 60))
     t.step()
     t.add(_samples(60, 120))

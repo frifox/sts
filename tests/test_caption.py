@@ -324,7 +324,7 @@ def test_an_unfinished_sentence_waits_for_its_end_mark():
     from sts.transcript import Transcript
 
     script = _words(("Второе", 2.0, 2.5))
-    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30)
+    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30, after_silence=0)
     fed = [0]
     _feed(t, 3.0, fed)
     assert _texts(t.step()) == ([], ["Второе"])
@@ -333,6 +333,26 @@ def test_an_unfinished_sentence_waits_for_its_end_mark():
     assert t.finalize_in_s == pytest.approx(12.0)  # the 30 s rule, from its first word at 2.0
     _feed(t, 32.0, fed)
     assert _texts(t.step()) == (["Второе"], [])
+
+
+def test_an_unfinished_sentence_is_final_after_10_seconds_of_silence():
+    """The last words of a sermon, left without an end mark: once nothing
+    new has been heard for 10 s they're final, along with anything before."""
+    from sts.transcript import Transcript
+
+    script = _words(("Первое.", 0.5, 1.5), ("Аминь", 2.0, 2.5))
+    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30, after_silence=10)
+    fed = [0]
+    _feed(t, 3.0, fed)
+    assert _texts(t.step()) == ([], ["Первое.", "Аминь"])
+    assert t.finalize_in_s == pytest.approx(5.0)  # "Первое." settles first
+    _feed(t, 8.0, fed)
+    assert _texts(t.step()) == (["Первое."], ["Аминь"])
+    assert t.finalize_in_s == pytest.approx(4.5)  # 10 s after "Аминь" ended at 2.5
+    _feed(t, 12.4, fed)
+    assert _texts(t.step()) == ([], ["Аминь"])
+    _feed(t, 12.5, fed)
+    assert _texts(t.step()) == (["Аминь"], [])
 
 
 def test_a_changing_sentence_is_forced_final_30_seconds_after_its_first_word():

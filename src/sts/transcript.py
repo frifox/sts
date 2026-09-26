@@ -5,14 +5,17 @@ sts-caption.
 The audio that isn't final yet is re-transcribed every step, so the model
 keeps hearing more context and can revise what it heard. A sentence is
 final - its audio dropped, so it's never re-transcribed or reworded again -
-as soon as either of these holds (see count_final):
+as soon as any of these holds (see count_final):
 
 - it ends with a sentence-ending mark and its text, punctuation included,
   hasn't changed for `after_unchanged` seconds. The wait starts only once
   the mark is there, and any change to the sentence starts it over. Text
   after it doesn't count;
 - `force_after` seconds have passed since its first word, however much it's
-  still changing, finished or not.
+  still changing, finished or not;
+- nothing new has been heard for `after_silence` seconds: the speaker has
+  stopped, so everything still open is final, end mark or not (e.g. the
+  last words of a sermon, left unpunctuated).
 """
 
 import re
@@ -91,10 +94,12 @@ class Transcript:
 
     CONTEXT_S = 1.5
 
-    def __init__(self, asr, after_unchanged: float = 5.0, force_after: float = 30.0, sample_rate: int = 16_000):
+    def __init__(self, asr, after_unchanged: float = 5.0, force_after: float = 30.0, sample_rate: int = 16_000,
+                 after_silence: float = 10.0):
         self.asr = asr
         self.after_unchanged = after_unchanged  # 0 turns it off
         self.force_after = force_after  # 0 turns it off
+        self.after_silence = after_silence  # 0 turns it off
         # Seconds until the first still-open sentence is finalized by one of
         # the time rules (None when nothing is open or both are off) - as of
         # the last step(); for showing a countdown.
@@ -157,6 +162,8 @@ class Transcript:
                 for i, sentence in enumerate(sentences)
             ]
             n_locked = count_final(sentences, now_s, unchanged_since, self.after_unchanged, self.force_after)
+            if self.after_silence > 0 and sentences and now_s - sentences[-1].end >= self.after_silence:
+                n_locked = len(sentences)  # nothing new heard for a while: the speaker has stopped
             final = sentences[:n_locked]
             still_open = sentences[n_locked:]
             self._open_seen = [(sentence.text, since) for sentence, since in
@@ -181,6 +188,8 @@ class Transcript:
             waits.append(self.after_unchanged - (now_s - unchanged_since[0]))
         if self.force_after > 0:
             waits.append(self.force_after - (now_s - still_open[0].start))
+        if self.after_silence > 0:
+            waits.append(self.after_silence - (now_s - still_open[-1].end))
         return max(0.0, min(waits)) if waits else None
 
     def flush(self) -> list[Sentence]:

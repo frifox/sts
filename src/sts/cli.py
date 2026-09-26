@@ -89,6 +89,14 @@ def build_parser() -> argparse.ArgumentParser:
         "(default 30; 0 turns this rule off)",
     )
     parser.add_argument(
+        "--final-after-silence",
+        type=float,
+        default=None,
+        metavar="S",
+        help="Finalize everything still open, end mark or not, once nothing new has been heard for S seconds "
+        "(default 10; 0 turns this rule off)",
+    )
+    parser.add_argument(
         "--caption-interval-ms",
         type=int,
         default=None,
@@ -168,6 +176,8 @@ def main() -> None:
         cfg.asr.final_after_unchanged_seconds = max(0.0, args.final_after_unchanged)
     if args.final_force_after is not None:
         cfg.asr.final_force_after_seconds = max(0.0, args.final_force_after)
+    if args.final_after_silence is not None:
+        cfg.asr.final_after_silence_seconds = max(0.0, args.final_after_silence)
     if args.caption_interval_ms is not None:
         cfg.asr.interval_ms = max(100, args.caption_interval_ms)
 

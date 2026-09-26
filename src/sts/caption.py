@@ -15,7 +15,9 @@ rewritten in place.
 
 A sentence is final once it ends with a sentence-ending mark and hasn't
 changed (text or punctuation) for --final-after-unchanged seconds (default
-5), or --final-force-after seconds after its first word (default 30): its audio is
+5), --final-force-after seconds after its first word (default 30), or once
+nothing new has been heard for --final-after-silence seconds (default 10,
+end mark or not): its audio is
 dropped, so it's never re-transcribed or reworded again, and it's printed
 once, above a blank line. Piped to a file, only final sentences are printed
 (plus whatever is still open on exit). GigaAM takes at most ~25 s
@@ -64,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--final-force-after", type=float, default=30.0, metavar="S",
         help="Finalize a sentence S seconds after its first word, even if it's still changing "
         "(default: 30; 0 turns this rule off)",
+    )
+    parser.add_argument(
+        "--final-after-silence", type=float, default=10.0, metavar="S",
+        help="Finalize everything still open, end mark or not, once nothing new has been heard for S "
+        "seconds (default: 10; 0 turns this rule off)",
     )
     parser.add_argument(
         "--interval-ms", type=int, default=500, help="How often to re-transcribe the whole buffer (default: 500)"
@@ -291,7 +298,8 @@ def main() -> None:
     restore_terminal = watch_keys(lambda key: clear.set() if key.lower() == "x" else None)
 
     line = LiveLine()
-    transcript = Transcript(asr, args.final_after_unchanged, args.final_force_after)
+    transcript = Transcript(asr, args.final_after_unchanged, args.final_force_after,
+                            after_silence=args.final_after_silence)
     last_run = time.monotonic()
     interval_s = args.interval_ms / 1000
     other_output = _AboveLiveLine(line)

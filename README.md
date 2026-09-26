@@ -17,9 +17,10 @@ sound card / browser mic -> GigaAM captions (ru) -> MADLAD-400 (en) -> XTTS / Qw
   re-transcribes the unsettled audio every 500 ms, so text appears as it's
   spoken and can still be corrected. A sentence becomes final once it has
   its end punctuation and hasn't changed (text or punctuation) for 5 s, or
-  30 s after its first word however much it's still changing
-  (`--final-after-unchanged`, `--final-force-after`). Only final sentences
-  are translated and spoken.
+  30 s after its first word however much it's still changing, or once
+  nothing new has been heard for 10 s, end punctuation or not
+  (`--final-after-unchanged`, `--final-force-after`, `--final-after-silence`).
+  Only final sentences are translated and spoken.
 - **Translation** — MADLAD-400 10B, one sentence at a time. Picked by
   comparing models on a recorded sermon (see `translate.py`): it renders
   Bible passages in standard English (mostly KJV) wording on its own.

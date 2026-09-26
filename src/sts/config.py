@@ -70,10 +70,13 @@ class ASRConfig:
     # voicing, and never changed again - once it ends with a sentence-ending
     # mark and its text (punctuation included) hasn't changed for
     # `final_after_unchanged_seconds`, or `final_force_after_seconds` after
-    # its first word however much it's still changing (0 turns either rule off).
+    # its first word however much it's still changing. Once nothing new has
+    # been heard for `final_after_silence_seconds`, everything still open is
+    # final, end mark or not. 0 turns any of these off.
     interval_ms: int = 500
     final_after_unchanged_seconds: float = 5.0
     final_force_after_seconds: float = 30.0
+    final_after_silence_seconds: float = 10.0
 
 
 @dataclass

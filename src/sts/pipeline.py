@@ -203,7 +203,7 @@ class Pipeline:
         # _caption_step re-transcribes what isn't locked yet.
         self.transcript = Transcript(
             self.asr, cfg.asr.final_after_unchanged_seconds, cfg.asr.final_force_after_seconds,
-            cfg.audio.sample_rate,
+            cfg.audio.sample_rate, after_silence=cfg.asr.final_after_silence_seconds,
         )
         # (text, seq, spoken seconds, continues, finalized at) per final sentence, for translation.
         self._transcripts: queue.Queue = queue.Queue()
