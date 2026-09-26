@@ -134,3 +134,22 @@ def test_finalize_in_counts_down_to_the_first_open_sentence_being_final():
     t.add(_samples(6, 8))
     assert [s.text for s in t.step()[0]] == ["Второе."]
     assert t.finalize_in_s is None
+
+
+def test_finalize_timer_follows_the_rule_that_finalizes_soonest():
+    # Speaking, no end mark yet: only the 30 s rule runs (a pause shorter than
+    # SILENCE_GRACE_S doesn't count as silence).
+    asr = _Asr([("Братья", 1.0, 1.5), ("и", 2.6, 2.8)])
+    t = Transcript(asr)
+    t.add(_samples(0, 3))
+    t.step()
+    assert t.finalize_timer == pytest.approx((28.0, 30.0))
+    # The speaker stopped: 1 s later the silence rule runs, shown from its start.
+    t.add(_samples(3, 3.8))
+    t.step()
+    assert t.finalize_timer == pytest.approx((9.0, 9.0))
+    # An end mark: the 5 s rule starts, and is the soonest.
+    asr.script = [("Братья", 1.0, 1.5), ("и", 2.6, 2.8), ("сёстры.", 2.9, 3.3)]
+    t.add(_samples(3.8, 4.0))
+    t.step()
+    assert t.finalize_timer == pytest.approx((5.0, 5.0))

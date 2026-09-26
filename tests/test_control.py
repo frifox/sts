@@ -165,7 +165,7 @@ def test_voice_off_drops_already_synthesized_but_unplayed_sentences():
     for name in ("_transcripts", "_translations", "_audio"):
         setattr(p, name, queue.Queue())
     p.transcript = Transcript(None, 2, 30)
-    p._finalize_countdown = None
+    p._finalize_timer = None
     p._audio.put((None, 24000, 0.0))
     p._audio.put((None, 24000, 0.0))  # a couple of sentences already synthesized ahead of playback
 
@@ -221,7 +221,7 @@ def test_reset_stops_playback_without_touching_the_stream_directly():
     for name in ("_transcripts", "_translations", "_audio"):
         setattr(p, name, queue.Queue())
     p.transcript = Transcript(None, 2, 30)
-    p._finalize_countdown = None
+    p._finalize_timer = None
     p._audio.put((None, 24000, 0.0))  # a sentence already synthesized ahead of playback
 
     p.handle_control({"action": "reset"})
@@ -462,7 +462,7 @@ def _startup_voice_pipeline(tmp_path):
     for name in ("_transcripts", "_translations", "_audio"):
         setattr(p, name, queue.Queue())
     p.transcript = Transcript(None, 2, 30)
-    p._finalize_countdown = None
+    p._finalize_timer = None
     mine = p.voice_library.save("Mine", wav)
     return p, mine
 

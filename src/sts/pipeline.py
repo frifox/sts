@@ -22,7 +22,6 @@ speaker's speech.
 """
 
 import gc
-import math
 import queue
 import struct
 import tempfile
@@ -68,9 +67,6 @@ RTF_WINDOW_S = 30.0
 # least time between two audio-system recoveries - a device that's genuinely
 # gone would otherwise trigger one every check.
 INPUT_STALL_S = 3.0
-# The page shows a countdown once the still-open caption text is this close
-# to being finalized by one of the time rules (see Transcript.finalize_in_s).
-FINALIZE_COUNTDOWN_S = 3.0
 AUDIO_RECOVERY_MIN_INTERVAL_S = 5.0
 
 # Pre-rendered "Testing 1 2 3" clip for the Output dropdown's Test Output
@@ -210,7 +206,7 @@ class Pipeline:
         self._original_seq = 0  # next sequence number for a broadcast original sentence
         self._last_final_end: float | None = None  # when the last locked sentence ended
         self._recent_text = ""  # the not-yet-locked caption text the page last got
-        self._finalize_countdown: int | None = None  # the countdown the page last got
+        self._finalize_timer: tuple[float, float] | None = None  # the finalize timer the page last got
         self._last_caption_step = time.monotonic()
         # Rolling per-stage (processing_s, audio_s) readings for the header's
         # RTF display, each stage's own deque touched only by that stage's
@@ -307,7 +303,7 @@ class Pipeline:
             # Whatever was heard but not locked yet counts as final now - it
             # would otherwise never be translated, and is dropped from the page.
             self._publish_captions(self.transcript.flush(), [])
-            self._publish_finalize_countdown()
+            self._publish_finalize_timer()
         elif action == "voice_on":
             self.control.enable_voice()
         elif action == "voice_off":
@@ -391,7 +387,7 @@ class Pipeline:
         self._reset_generation += 1
         self.transcript.clear()
         self._recent_text = ""
-        self._publish_finalize_countdown()
+        self._publish_finalize_timer()
         self._last_final_end = None
         self._drain(self._transcripts)
         self._drain(self._translations)
@@ -875,20 +871,17 @@ class Pipeline:
         if generation != self._reset_generation:
             return  # Reset landed mid-step; this is the previous speaker's text
         self._publish_captions(final, still_open)
-        self._publish_finalize_countdown()
+        self._publish_finalize_timer()
 
-    def _publish_finalize_countdown(self) -> None:
-        """Whole seconds left before the still-open caption text is finalized
-        by a time rule, once that's FINALIZE_COUNTDOWN_S or less away - or
-        None (no countdown) - sent to the page whenever it changes."""
-        finalize_in_s = self.transcript.finalize_in_s
-        countdown = None
-        if finalize_in_s is not None and finalize_in_s <= FINALIZE_COUNTDOWN_S:
-            countdown = max(1, math.ceil(finalize_in_s))
-        if countdown != self._finalize_countdown:
-            self._finalize_countdown = countdown
+    def _publish_finalize_timer(self) -> None:
+        """How far the first still-open caption sentence is from being
+        finalized by a time rule (Transcript.finalize_timer) - the page draws
+        it as a circle emptying clockwise - sent whenever it changes."""
+        timer = self.transcript.finalize_timer
+        if timer != self._finalize_timer:
+            self._finalize_timer = timer
             if self.broadcaster:
-                self.broadcaster.broadcast_finalize_countdown(countdown)
+                self.broadcaster.broadcast_finalize_timer(timer)
 
     def _publish_captions(self, final: list[Sentence], still_open: list[str]) -> None:
         """Locked sentences: shown as final, checked for Bible references,

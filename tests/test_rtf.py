@@ -114,14 +114,14 @@ def test_caption_step_reports_its_time_over_the_audio_that_arrived_meanwhile(mon
 
     class Transcript:
         has_audio = True
-        finalize_in_s = None
+        finalize_timer = None
 
         def step(self):
             time.sleep(0.05)
             return [], ["Привет"]
 
     p.transcript = Transcript()
-    p._finalize_countdown = None
+    p._finalize_timer = None
     p._last_caption_step = time.monotonic() - 0.5  # half a second of audio since the last step
 
     Pipeline._caption_step(p)

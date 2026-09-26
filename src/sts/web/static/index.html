@@ -259,31 +259,21 @@
     cursor: pointer;
   }
 
-  /* Countdown to when the still-open caption text gets finalized, shown once
-     nothing new has been recognized for a few seconds (see
-     Pipeline._publish_finalize_countdown). Bottom-right of the caption
-     panel - in portrait, of the original (left) column, unless that's the
-     only column. */
-  .finalize-countdown {
-    display: none;
-    position: absolute;
-    bottom: 0.8vh;
-    right: 1.2vw;
-    z-index: 1;
-    font-size: 0.8rem;
-    font-variant-numeric: tabular-nums;
-    padding: 0.3em 0.8em;
-    border-radius: 999px;
-    border: 1px solid #3a4a5a;
-    background: rgba(20, 20, 24, 0.85);
-    color: #9cdcfe;
-    pointer-events: none;
+  /* Before the first not-yet-final sentence: how long until it's finalized
+     (see setFinalizeTimer). Full while no finalize rule is running; empties
+     clockwise from 12 o'clock as one runs out - --left is the fraction left. */
+  .finalize-clock {
+    --left: 1;
+    display: inline-block;
+    width: 0.62em;
+    height: 0.62em;
+    margin-right: 0.35em;
+    vertical-align: 0.02em;
+    border-radius: 50%;
+    border: 0.08em solid currentColor;
+    box-sizing: border-box;
+    background: conic-gradient(transparent calc((1 - var(--left)) * 360deg), currentColor 0);
   }
-  .finalize-countdown.show { display: block; }
-  body.hide-unfinished .finalize-countdown.show { display: none; }  /* nothing on screen for it to finalize */
-  #portrait-panel .finalize-countdown { right: calc(50% + 1.5vw); }
-  #portrait-panel.hide-translated .finalize-countdown { right: 1.2vw; }
-  #portrait-panel.hide-original .finalize-countdown { display: none; }
 
   .verse-chip:hover { background: rgba(201, 162, 75, 0.18); }
   .verse-chip.show { display: inline-block; }
@@ -642,7 +632,6 @@
         <div class="verse-text"></div>
       </div>
       <div class="lines" id="original-lines"></div>
-      <div class="finalize-countdown" title="The not-yet-final caption text will be finalized when this reaches zero"></div>
     </div>
     <div class="panel" id="translated-panel">
       <button type="button" class="verse-chip" id="verse-chip-en" title="Show the last detected passage again"></button>
@@ -663,7 +652,6 @@
         <div class="verse-reference"></div>
         <div class="verse-text"></div>
       </div>
-      <div class="finalize-countdown" title="The not-yet-final caption text will be finalized when this reaches zero"></div>
       <div class="lines" id="portrait-lines">
         <div class="portrait-grid" id="portrait-grid"></div>
       </div>
@@ -910,7 +898,7 @@
           return cell;
         });
       }
-      recentRow[0].textContent = text;
+      setRecentContent(recentRow[0], text);
       prunePortraitRows();
       return;
     }
@@ -927,7 +915,45 @@
       para.style.margin = '0';
       container.appendChild(para);
     }
-    para.textContent = text;
+    setRecentContent(para, text);
+  }
+
+  // The live caption's element: the finalize clock, then its text.
+  function setRecentContent(el, text) {
+    if (!el.querySelector('.finalize-clock')) {
+      el.textContent = '';
+      const clock = document.createElement('span');
+      clock.className = 'finalize-clock';
+      clock.title = 'Finalized when this runs out';
+      const words = document.createElement('span');
+      words.className = 'recent-text';
+      el.append(clock, words);
+    }
+    el.querySelector('.recent-text').textContent = text;
+    drawFinalizeClocks();
+  }
+
+  // -- Finalize clock: the server's (seconds left, whole wait) for the rule
+  // that will finalize the first open sentence soonest, or null while none
+  // is running (Transcript.finalize_timer). Animated between its updates,
+  // which come with every re-transcription (~2/s).
+  let finalizeTimer = null;  // {left, total, at: performance.now() when received}
+  let finalizeFrame = null;
+  function setFinalizeTimer(left, total) {
+    finalizeTimer = left == null || !total ? null : { left, total, at: performance.now() };
+    drawFinalizeClocks();
+  }
+  function drawFinalizeClocks() {
+    let fraction = 1;
+    if (finalizeTimer) {
+      const left = finalizeTimer.left - (performance.now() - finalizeTimer.at) / 1000;
+      fraction = Math.min(1, Math.max(0, left / finalizeTimer.total));
+    }
+    for (const clock of document.querySelectorAll('.finalize-clock')) {
+      clock.style.setProperty('--left', fraction.toFixed(4));
+    }
+    cancelAnimationFrame(finalizeFrame);
+    finalizeFrame = finalizeTimer && fraction > 0 ? requestAnimationFrame(drawFinalizeClocks) : null;
   }
 
   const unfinishedButtons = document.querySelectorAll('.render-mode button[data-unfinished]');
@@ -1091,21 +1117,13 @@
     dismissVerse();
   });
 
-  const finalizeCountdowns = document.querySelectorAll('.finalize-countdown');
-  function setFinalizeCountdown(seconds) {
-    for (const el of finalizeCountdowns) {
-      el.classList.toggle('show', seconds != null);
-      if (seconds != null) el.textContent = `Finalizing in ${seconds}s`;
-    }
-  }
-
   function clearCaptions() {
     document.getElementById('original-lines').innerHTML = '';
     document.getElementById('translated-lines').innerHTML = '';
     portraitGrid.innerHTML = '';
     recentRow = null;
     recentOriginal = '';
-    setFinalizeCountdown(null);
+    setFinalizeTimer(null);
     pendingTranslationCells.clear();
     dismissVerse();
     lastVerseMsg = null;
@@ -1768,7 +1786,7 @@
       volumeBars.forEach((bar) => bar.classList.remove('lit-quiet', 'lit-good'));
       outputBars.forEach((bar) => bar.classList.remove('lit-quiet', 'lit-good'));
       closeDropdowns();  // don't leave one open showing now-stale info across a reconnect
-      setFinalizeCountdown(null);  // the server's countdown stops with the connection
+      setFinalizeTimer(null);  // the server's timer stops with the connection
       resetEngineInfo();
       updateEngineAvailability();
       setTimeout(connect, 1000);
@@ -1780,8 +1798,8 @@
         if (renderMode === 'portrait') addPortraitOriginal(msg.text, { batch: msg.batch }, msg.seq); else addLine('original-lines', msg.text, { batch: msg.batch }, msg.seq);
       } else if (msg.type === 'original_recent') {
         setRecentOriginal(msg.text);
-      } else if (msg.type === 'finalize_countdown') {
-        setFinalizeCountdown(msg.seconds);
+      } else if (msg.type === 'finalize_timer') {
+        setFinalizeTimer(msg.left, msg.total);
       } else if (msg.type === 'translated') {
         if (renderMode === 'portrait') addPortraitTranslated(msg.text, { batch: msg.batch }, msg.seq); else addLine('translated-lines', msg.text, { batch: msg.batch }, msg.seq);
       }

@@ -125,6 +125,9 @@ class Transcript:
     words from it (those centered before the cut) are discarded."""
 
     CONTEXT_S = 1.5
+    # A pause shorter than this is just the gap between words: the silence
+    # rule isn't reported as running (finalize_timer) until it's longer.
+    SILENCE_GRACE_S = 1.0
 
     def __init__(self, asr, after_unchanged: float = 5.0, force_after: float = 30.0, sample_rate: int = 16_000,
                  after_silence: float = 10.0):
@@ -132,10 +135,11 @@ class Transcript:
         self.after_unchanged = after_unchanged  # 0 turns it off
         self.force_after = force_after  # 0 turns it off
         self.after_silence = after_silence  # 0 turns it off
-        # Seconds until the first still-open sentence is finalized by one of
-        # the time rules (None when nothing is open or both are off) - as of
-        # the last step(); for showing a countdown.
-        self.finalize_in_s: float | None = None
+        # (seconds left, the rule's whole wait) for whichever time rule will
+        # finalize the first still-open sentence soonest - None while none
+        # is running (nothing open, or the rules off). As of the last step();
+        # for the page's finalize indicator.
+        self.finalize_timer: tuple[float, float] | None = None
         self.sample_rate = sample_rate
         # add() is called from the capture side while step() runs on another
         # thread; the lock covers the buffer, not the (slow) transcription.
@@ -151,7 +155,7 @@ class Transcript:
             self._cut_s = 0.0  # words centered before this are already locked
             # (text, unchanged since) of each still-open sentence, as of the last step().
             self._open_seen: list[tuple[str, float]] = []
-            self.finalize_in_s = None
+            self.finalize_timer = None
             self._generation += 1  # a step() running across this drops its result
 
     def add(self, frame: np.ndarray) -> None:
@@ -200,7 +204,7 @@ class Transcript:
             still_open = sentences[n_locked:]
             self._open_seen = [(sentence.text, since) for sentence, since in
                                zip(still_open, unchanged_since[n_locked:])]
-            self.finalize_in_s = self._finalize_in(still_open, unchanged_since[n_locked:], now_s)
+            self.finalize_timer = self._finalize_timer(still_open, unchanged_since[n_locked:], now_s)
             if n_locked:
                 self._cut_s = sentences[n_locked - 1].end
             # Audio before the first still-open word (less CONTEXT_S) is done
@@ -212,17 +216,29 @@ class Transcript:
             self._offset_s = offset_s + drop / self.sample_rate
             return _cleaned(final), self._open_texts(still_open)
 
-    def _finalize_in(self, still_open: list[Sentence], unchanged_since: list[float], now_s: float) -> float | None:
+    @property
+    def finalize_in_s(self) -> float | None:
+        """Seconds until the first still-open sentence is finalized by a time rule (see finalize_timer)."""
+        return self.finalize_timer[0] if self.finalize_timer else None
+
+    def _finalize_timer(self, still_open: list[Sentence], unchanged_since: list[float],
+                        now_s: float) -> tuple[float, float] | None:
         if not still_open:
             return None
-        waits = []
+        timers = []  # (seconds left, whole wait) per running rule
         if self.after_unchanged > 0 and still_open[0].complete:
-            waits.append(self.after_unchanged - (now_s - unchanged_since[0]))
+            timers.append((self.after_unchanged - (now_s - unchanged_since[0]), self.after_unchanged))
         if self.force_after > 0:
-            waits.append(self.force_after - (now_s - still_open[0].start))
-        if self.after_silence > 0:
-            waits.append(self.after_silence - (now_s - still_open[-1].end))
-        return max(0.0, min(waits)) if waits else None
+            timers.append((self.force_after - (now_s - still_open[0].start), self.force_after))
+        silent_s = now_s - still_open[-1].end
+        if self.after_silence > self.SILENCE_GRACE_S and silent_s >= self.SILENCE_GRACE_S:
+            # Counted as running only once the pause is longer than the gaps
+            # between words, and shown as starting then.
+            timers.append((self.after_silence - silent_s, self.after_silence - self.SILENCE_GRACE_S))
+        if not timers:
+            return None
+        left, whole = min(timers)
+        return max(0.0, left), whole
 
     def flush(self) -> list[Sentence]:
         """Whatever was open at the last step(), as final sentences, and
