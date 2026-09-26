@@ -16,6 +16,12 @@ as soon as any of these holds (see count_final):
 - nothing new has been heard for `after_silence` seconds: the speaker has
   stopped, so everything still open is final, end mark or not (e.g. the
   last words of a sermon, left unpunctuated).
+
+A "sentence" the model starts with a lowercase letter isn't one: it's the
+rest of the previous sentence, split by a pause, and is joined back onto it
+(its end mark dropped) while both are still open - which changes the
+previous one, so its 5 s start over. A sentence that's already final is
+never changed.
 """
 
 import re
@@ -61,6 +67,32 @@ def sentences_from_words(words: list[TimedWord]) -> list[Sentence]:
     if current:
         sentences.append(Sentence(" ".join(w.text for w in current), current[0].start, current[-1].end, False))
     return sentences
+
+
+def _starts_lowercase(text: str) -> bool:
+    first_letter = next((c for c in text if c.isalpha()), "")
+    return first_letter.islower()
+
+
+def join_continuations(sentences: list[Sentence]) -> list[Sentence]:
+    """A "sentence" whose first letter is lowercase isn't one: the model put
+    a sentence end where the speaker only paused ("...какие здесь плоды." +
+    "и будете думать о том..."). It's joined onto the one before, whose end
+    mark is dropped."""
+    joined: list[Sentence] = []
+    for sentence in sentences:
+        if joined and _starts_lowercase(sentence.text):
+            previous = joined[-1]
+            text = f"{strip_end_mark(previous.text)} {sentence.text}"
+            joined[-1] = Sentence(text, previous.start, sentence.end, sentence.complete)
+        else:
+            joined.append(sentence)
+    return joined
+
+
+def strip_end_mark(text: str) -> str:
+    """`text` without its sentence-ending mark (a closing quote/bracket after it stays)."""
+    return re.sub(r'[.?!…]+(["»”)]*)$', r"\1", text.rstrip())
 
 
 def count_final(sentences: list[Sentence], now_s: float, unchanged_since: list[float],
@@ -151,7 +183,7 @@ class Transcript:
                 for w in heard
                 if (w.start + w.end) / 2 + offset_s >= cut_s
             ]
-            sentences = sentences_from_words(words)
+            sentences = join_continuations(sentences_from_words(words))
             now_s = offset_s + len(audio) / self.sample_rate
             # A sentence is the same one as last step's at the same position
             # (the open run always starts right after the last lock); it's

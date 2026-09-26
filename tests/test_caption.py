@@ -369,3 +369,54 @@ def test_a_changing_sentence_is_forced_final_30_seconds_after_its_first_word():
     _feed(t, 31.0, fed)
     final, still_open = _texts(t.step())
     assert final and final[0].startswith("слово0 слово1") and still_open == []
+
+
+def test_a_lowercase_sentence_continues_the_previous_one():
+    from sts.transcript import Sentence, join_continuations
+
+    joined = join_continuations([
+        Sentence("Вы будете рассматривать, какие здесь плоды.", 0.0, 4.0, True),
+        Sentence("и будете думать о том, какой плод вы приносите.", 4.4, 8.0, True),
+        Sentence("Это слова Господа.", 9.0, 10.0, True),
+        Sentence("«и сказал", 10.5, 11.0, False),  # first *letter* decides, not a leading quote
+    ])
+    assert [(x.text, x.start, x.end, x.complete) for x in joined] == [
+        ("Вы будете рассматривать, какие здесь плоды и будете думать о том, какой плод вы приносите.", 0.0, 8.0, True),
+        ("Это слова Господа «и сказал", 9.0, 11.0, False),
+    ]
+
+
+def test_a_continuation_heard_before_the_5_seconds_are_up_is_final_with_it():
+    """The reported case: "...какие здесь плоды." was followed by "и будете
+    думать..." before it went final - they're one sentence, and the joined
+    one waits its own 5 unchanged seconds."""
+    from sts.transcript import Transcript
+
+    script = _words(
+        ("какие", 0.5, 0.8), ("здесь", 0.9, 1.2), ("плоды.", 1.3, 1.8),
+        ("и", 3.0, 3.1), ("будете", 3.2, 3.6), ("думать.", 3.7, 4.2),
+    )
+    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30)
+    fed = [0]
+    _feed(t, 2.0, fed)
+    assert _texts(t.step()) == ([], ["какие здесь плоды."])
+    _feed(t, 4.5, fed)
+    assert _texts(t.step()) == ([], ["какие здесь плоды и будете думать."])
+    _feed(t, 7.0, fed)  # 5 s after "плоды." first appeared - but it has changed since
+    assert _texts(t.step()) == ([], ["какие здесь плоды и будете думать."])
+    _feed(t, 9.5, fed)
+    assert _texts(t.step()) == (["какие здесь плоды и будете думать."], [])
+
+
+def test_a_final_sentence_is_never_changed_by_a_later_lowercase_one():
+    from sts.transcript import Transcript
+
+    script = _words(("Первое.", 0.5, 1.5), ("и", 8.0, 8.2), ("потом.", 8.3, 8.8))
+    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30)
+    fed = [0]
+    _feed(t, 2.0, fed)
+    t.step()
+    _feed(t, 7.0, fed)
+    assert _texts(t.step()) == (["Первое."], [])
+    _feed(t, 9.0, fed)
+    assert _texts(t.step()) == ([], ["и потом."])  # stays its own sentence
