@@ -168,6 +168,10 @@ class Pipeline:
         # _restore_persisted_voice(). None (the default) just means nothing
         # is persisted, e.g. in tests that build a Pipeline stub directly.
         self._persistent_config = persistent_config
+        # The caption page's "Show unfinished captions" - on unless it was
+        # turned off before (remembered across restarts).
+        saved = persistent_config.get("show_unfinished") if persistent_config is not None else None
+        self._show_unfinished = saved != "0"
         self.capture = AudioCapture(cfg.audio)
         self.playback = AudioPlayback(cfg.audio)
         self._stage("Loading speech detector…")
@@ -276,7 +280,7 @@ class Pipeline:
     # pressed meanwhile wait behind it.
     _INSTANT_ACTIONS = frozenset({
         "start", "stop", "voice_on", "voice_off", "translate_on", "translate_off", "reset",
-        "test_output", "train_start", "train_stop", "set_output_volume",
+        "test_output", "train_start", "train_stop", "set_output_volume", "show_unfinished",
         "refresh_devices", "set_audio_devices", "mic_start", "mic_stop",
         "design_generate", "design_play",
     })
@@ -372,6 +376,10 @@ class Pipeline:
             vlog("audio", f"output volume set to {percent}%")
             if self._persistent_config is not None:
                 self._persistent_config.set("output_volume", str(percent))
+        elif action == "show_unfinished":
+            self._show_unfinished = bool(data.get("on"))
+            if self._persistent_config is not None:
+                self._persistent_config.set("show_unfinished", "1" if self._show_unfinished else "0")
         elif action == "delete_voice":
             self._delete_voice(str(data.get("speaker_id") or ""))
         elif action == "select_speaker":
@@ -725,6 +733,7 @@ class Pipeline:
                 default_voice=self.cfg.tts.resolve_voice(self.cfg.tts.default_voice),
                 voice_groups=self.cfg.tts.voice_groups,
                 active_speaker_id=self._active_speaker_id,
+                show_unfinished=getattr(self, "_show_unfinished", True),
             )
 
     def _broadcast_rtf(self, stage: str, processing_s: float, audio_s: float) -> None:

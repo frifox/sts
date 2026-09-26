@@ -457,7 +457,33 @@
   .engine-dropdown .mic-row button { flex: 0 0 auto; }
   #mic-status { font-size: 0.78rem; color: #9a9aa5; }
   #mic-status.error { color: #e08a8a; }
-  #btn-browser-mic.is-active, #stream-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
+  /* On/off settings in the dropdowns: a full-width button, a check box at
+     its left edge then the label, green while on and gray while off. */
+  .engine-dropdown .toggle-button {
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+    width: 100%;
+    box-sizing: border-box;
+    text-align: left;
+  }
+  .engine-dropdown .mic-row .toggle-button { flex: 1 1 auto; }
+  .toggle-button .check {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1em;
+    height: 1.1em;
+    box-sizing: border-box;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    font-size: 0.9em;
+    line-height: 1;
+  }
+  .toggle-button.is-active .check::after { content: '✓'; }
+  /* #controls, like the other "on" rules: it has to outrank the general #controls button rule. */
+  #controls .toggle-button.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   /* Landscape / Portrait: two buttons side by side, the current one lit. */
   .engine-dropdown .render-mode { display: flex; gap: 0.5rem; }
   .engine-dropdown .render-mode button { flex: 1 1 0; }
@@ -572,7 +598,7 @@
           <label for="cfg-input">Input device (microphone / line in)</label>
           <select id="cfg-input"></select>
           <div class="mic-row">
-            <button type="button" id="btn-browser-mic" title="Stream this browser's own microphone in as the input, instead of the server's sound card">🎤 Use this browser's mic</button>
+            <button type="button" class="toggle-button" id="btn-browser-mic" title="Stream this browser's own microphone in as the input, instead of the server's sound card"><span class="check"></span><span>🎤 Use this browser's mic</span></button>
           </div>
           <div id="mic-status"></div>
         </div>
@@ -586,10 +612,8 @@
             <div>Device: <b id="asr-info-device">–</b></div>
             <div>Input: <b id="asr-info-source">–</b></div>
           </div>
-          <label id="unfinished-label">Unfinished text</label>
-          <div class="render-mode" role="group" aria-labelledby="unfinished-label">
-            <button type="button" data-unfinished="show" title="Show the caption text that isn't final yet, faded, below the final sentences">Show</button>
-            <button type="button" data-unfinished="hide" title="Show only final sentences">Hide</button>
+          <div class="mic-row">
+            <button type="button" class="toggle-button" id="btn-show-unfinished" title="Show the caption text that isn't final yet, below the final sentences - on every screen"><span class="check"></span><span>Show unfinished captions</span></button>
           </div>
         </div>
       </div>
@@ -644,7 +668,7 @@
           <label for="cfg-output">Output device (where the translated voice plays)</label>
           <select id="cfg-output"></select>
           <div class="mic-row">
-            <button type="button" id="stream-toggle" title="Play the synthesized voice in this browser too">🔊 Stream voice to this browser</button>
+            <button type="button" class="toggle-button" id="stream-toggle" title="Play the synthesized voice in this browser too"><span class="check"></span><span>🔊 Stream voice to this browser</span></button>
           </div>
           <div class="mic-row">
             <button type="button" id="btn-test-output" title="Play a short pre-recorded clip through the selected output device, even with Voice off">🔈 Test Output</button>
@@ -903,11 +927,9 @@
   let recentOriginal = '';
   let recentSentences = [];  // recentOriginal, sentence by sentence
   let recentRow = null;  // portrait: [original cell, translated cell] of the live row
-  // Per-viewer, like the render mode: whether the live text is shown at all.
+  // Whether the live text is shown at all: an operator setting, the same on
+  // every screen and remembered across restarts (the server's status).
   let showUnfinished = true;
-  try {
-    showUnfinished = localStorage.getItem('sts-unfinished-text') !== 'hide';
-  } catch { /* storage blocked - default stands */ }
 
   // A newly final sentence that's the first not-yet-final one on screen:
   // takes it out of the live caption right away (the server's updated live
@@ -1016,24 +1038,23 @@
     finalizeFrame = finalizeTimer && fraction > 0 ? requestAnimationFrame(drawFinalizeClocks) : null;
   }
 
-  const unfinishedButtons = document.querySelectorAll('.render-mode button[data-unfinished]');
+  const showUnfinishedBtn = document.getElementById('btn-show-unfinished');
+  function setShowUnfinished(on) {
+    if (on === showUnfinished) return;
+    showUnfinished = on;
+    showUnfinishedChoice();
+    renderRecentOriginal();
+  }
   function showUnfinishedChoice() {
-    for (const button of unfinishedButtons) {
-      const current = (button.dataset.unfinished === 'show') === showUnfinished;
-      button.classList.toggle('is-active', current);
-      button.setAttribute('aria-pressed', String(current));
-    }
+    showUnfinishedBtn.classList.toggle('is-active', showUnfinished);
+    showUnfinishedBtn.setAttribute('aria-pressed', String(showUnfinished));
     document.body.classList.toggle('hide-unfinished', !showUnfinished);
   }
   showUnfinishedChoice();
-  for (const button of unfinishedButtons) {
-    button.addEventListener('click', () => {
-      showUnfinished = button.dataset.unfinished === 'show';
-      showUnfinishedChoice();
-      renderRecentOriginal();
-      try { localStorage.setItem('sts-unfinished-text', showUnfinished ? 'show' : 'hide'); } catch { /* ignore */ }
-    });
-  }
+  showUnfinishedBtn.addEventListener('click', () => {
+    setShowUnfinished(!showUnfinished);  // right away here; the server's status confirms it on every screen
+    send('show_unfinished', { on: showUnfinished });
+  });
 
   // -- Switching Render mode: carries the existing transcript over into the
   // new layout instead of clearing it. -----------------------------------
@@ -1355,6 +1376,7 @@
 
   function applyStatus(status) {
     lastStatus = status;
+    if (typeof status.show_unfinished === 'boolean') setShowUnfinished(status.show_unfinished);
 
     asrToggleBtn.textContent = (status.active ? '● ' : '○ ') + 'Caption';
     asrToggleBtn.classList.toggle('is-active', status.active);
@@ -1671,7 +1693,6 @@
   let micWorkletNode = null;
 
   function updateMicButton() {
-    micBtn.textContent = micActive ? '⏹ Stop browser mic' : "🎤 Use this browser's mic";
     micBtn.classList.toggle('is-active', micActive);
     document.getElementById('mic-badge').classList.toggle('show', micActive);
   }
@@ -1781,7 +1802,6 @@
   }
 
   function updateStreamButton() {
-    streamToggle.textContent = streamEnabled ? '⏹ Stop streaming to this browser' : '🔊 Stream voice to this browser';
     streamToggle.classList.toggle('is-active', streamEnabled);
     document.getElementById('stream-badge').classList.toggle('show', streamEnabled);
   }

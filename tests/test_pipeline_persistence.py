@@ -292,3 +292,15 @@ def test_mic_start_stop_do_not_touch_persistence(tmp_path, monkeypatch):
 
     assert pc.get("input_device") is None
     assert pc.get("output_device") is None
+
+
+def test_show_unfinished_captions_is_saved_and_sent_in_the_status(tmp_path):
+    pc = PersistentConfig(str(tmp_path / "sts.db"))
+    p, _ = _voice_pipeline(tmp_path, pc)
+    p._show_unfinished = True
+    p._execute_control({"action": "show_unfinished", "on": False})
+    assert pc.get("show_unfinished") == "0"
+    assert p.broadcaster.status["show_unfinished"] is False
+    p._execute_control({"action": "show_unfinished", "on": True})
+    assert pc.get("show_unfinished") == "1"
+    assert p.broadcaster.status["show_unfinished"] is True

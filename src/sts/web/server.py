@@ -307,6 +307,7 @@ class CaptionBroadcaster:
         can_design: bool = False,
         default_voice: str | None = None,
         voice_groups: dict[str, list[str]] | None = None,
+        show_unfinished: bool = True,
     ) -> None:
         message = {
             "type": "status",
@@ -324,6 +325,7 @@ class CaptionBroadcaster:
             "can_design": can_design,
             "default_voice": default_voice,
             "voice_groups": voice_groups,
+            "show_unfinished": show_unfinished,
         }
         self._last_status = message
         if self.loop is None:
