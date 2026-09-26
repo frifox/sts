@@ -201,7 +201,39 @@
     gap: 0.5em;
     cursor: default;
   }
-  #volume-slider { width: 7.5em; accent-color: #7a8aa0; cursor: pointer; }
+  /* Drawn by hand rather than the browser's own slider, whose track runs
+     past the thumb at both ends (at 100% the thumb stopped short of the
+     end). The track here is inset by half the thumb on each side, so the
+     thumb's center is exactly at its left end at 0% and its right end at
+     100%; --fill (set by setVolumeSlider) is how much of it is filled. */
+  #controls #volume-slider {  /* #controls: outranks the "#controls input" field style */
+    --thumb: 0.8rem;
+    --fill: 100%;
+    width: 7.5em;
+    height: 1.2rem;
+    margin: 0;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    background:
+      linear-gradient(to right, #9aa8bd var(--fill), #3a3a42 var(--fill))
+      center / calc(100% - var(--thumb)) 4px no-repeat;
+    border: none;
+    border-radius: 2px;
+    padding: 0;
+  }
+  #volume-slider::-webkit-slider-runnable-track { background: transparent; height: 1.2rem; }
+  #volume-slider::-moz-range-track { background: transparent; }
+  #volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: var(--thumb);
+    height: var(--thumb);
+    margin-top: calc((1.2rem - var(--thumb)) / 2);
+    border-radius: 50%;
+    background: #dfe5ee;
+    border: none;
+  }
+  #volume-slider::-moz-range-thumb { width: var(--thumb); height: var(--thumb); border-radius: 50%; background: #dfe5ee; border: none; }
   /* Output dropdown: the volume control takes the width the Test button,
      at the right edge, leaves it - most of it going to the slider. */
   .volume-row { display: flex; align-items: center; gap: 0.6em; }
@@ -1438,7 +1470,7 @@
     if (!status.can_save) closeSaveDialog();
 
     if (status.output_volume != null && !draggingVolume) {
-      volumeSlider.value = status.output_volume;
+      setVolumeSlider(status.output_volume);
       volumeValue.textContent = `${status.output_volume}%`;
     }
     if (status.voice_groups) defaultVoices = Object.values(status.voice_groups).flat();
@@ -1629,7 +1661,12 @@
   let volumeTimer = null;
   volumeSlider.addEventListener('pointerdown', () => { draggingVolume = true; });
   window.addEventListener('pointerup', () => { draggingVolume = false; });
+  function setVolumeSlider(percent) {
+    volumeSlider.value = percent;
+    volumeSlider.style.setProperty('--fill', `${volumeSlider.value}%`);
+  }
   volumeSlider.addEventListener('input', () => {
+    volumeSlider.style.setProperty('--fill', `${volumeSlider.value}%`);
     volumeValue.textContent = `${volumeSlider.value}%`;
     clearTimeout(volumeTimer);
     volumeTimer = setTimeout(() => send('set_output_volume', { percent: Number(volumeSlider.value) }), 80);
