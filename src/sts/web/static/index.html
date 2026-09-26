@@ -61,11 +61,19 @@
     gap: 0.4em;
   }
 
+  /* Caption text sizes, in both layouts: final text (original and
+     translated), and the original text that isn't final yet. rem, not em,
+     so a nested element doesn't scale them again. */
+  :root {
+    --final-size: 2rem;
+    --unfinished-size: 2rem;
+  }
+
   /* All snippets of a panel run together as one flowing paragraph: each new
      snippet continues on the same line as the previous one instead of starting
      its own block. */
   .flow {
-    font-size: clamp(1.4rem, 4vw, 3.0rem);
+    font-size: var(--final-size);
     line-height: 1.25;
   }
 
@@ -107,7 +115,7 @@
   }
 
   .portrait-cell {
-    font-size: clamp(1.4rem, 4vw, 3.0rem);  /* same as .flow (landscape), so text reads the same size in both modes */
+    font-size: var(--final-size);
     line-height: 1.25;
     overflow-wrap: break-word;
   }
@@ -115,16 +123,13 @@
   #portrait-lines .original { color: #9cdcfe; }
   #portrait-lines .translated { color: #e8c07d; }
 
-  /* The caption text that isn't final yet: smaller than the final text
-     around it, and the same size in both layouts - rem, not em, so it
-     doesn't scale with its container (the landscape paragraph's font is
-     already large; em would double it). After .portrait-cell so it wins
-     there too (same specificity - order decides). */
+  /* The caption text that isn't final yet (--unfinished-size). After
+     .portrait-cell so it wins there too (same specificity - order decides). */
   /* Faded like older lines (.line.old). No fade-in: that runs to full
      opacity, so it would flash bright every time the live text appears.
      The fade is on the text spans rather than .recent itself, so the first
      sentence can be brought up to full brightness while it's pending. */
-  .recent { font-size: 2rem; line-height: 1.25; animation: none; }
+  .recent { font-size: var(--unfinished-size); line-height: 1.25; animation: none; }
   .recent .recent-first, .recent .recent-rest { opacity: 0.4; transition: opacity 0.3s ease; }
   .recent.pending .recent-first { opacity: 1; }
 
