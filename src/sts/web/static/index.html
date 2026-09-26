@@ -1814,18 +1814,27 @@
     document.getElementById('mic-badge').classList.toggle('show', micActive);
   }
 
+  let serverHttpsPort = null;  // the server's --https-port, if any (its "server" message)
+
   async function startBrowserMic() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      if (location.protocol === 'http:') {
-        // getUserMedia needs a secure context, which plain HTTP isn't - this
-        // server also listens on HTTPS (default port 443) for exactly this,
-        // so jump there instead of just telling the operator to type a
-        // different URL themselves. (Assumes the standard 443; if
-        // --https-port was set to something else, this won't find it.)
-        location.href = `https://${location.hostname}${location.pathname}${location.search}`;
+      // Browsers only allow the mic on a secure page: https, or localhost.
+      const port = location.port ? `:${location.port}` : '';
+      const rest = `${location.pathname}${location.search}`;
+      if (location.hostname === '0.0.0.0') {
+        // The server's "every interface" bind address, opened as-is: the same
+        // page at localhost is secure, over plain http.
+        location.href = `http://localhost${port}${rest}`;
         return;
       }
-      micStatusEl.textContent = 'Microphone access needs HTTPS (or localhost) - this page is served over plain HTTP.';
+      if (location.protocol === 'http:' && serverHttpsPort) {
+        location.href = `https://${location.hostname}${serverHttpsPort === 443 ? '' : `:${serverHttpsPort}`}${rest}`;
+        return;
+      }
+      micStatusEl.textContent = location.protocol === 'http:'
+        ? "The browser mic needs a secure page. On the machine running sts, open http://localhost"
+          + `${port}/; from another device, run sts with HTTPS (on by default: --https-port) and open the https address.`
+        : 'This browser has no microphone access here.';
       micStatusEl.classList.add('error');
       return;
     }
@@ -2056,6 +2065,7 @@
         updateEngineAvailability();
       }
       else if (msg.type === 'status') applyStatus(msg);
+      else if (msg.type === 'server') serverHttpsPort = msg.https_port || null;
       else if (msg.type === 'library') applyLibrary(msg);
       else if (msg.type === 'design') applyDesign(msg);
       else if (msg.type === 'devices') applyDevices(msg);

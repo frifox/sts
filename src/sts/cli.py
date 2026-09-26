@@ -1,6 +1,8 @@
 """Entry point: `sts` starts the live pipeline, `sts --list-devices` lists sound cards."""
 
 import argparse
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -16,9 +18,11 @@ from sts.pipeline import Pipeline
 from sts.web.server import CaptionBroadcaster, run_server
 
 # Where --https-port looks for a cert/key when --tls-cert/--tls-key aren't
-# given - generate one with the command the --https-port help text prints.
+# given; a self-signed pair is made there on first start (see ensure_tls_cert).
 DEFAULT_TLS_CERT = "certs/cert.pem"
 DEFAULT_TLS_KEY = "certs/key.pem"
+DEFAULT_WEB_PORT = 80
+DEFAULT_HTTPS_PORT = 443
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -48,17 +52,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Serve the live captions page and operator controls over HTTP (on by default; --no-web disables)",
     )
     parser.add_argument("--web-host", default="0.0.0.0", help="Caption web server bind address")
-    parser.add_argument("--web-port", type=int, default=8765, help="Caption web server port")
+    parser.add_argument(
+        "--web-port", type=int, default=DEFAULT_WEB_PORT,
+        help=f"Caption page port, plain HTTP (default {DEFAULT_WEB_PORT})",
+    )
     parser.add_argument(
         "--https-port",
         type=int,
-        default=None,
-        help="Also serve the caption page over HTTPS on this port, alongside plain HTTP on "
-        "--web-port. Needed for the browser-mic input: getUserMedia only works from a secure "
-        "context, which a plain http:// LAN address isn't. Uses a self-signed cert by default "
-        f"(generate one with: openssl req -x509 -newkey rsa:2048 -nodes -keyout {DEFAULT_TLS_KEY} "
-        f"-out {DEFAULT_TLS_CERT} -days 3650 -subj '/CN=sts'); browsers will show a one-time "
-        "warning to click through per device.",
+        default=DEFAULT_HTTPS_PORT,
+        help=f"Also serve the caption page over HTTPS on this port (default {DEFAULT_HTTPS_PORT}; 0 turns it "
+        "off). Needed for the browser-mic input from other devices: browsers only allow the mic on a "
+        "secure page (https, or localhost). Uses a self-signed cert, made on first start if it doesn't "
+        "exist (with openssl); browsers show a one-time warning to click through per device.",
     )
     parser.add_argument(
         "--tls-cert", default=DEFAULT_TLS_CERT, help=f"TLS certificate for --https-port (default: {DEFAULT_TLS_CERT})"
@@ -111,6 +116,62 @@ def build_parser() -> argparse.ArgumentParser:
         "--default-voice/--clone still wins over what's saved. Pass '' to disable persistence.",
     )
     return parser
+
+
+def ensure_tls_cert(cert: str, key: str) -> bool:
+    """Whether HTTPS can go ahead with this cert/key: they exist, or - the
+    default location - a self-signed pair has just been made there. A
+    cert/key named on the command line that's missing is an error."""
+    if Path(cert).is_file() and Path(key).is_file():
+        return True
+    if (cert, key) != (DEFAULT_TLS_CERT, DEFAULT_TLS_KEY):
+        print(f"error: didn't find the TLS cert/key {cert!r} / {key!r} for --https-port")
+        sys.exit(1)
+    Path(cert).parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert,
+             "-days", "3650", "-subj", "/CN=sts"],
+            check=True, capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"[web] couldn't make a self-signed certificate for HTTPS ({exc}); continuing without HTTPS")
+        return False
+    print(f"[web] made a self-signed certificate for HTTPS: {cert}")
+    return True
+
+
+def port_unavailable(host: str, port: int) -> str | None:
+    """Why the caption page can't listen on `port` (in use, not allowed), or
+    None. Checked up front: the server runs on a background thread, where
+    failing to listen would just end that thread, silently."""
+    try:
+        with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind((host, port))
+    except OSError as exc:
+        return exc.strerror or str(exc)
+    return None
+
+
+def page_hosts(web_host: str) -> list[str]:
+    """Hosts to open the caption page at. 0.0.0.0 / :: is the server listening
+    on every interface - not an address a browser can use (and not one that
+    allows the microphone) - so it's listed as localhost, for this machine,
+    plus this machine's network address, for other devices."""
+    if web_host not in ("0.0.0.0", "::", ""):
+        return [web_host]
+    hosts = ["localhost"]
+    try:
+        # Which local address would reach the network; a UDP "connect" sends nothing.
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))
+            address = probe.getsockname()[0]
+        if not address.startswith("127."):
+            hosts.append(address)
+    except OSError:
+        pass
+    return hosts
 
 
 def saved_device(persistent_config, key: str, check) -> int | None:
@@ -192,17 +253,24 @@ def main() -> None:
 
     broadcaster = None
     if args.web:
-        if args.https_port is not None:
-            if not Path(args.tls_cert).is_file() or not Path(args.tls_key).is_file():
-                print(
-                    f"error: --https-port needs a cert and key; didn't find both "
-                    f"{args.tls_cert!r} and {args.tls_key!r}. Generate a self-signed pair with:\n"
-                    f"  openssl req -x509 -newkey rsa:2048 -nodes -keyout {args.tls_key} "
-                    f"-out {args.tls_cert} -days 3650 -subj '/CN=sts'"
-                )
-                sys.exit(1)
+        https_port = args.https_port or None  # 0: off
+        if https_port and not ensure_tls_cert(args.tls_cert, args.tls_key):
+            https_port = None
+        port_error = port_unavailable(args.web_host, args.web_port)
+        if port_error:
+            print(f"error: can't serve the caption page on port {args.web_port} ({port_error}). "
+                  f"Pick another with --web-port, e.g. --web-port 8765.")
+            sys.exit(1)
+        if https_port:
+            port_error = port_unavailable(args.web_host, https_port)
+            if port_error:
+                print(f"[web] can't serve HTTPS on port {https_port} ({port_error}); continuing without it "
+                      f"(pick another with --https-port, or 0 to turn it off)")
+                https_port = None
+        args.https_port = https_port
         broadcaster = CaptionBroadcaster()
         broadcaster.startup = startup
+        broadcaster.https_port = args.https_port
         threading.Thread(
             target=run_server,
             args=(broadcaster, args.web_host, args.web_port),
@@ -213,9 +281,13 @@ def main() -> None:
             },
             daemon=True,
         ).start()
-        print(f"Captions: http://{args.web_host}:{args.web_port}/")
-        if args.https_port is not None:
-            print(f"Captions (HTTPS, needed for the browser mic): https://{args.web_host}:{args.https_port}/")
+        http_port = "" if args.web_port == 80 else f":{args.web_port}"
+        for host in page_hosts(args.web_host):
+            print(f"Captions: http://{host}{http_port}/")
+        if args.https_port:
+            secure_port = "" if args.https_port == 443 else f":{args.https_port}"
+            for host in page_hosts(args.web_host):
+                print(f"Captions (HTTPS, for the browser mic on other devices): https://{host}{secure_port}/")
 
     vlog("init", f"loading models (asr=gigaam on {asr_device}, translation on {translation_device}, "
          f"tts={cfg.tts.backend} on {tts_device})")

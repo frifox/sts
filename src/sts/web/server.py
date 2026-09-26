@@ -54,6 +54,9 @@ class CaptionBroadcaster:
         # sts.startup_progress.StartupProgress, when start-up is being timed:
         # stage messages carry its percentage (see broadcast_stage).
         self.startup = None
+        # The --https-port the page is also served on, if any: where the page
+        # sends the browser for the browser mic, which needs a secure page.
+        self.https_port: int | None = None
         # Latest real-time-factor reading per pipeline stage ("asr" |
         # "translate" | "voice"), so a page that connects mid-session sees
         # the current numbers immediately instead of blank ones until the
@@ -72,6 +75,7 @@ class CaptionBroadcaster:
     async def register(self, websocket: WebSocket) -> None:
         self._clients.add(websocket)
         await websocket.send_text(json.dumps(self._stage_message()))
+        await websocket.send_text(json.dumps({"type": "server", "https_port": self.https_port}))
         vlog("web", f"caption page connected ({len(self._clients)} client(s))")
         if self._last_status is not None:
             await websocket.send_text(json.dumps(self._last_status))
@@ -403,7 +407,7 @@ def create_app(broadcaster: CaptionBroadcaster) -> FastAPI:
 def run_server(
     broadcaster: CaptionBroadcaster,
     host: str = "0.0.0.0",
-    port: int = 8765,
+    port: int = 80,
     *,
     https_port: int | None = None,
     ssl_certfile: str | None = None,

@@ -35,8 +35,9 @@ sound card / browser mic -> GigaAM captions (ru) -> MADLAD-400 (en) -> XTTS / Qw
 
 ## Caption page
 
-`http://<host>:8765` - open it on any number of screens (projector, phones);
-they stay in sync. Landscape shows original over translation; Portrait
+`http://localhost` on the machine running sts, or `https://<its address>`
+from other devices (the addresses are printed at start-up) - open it on any
+number of screens (projector, phones); they stay in sync. Landscape shows original over translation; Portrait
 shows them side by side, one row per sentence.
 
 Hover a header item to open its settings:
@@ -96,12 +97,16 @@ sts --input-device 2 --output-device 3
 sts --translation-model google/madlad400-3b-mt   # less memory
 sts --default-voice "Craig Gutsy"           # starting built-in voice
 sts --clone speaker.wav --clone-name "Ivan" # clone from a 10-20 s clip and save it
-sts --https-port 443                        # HTTPS too, for browser-mic input
+sts --web-port 8765 --https-port 8443      # other ports (defaults: 80 and 443)
+sts --https-port 0                          # plain HTTP only
 sts -v                                      # log timings and device events
 ```
 
-`--https-port` uses `certs/cert.pem` and `certs/key.pem`; make a self-signed pair with
-`openssl req -x509 -newkey rsa:2048 -nodes -keyout certs/key.pem -out certs/cert.pem -days 3650 -subj '/CN=sts'`.
+The caption page is served over HTTP (port 80) and HTTPS (443). HTTPS is what
+lets other devices use their browser mic - browsers only allow the mic on a
+secure page, which plain HTTP is only on localhost. It uses a self-signed
+certificate, `certs/cert.pem` + `certs/key.pem`, made on first start (with
+`openssl`); each device shows a one-time warning to click through.
 `sts --help` lists everything else (per-stage devices, caption timing,
 pauses, Qwen3 options).
 
