@@ -91,6 +91,9 @@
   .line {
     animation: fade-in 0.25s ease-out;
   }
+  /* A sentence that was already on screen as not-yet-final text, moving up
+     above the divider: no fade-in, or it would blink out and back. */
+  .line.promoted { animation: none; }
 
   /* In each column the newest line stays bright and older ones are faded.
      For the original captions that means the newest final sentence; the
@@ -795,7 +798,7 @@
     const container = document.getElementById(containerId);
     const flow = flowOf(containerId);
     const snippet = document.createElement('span');
-    snippet.className = 'line';
+    snippet.className = opts?.promoted ? 'line promoted' : 'line';
     snippet.textContent = text + ' ';  // the space keeps consecutive snippets apart on one line
     snippet.seq = seq;  // kept so a switch to portrait can pair originals with translations exactly
     markOldIfNewBatch(containerId, flow.children, opts);  // the live caption isn't in `flow`
@@ -854,7 +857,7 @@
 
   function addPortraitOriginal(text, opts, seq) {
     const original = document.createElement('p');
-    original.className = 'portrait-cell line original';
+    original.className = opts?.promoted ? 'portrait-cell line original promoted' : 'portrait-cell line original';
     markOldIfNewBatch('portrait-original', portraitGrid.querySelectorAll('.original:not(.recent)'), opts);
     original.style.margin = '0';
     original.textContent = text;
@@ -905,6 +908,19 @@
   try {
     showUnfinished = localStorage.getItem('sts-unfinished-text') !== 'hide';
   } catch { /* storage blocked - default stands */ }
+
+  // A newly final sentence that's the first not-yet-final one on screen:
+  // takes it out of the live caption right away (the server's updated live
+  // caption follows a moment later), so it moves above the divider in one
+  // frame instead of showing twice or blinking. True if it was there.
+  function promoteRecentSentence(text) {
+    const norm = (s) => s.replace(/\s+/g, ' ').trim();
+    if (!recentSentences.length || norm(recentSentences[0]) !== norm(text)) return false;
+    const rest = recentSentences.slice(1);
+    setFinalizeTimer(null);  // it was that sentence's; the next one's (if any) comes with the server's update
+    setRecentOriginal(rest.join(' '), rest);
+    return true;
+  }
 
   function setRecentOriginal(text, sentences) {
     recentOriginal = text;
@@ -1864,7 +1880,9 @@
       if (event.data instanceof ArrayBuffer) { playAudioChunk(event.data); return; }
       const msg = JSON.parse(event.data);
       if (msg.type === 'original') {
-        if (renderMode === 'portrait') addPortraitOriginal(msg.text, { batch: msg.batch }, msg.seq); else addLine('original-lines', msg.text, { batch: msg.batch }, msg.seq);
+        const promoted = promoteRecentSentence(msg.text);
+        const opts = { batch: msg.batch, promoted };
+        if (renderMode === 'portrait') addPortraitOriginal(msg.text, opts, msg.seq); else addLine('original-lines', msg.text, opts, msg.seq);
       } else if (msg.type === 'original_recent') {
         setRecentOriginal(msg.text, msg.sentences);
       } else if (msg.type === 'finalize_timer') {
