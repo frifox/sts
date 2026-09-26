@@ -154,6 +154,26 @@ def port_unavailable(host: str, port: int) -> str | None:
     return None
 
 
+def page_hosts(web_host: str) -> list[str]:
+    """Where the caption page can be opened: listening on every interface
+    (0.0.0.0 / ::), each of this machine's IPv4 addresses, loopback first;
+    otherwise just `web_host`."""
+    if web_host not in ("0.0.0.0", "::", ""):
+        return [web_host]
+    try:
+        import psutil
+
+        addresses = {
+            address.address
+            for addresses in psutil.net_if_addrs().values()
+            for address in addresses
+            if address.family == socket.AF_INET
+        }
+    except Exception:
+        return [web_host]
+    return sorted(addresses, key=lambda a: (not a.startswith("127."), [int(part) for part in a.split(".")])) or [web_host]
+
+
 def saved_device(persistent_config, key: str, check) -> int | None:
     """The audio device index saved under `key`, or None (the system default)
     if nothing is saved - or if what's saved can no longer be used: devices
@@ -262,10 +282,8 @@ def main() -> None:
             daemon=True,
         ).start()
         http_port = "" if args.web_port == 80 else f":{args.web_port}"
-        print(f"Captions: http://{args.web_host}{http_port}/")
-        if args.https_port:
-            secure_port = "" if args.https_port == 443 else f":{args.https_port}"
-            print(f"Captions (HTTPS, needed for the browser mic): https://{args.web_host}{secure_port}/")
+        for host in page_hosts(args.web_host):
+            print(f"Captions: http://{host}{http_port}/")
 
     vlog("init", f"loading models (asr=gigaam on {asr_device}, translation on {translation_device}, "
          f"tts={cfg.tts.backend} on {tts_device})")

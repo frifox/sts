@@ -8,6 +8,7 @@ dependencies = [
     "numpy>=1.26",
     "soxr>=0.3",           # streaming resampler for speech playback (also a librosa dependency)
     "scipy>=1.10",         # capture resampling, audio-quality measures
+    "psutil>=5.0",         # listing this machine's addresses for the caption page URLs
     "torch>=2.1",
     "torchaudio>=2.1",
     "transformers>=4.40",
