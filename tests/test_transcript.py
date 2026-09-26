@@ -38,7 +38,7 @@ def test_silence_does_not_pile_up_in_the_buffer():
     """During a long musical number nothing is said, so nothing locks - the
     audio behind it must still be let go, or every step re-transcribes it all."""
     asr = _Asr()
-    t = Transcript(asr, 2, 30)
+    t = Transcript(asr)
     for second in range(120):
         t.add(_samples(second, second + 1))
         t.step()
@@ -49,7 +49,7 @@ def test_silence_does_not_pile_up_in_the_buffer():
 
 def test_open_speech_is_kept_from_its_first_word():
     asr = _Asr([("Братья", 30.0, 30.5), ("и", 30.6, 30.7)])
-    t = Transcript(asr, 2, 30)
+    t = Transcript(asr)
     t.add(_samples(0, 31))
     assert t.step()[1] == ["Братья и"]
     t.add(_samples(31, 32))
@@ -58,7 +58,7 @@ def test_open_speech_is_kept_from_its_first_word():
 
 
 def test_audio_arriving_during_a_step_is_kept_for_the_next():
-    t = Transcript(None, 2, 30)
+    t = Transcript(None)
     t.asr = _Asr(during=lambda: t.add(_samples(2, 3)))  # capture keeps going while this transcribes
     t.add(_samples(0, 2))
     t.step()
@@ -70,7 +70,7 @@ def test_audio_arriving_during_a_step_is_kept_for_the_next():
 
 
 def test_a_step_across_clear_returns_nothing_of_the_old_speaker():
-    t = Transcript(None, 2, 30)
+    t = Transcript(None)
     t.asr = _Asr([("Старое.", 0.1, 0.9)], during=t.clear)
     t.add(_samples(0, 1))
     assert t.step() == ([], [])
@@ -79,43 +79,27 @@ def test_a_step_across_clear_returns_nothing_of_the_old_speaker():
 
 def test_flush_returns_what_is_still_open_as_final_and_empties_the_buffer():
     asr = _Asr([("Первое.", 0.1, 0.9), ("Второе", 1.0, 1.5)])
-    t = Transcript(asr, 2, 30)
+    t = Transcript(asr)
     t.add(_samples(0, 2))
-    t.step()
+    assert [s.text for s in t.step()[0]] == ["Первое."]  # text follows it: final
     flushed = t.flush()
-    assert [s.text for s in flushed] == ["Первое.", "Второе"]
+    assert [s.text for s in flushed] == ["Второе"]
     assert not t.has_audio
     assert t.flush() == []
 
 
-def test_everything_open_is_final_after_10_seconds_of_silence():
-    """An unfinished sentence, and the pending one before it, don't wait for
-    more speech once nothing new has been heard for 10 s."""
-    asr = _Asr([("Первое.", 0.1, 0.9), ("Второе.", 1.0, 1.5), ("Третье", 1.6, 2.0)])
-    t = Transcript(asr, 1, 30)
-    t.add(_samples(0, 3))
-    assert [s.text for s in t.step()[0]] == ["Первое."]  # "Второе." locked too, but pending
-    for second in range(3, 11):
-        t.add(_samples(second, second + 1))
-        final, still_open = t.step()
-        assert final == []  # under 10 s since "Третье" ended at 2.0
-    t.add(_samples(11, 12))
-    final, still_open = t.step()
-    assert [s.text for s in final] == ["Второе.", "Третье"]
-    assert still_open == []
-    t.add(_samples(12, 13))
-    assert t.step() == ([], [])
-
-
-def test_silence_rule_can_be_turned_off():
+def test_time_rules_can_be_turned_off():
     asr = _Asr([("Второе", 1.0, 1.5)])
-    t = Transcript(asr, 2, 30, after_silence=0)
+    t = Transcript(asr, after_unchanged=0, force_after=0)
     t.add(_samples(0, 60))
+    t.step()
+    t.add(_samples(60, 120))
     assert t.step() == ([], ["Второе"])
+    assert t.finalize_in_s is None
 
 
 def test_add_and_step_from_two_threads():
-    t = Transcript(_Asr(), 2, 30)
+    t = Transcript(_Asr())
     stop = threading.Event()
 
     def capture():
@@ -137,13 +121,16 @@ def test_add_and_step_from_two_threads():
     assert np.all(np.diff(samples) == 1)  # contiguous: no frame lost or reordered
 
 
-def test_silence_is_counted_from_the_last_word_while_something_is_open():
+def test_finalize_in_counts_down_to_the_first_open_sentence_being_final():
     asr = _Asr([("Второе", 1.0, 2.0)])
-    t = Transcript(asr, 2, 30)
-    assert t.silence_s is None
-    t.add(_samples(0, 9))
+    t = Transcript(asr)
+    assert t.finalize_in_s is None
+    t.add(_samples(0, 3))
+    t.step()  # "Второе" first seen at 3 s
+    assert t.finalize_in_s == pytest.approx(5.0)
+    t.add(_samples(3, 6))
     t.step()
-    assert t.silence_s == pytest.approx(7.0)
-    t.add(_samples(9, 17))
-    t.step()  # 15 s, past 10: finalized, nothing open any more
-    assert t.silence_s is None
+    assert t.finalize_in_s == pytest.approx(2.0)
+    t.add(_samples(6, 8))
+    assert [s.text for s in t.step()[0]] == ["Второе"]
+    assert t.finalize_in_s is None

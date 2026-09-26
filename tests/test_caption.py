@@ -223,36 +223,23 @@ def test_a_sentence_never_starts_with_punctuation():
     assert [x.text for x in sentences] == ["способны приносить.", "Ну"]
 
 
-def test_a_lowercase_sentence_continues_the_previous_one():
-    """The reported case: "...он начал." + "с ними беседовать." is one sentence."""
-    from sts.transcript import Sentence, join_continuations
-
-    joined = join_continuations([
-        Sentence("Я думаю, все читающие знают это, он начал.", 0.0, 9.0, True),
-        Sentence("с ними беседовать.", 9.4, 10.5, True),
-        Sentence("Это слова Господа.", 11.0, 12.0, True),
-        Sentence("«и сказал", 12.5, 13.0, False),  # first *letter* decides, not a leading quote
-    ])
-    assert [(x.text, x.start, x.end, x.complete) for x in joined] == [
-        ("Я думаю, все читающие знают это, он начал с ними беседовать.", 0.0, 10.5, True),
-        ("Это слова Господа «и сказал", 11.0, 13.0, False),
-    ]
-
-
-def test_final_by_position_and_by_age():
+def test_locked_by_text_after_it_by_being_unchanged_or_by_force():
     from sts.transcript import Sentence, count_final
 
-    s = [Sentence(f"S{i}.", i * 10.0, i * 10.0 + 5, True) for i in range(4)] + [Sentence("open", 40, 41, False)]
-    # 5 sentences: the first three have 2+ after them.
-    assert count_final(s, now_s=41, after_sentences=2, after_seconds=0) == 3
-    # By age alone: S0 ended at 5, S1 at 15 - 30 s before 45 means ended by 15.
-    assert count_final(s, now_s=45, after_sentences=0, after_seconds=30) == 2
-    # Either rule is enough; both off means nothing is final.
-    assert count_final(s, now_s=100, after_sentences=2, after_seconds=30) == 4  # the open tail never ages out
-    assert count_final(s, now_s=100, after_sentences=0, after_seconds=0) == 0
-    # A sentence that isn't final keeps everything after it open, too.
-    lone = [Sentence("A.", 0, 1, True), Sentence("B.", 50, 51, True), Sentence("C", 52, 53, False)]
-    assert count_final(lone, now_s=60, after_sentences=5, after_seconds=30) == 1
+    s = [Sentence("A.", 0, 2, True), Sentence("B.", 3, 5, True), Sentence("C", 6, 7, False)]
+    changing = [9.0, 9.0, 9.0]  # every text just changed at now_s=9
+    # Text after it is enough, complete or not: A and B; the last one waits.
+    assert count_final(s, now_s=9, unchanged_since=changing, after_unchanged=5, force_after=30) == 2
+    # The last one, unchanged for 5 s.
+    assert count_final(s, now_s=14, unchanged_since=[9.0, 9.0, 9.0], after_unchanged=5, force_after=30) == 3
+    assert count_final(s, now_s=13.9, unchanged_since=[9.0, 9.0, 9.0], after_unchanged=5, force_after=30) == 2
+    # Still changing, but 30 s since its first word (at 6).
+    assert count_final(s, now_s=36, unchanged_since=[36.0] * 3, after_unchanged=5, force_after=30) == 3
+    # 0 turns the time rules off; the text-after rule always applies.
+    assert count_final(s, now_s=100, unchanged_since=[0.0] * 3, after_unchanged=0, force_after=0) == 2
+    # Only a leading run: a sentence that isn't final keeps everything after it open.
+    lone = [Sentence("A", 0, 20, False)]
+    assert count_final(lone, now_s=21, unchanged_since=[21.0], after_unchanged=5, force_after=30) == 0
 
 
 class _ScriptedAsr:
@@ -289,64 +276,55 @@ def _feed(transcript, until_s, fed):
     transcript.add(samples)
 
 
-def test_transcript_locks_sentences_once_and_stops_rehearing_their_audio():
+def test_a_sentence_is_final_once_text_follows_it():
     from sts.transcript import Transcript
 
     script = _words(
         ("Первое.", 0.5, 1.5), ("Второе", 2.0, 2.5), ("предложение.", 2.6, 3.5),
-        ("Третье.", 4.0, 5.0), ("Четвёртое.", 6.0, 7.0), ("Пятое", 8.0, 8.5),
+        ("Третье", 4.0, 4.5),
     )
     asr = _ScriptedAsr(script)
-    t = Transcript(asr, after_sentences=2, after_seconds=30, after_silence=0)
+    t = Transcript(asr, after_unchanged=5, force_after=30)
     fed = [0]
 
-    _feed(t, 5.5, fed)
-    # "Первое." is locked, but shown as final only once the next one is
-    # locked too (it could still turn out to continue).
-    assert _texts(t.step()) == ([], ["Первое.", "Второе предложение.", "Третье."])
-    _feed(t, 9.0, fed)
-    assert _texts(t.step()) == (["Первое.", "Второе предложение."], ["Третье.", "Четвёртое.", "Пятое"])
-    # The second pass heard audio from shortly before the first open word, not the whole recording.
-    assert asr.heard[1][0] == pytest.approx(2.0 - Transcript.CONTEXT_S)
-    _feed(t, 45.0, fed)
-    assert _texts(t.step()) == (["Третье."], ["Четвёртое.", "Пятое"])  # 30+ s after it ended; the open tail stays open
+    _feed(t, 1.6, fed)
+    assert _texts(t.step()) == ([], ["Первое."])
+    _feed(t, 2.6, fed)
+    # "Первое." has text after it now, even an unfinished sentence.
+    assert _texts(t.step()) == (["Первое."], ["Второе"])
+    _feed(t, 4.6, fed)
+    assert _texts(t.step()) == (["Второе предложение."], ["Третье"])
+    # The later passes heard audio from shortly before the first open word, not the whole recording.
+    assert asr.heard[-1][0] == pytest.approx(2.0 - Transcript.CONTEXT_S)
 
 
-def test_a_continuation_heard_only_after_the_lock_still_joins_the_locked_sentence():
-    """The reported case: locked while the model heard "Для чего..." as a new
-    sentence; with only the end of the locked one left as context, it came
-    back as "для чего..." - which belongs on the end of the locked one."""
+def test_the_last_sentence_is_final_once_unchanged_for_5_seconds():
     from sts.transcript import Transcript
 
-    script = _words(
-        ("Мы", 0.5, 0.7), ("об", 0.8, 0.9), ("этом", 1.0, 1.3), ("рассуждаем.", 1.4, 2.4),
-        ("Для", 2.8, 3.0), ("чего", 3.1, 3.4), ("Христос", 3.5, 4.0), ("приходил.", 4.1, 4.8),
-        ("Мы", 5.5, 5.7), ("обычно", 5.8, 6.3), ("такие.", 6.4, 7.0),
-        ("Тогда.", 8.0, 8.6), ("Потом", 9.5, 10.0),
-    )
-    # Once the audio it's given starts after the beginning, the model hears
-    # "для" as a continuation.
-    asr = _ScriptedAsr(script, revise=lambda text, begin: "для" if text == "Для" and begin > 0 else text)
-    t = Transcript(asr, after_sentences=2, after_seconds=30)
+    script = _words(("Первое.", 0.5, 1.5), ("Второе", 2.0, 2.5))
+    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30)
     fed = [0]
+    _feed(t, 3.0, fed)
+    assert _texts(t.step()) == (["Первое."], ["Второе"])  # "Второе" first seen at 3.0
+    _feed(t, 7.9, fed)
+    assert _texts(t.step()) == ([], ["Второе"])
+    assert t.finalize_in_s == pytest.approx(0.1)
+    _feed(t, 8.0, fed)
+    assert _texts(t.step()) == (["Второе"], [])
+    assert t.finalize_in_s is None
 
-    _feed(t, 6.5, fed)
-    assert _texts(t.step()) == ([], ["Мы об этом рассуждаем.", "Для чего Христос приходил.", "Мы обычно"])
-    _feed(t, 10.5, fed)
+
+def test_a_changing_sentence_is_forced_final_30_seconds_after_its_first_word():
+    from sts.transcript import Transcript
+
+    # One run-on sentence, a new word every second, never ending.
+    script = _words(*[(f"слово{i}", 1.0 + i, 1.5 + i) for i in range(40)])
+    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30)
+    fed = [0]
+    for second in range(2, 31):
+        _feed(t, second, fed)
+        final, _ = _texts(t.step())
+        assert final == []
+    _feed(t, 31.0, fed)
     final, still_open = _texts(t.step())
-    assert final == ["Мы об этом рассуждаем для чего Христос приходил."]
-    assert still_open == ["Мы обычно такие.", "Тогда.", "Потом"]
-
-
-def test_transcript_by_age_only():
-    from sts.transcript import Transcript
-
-    script = _words(("Одно.", 0.5, 1.5), ("Другое.", 2.0, 3.0))
-    t = Transcript(_ScriptedAsr(script), after_sentences=0, after_seconds=5)
-    fed = [0]
-    _feed(t, 4.0, fed)
-    assert _texts(t.step()) == ([], ["Одно.", "Другое."])
-    _feed(t, 7.0, fed)
-    assert _texts(t.step()) == ([], ["Одно.", "Другое."])  # "Одно." is locked, held until the next one is
-    _feed(t, 9.0, fed)
-    assert _texts(t.step()) == (["Одно."], ["Другое."])
+    assert final and final[0].startswith("слово0 слово1") and still_open == []

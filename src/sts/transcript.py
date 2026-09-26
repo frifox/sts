@@ -2,13 +2,16 @@
 settled - the captioning approach shared by the live pipeline and
 sts-caption.
 
-The audio that isn't locked yet is re-transcribed every step, so the model
+The audio that isn't final yet is re-transcribed every step, so the model
 keeps hearing more context and can revise what it heard. A sentence is
-locked once `after_sentences` more sentences have followed it, or it ended
-`after_seconds` ago; its audio is then dropped, so it's never re-transcribed
-or reworded again. Once nothing new has been heard for `after_silence`
-seconds, everything still open is locked too, finished sentence or not. A "sentence" the model starts with a lowercase letter is
-the rest of the previous one, split by a pause, and is joined back onto it.
+final - its audio dropped, so it's never re-transcribed or reworded again -
+as soon as any of these holds (see count_final):
+
+- there is text after it: another sentence, complete or not;
+- its text hasn't changed for `after_unchanged` seconds (which is also what
+  finishes the last, maybe unfinished, sentence once the speaker stops);
+- `force_after` seconds have passed since its first word, however much it's
+  still changing.
 """
 
 import re
@@ -56,38 +59,20 @@ def sentences_from_words(words: list[TimedWord]) -> list[Sentence]:
     return sentences
 
 
-def _starts_lowercase(text: str) -> bool:
-    first_letter = next((c for c in text if c.isalpha()), "")
-    return first_letter.islower()
-
-
-def join_continuations(sentences: list[Sentence]) -> list[Sentence]:
-    """A "sentence" whose first letter is lowercase isn't one: the model put
-    a sentence end where the speaker only paused ("...и умыл ноги всем
-    ученикам, он начал." + "с ними беседовать."). It's joined onto the one
-    before, whose end mark is dropped."""
-    joined: list[Sentence] = []
-    for sentence in sentences:
-        if joined and _starts_lowercase(sentence.text):
-            previous = joined[-1]
-            text = f"{re.sub(r'[.?!…]+$', '', previous.text)} {sentence.text}"
-            joined[-1] = Sentence(text, previous.start, sentence.end, sentence.complete)
-        else:
-            joined.append(sentence)
-    return joined
-
-
-def count_final(sentences: list[Sentence], now_s: float, after_sentences: int, after_seconds: float) -> int:
-    """How many of the leading `sentences` are final: those with at least
-    `after_sentences` sentences after them, or complete and ended at least
-    `after_seconds` before `now_s` (0 turns either rule off). Only a
-    leading run can be final - a sentence is never locked while one
-    before it could still change."""
+def count_final(sentences: list[Sentence], now_s: float, unchanged_since: list[float],
+                after_unchanged: float, force_after: float) -> int:
+    """How many of the leading `sentences` are final: those with text after
+    them, those whose text has stayed the same since `unchanged_since[i]`
+    for at least `after_unchanged` seconds, and those whose first word was
+    `force_after` or more seconds before `now_s` (0 turns either time rule
+    off). Only a leading run can be final - a sentence is never locked while
+    one before it could still change."""
     count = 0
     for i, sentence in enumerate(sentences):
-        by_position = after_sentences > 0 and len(sentences) - 1 - i >= after_sentences
-        by_age = after_seconds > 0 and sentence.complete and now_s - sentence.end >= after_seconds
-        if not (by_position or by_age):
+        followed = i < len(sentences) - 1
+        settled = after_unchanged > 0 and now_s - unchanged_since[i] >= after_unchanged
+        forced = force_after > 0 and now_s - sentence.start >= force_after
+        if not (followed or settled or forced):
             break
         count = i + 1
     return count
@@ -101,29 +86,18 @@ class Transcript:
 
     A little of the locked audio (CONTEXT_S) is kept in front of what's
     still open, so the model hears how the next sentence begins in context;
-    words from it (those centered before the cut) are discarded.
-
-    That context can change the model's mind about a sentence boundary:
-    heard right after "...мы об этом рассуждаем", the next sentence may come
-    back as "для чего Христос приходил" - a continuation, lowercase - where
-    the model heard "Для чего..." as a new sentence before the lock. So the
-    most recently locked sentence is held back ("pending") until the one
-    after it is locked too: a lowercase continuation still joins onto it
-    (see join_continuations), and only then is it returned as final. Until
-    then it's returned first among the still-open sentences."""
+    words from it (those centered before the cut) are discarded."""
 
     CONTEXT_S = 1.5
 
-    def __init__(self, asr, after_sentences: int, after_seconds: float, sample_rate: int = 16_000,
-                 after_silence: float = 10.0):
+    def __init__(self, asr, after_unchanged: float = 5.0, force_after: float = 30.0, sample_rate: int = 16_000):
         self.asr = asr
-        self.after_sentences = after_sentences
-        self.after_seconds = after_seconds
-        self.after_silence = after_silence  # 0 turns it off
-        # Seconds since the last word was heard while something is still open
-        # (None when nothing is) - as of the last step(); for showing how long
-        # until the silence rule locks it all.
-        self.silence_s: float | None = None
+        self.after_unchanged = after_unchanged  # 0 turns it off
+        self.force_after = force_after  # 0 turns it off
+        # Seconds until the first still-open sentence is finalized by one of
+        # the time rules (None when nothing is open or both are off) - as of
+        # the last step(); for showing a countdown.
+        self.finalize_in_s: float | None = None
         self.sample_rate = sample_rate
         # add() is called from the capture side while step() runs on another
         # thread; the lock covers the buffer, not the (slow) transcription.
@@ -137,8 +111,9 @@ class Transcript:
             self._frames: list[np.ndarray] = []
             self._offset_s = 0.0  # when the first buffered sample was heard
             self._cut_s = 0.0  # words centered before this are already locked
-            self._pending: Sentence | None = None  # locked, not yet returned as final
-            self.silence_s = None
+            # (text, unchanged since) of each still-open sentence, as of the last step().
+            self._open_seen: list[tuple[str, float]] = []
+            self.finalize_in_s = None
             self._generation += 1  # a step() running across this drops its result
 
     def add(self, frame: np.ndarray) -> None:
@@ -170,58 +145,55 @@ class Transcript:
                 for w in heard
                 if (w.start + w.end) / 2 + offset_s >= cut_s
             ]
-            sentences = join_continuations(sentences_from_words(words))
+            sentences = sentences_from_words(words)
             now_s = offset_s + len(audio) / self.sample_rate
-            n_locked = count_final(sentences, now_s, self.after_sentences, self.after_seconds)
-            # Nothing new heard for `after_silence` seconds: the speaker has
-            # stopped, so whatever is still open - an unfinished sentence, the
-            # pending one - is final now rather than left hanging on screen,
-            # untranslated, until someone speaks again.
-            last_heard_s = sentences[-1].end if sentences else self._pending.end if self._pending else None
-            silent = self.after_silence > 0 and last_heard_s is not None and now_s - last_heard_s >= self.after_silence
-            if silent:
-                n_locked = len(sentences)
-            final = self._lock_in(sentences[:n_locked])
-            if silent and self._pending is not None:
-                final.append(self._pending)
-                self._pending = None
-            self.silence_s = None if silent or last_heard_s is None else now_s - last_heard_s
+            # A sentence is the same one as last step's at the same position
+            # (the open run always starts right after the last lock); it's
+            # unchanged since then if its text is too.
+            unchanged_since = [
+                self._open_seen[i][1] if i < len(self._open_seen) and self._open_seen[i][0] == sentence.text
+                else now_s
+                for i, sentence in enumerate(sentences)
+            ]
+            n_locked = count_final(sentences, now_s, unchanged_since, self.after_unchanged, self.force_after)
+            final = sentences[:n_locked]
+            still_open = sentences[n_locked:]
+            self._open_seen = [(sentence.text, since) for sentence, since in
+                               zip(still_open, unchanged_since[n_locked:])]
+            self.finalize_in_s = self._finalize_in(still_open, unchanged_since[n_locked:], now_s)
             if n_locked:
                 self._cut_s = sentences[n_locked - 1].end
             # Audio before the first still-open word (less CONTEXT_S) is done
             # with: locked, or silence/music nobody said anything in - which
             # would otherwise pile up for as long as nothing is said.
-            still_open = sentences[n_locked:]
             keep_from_s = (still_open[0].start if still_open else now_s) - self.CONTEXT_S
             drop = int(min(max(0.0, keep_from_s - offset_s), len(audio) / self.sample_rate) * self.sample_rate)
             self._frames = [audio[drop:], *self._frames]
             self._offset_s = offset_s + drop / self.sample_rate
             return _cleaned(final), self._open_texts(still_open)
 
+    def _finalize_in(self, still_open: list[Sentence], unchanged_since: list[float], now_s: float) -> float | None:
+        if not still_open:
+            return None
+        waits = []
+        if self.after_unchanged > 0:
+            waits.append(self.after_unchanged - (now_s - unchanged_since[0]))
+        if self.force_after > 0:
+            waits.append(self.force_after - (now_s - still_open[0].start))
+        return max(0.0, min(waits)) if waits else None
+
     def flush(self) -> list[Sentence]:
-        """Everything not yet returned as final - the pending sentence and
-        whatever was open at the last step() - as final sentences, and clears
-        the buffer: for when listening stops, so nothing already heard is
-        lost."""
+        """Whatever was open at the last step(), as final sentences, and
+        clears the buffer: for when listening stops, so nothing already
+        heard is lost."""
         with self._lock:
             sentences = self._last_open
             self._last_open = []
         self.clear()
         return sentences
 
-    def _lock_in(self, sentences: list[Sentence]) -> list[Sentence]:
-        """Locks `sentences`, returning those now final - see the class docstring."""
-        final: list[Sentence] = []
-        for sentence in sentences:
-            if self._pending is not None and not _starts_lowercase(sentence.text):
-                final.append(self._pending)
-                self._pending = sentence
-            else:
-                self._pending = join_continuations([self._pending, sentence])[0] if self._pending else sentence
-        return final
-
     def _open_texts(self, still_open: list[Sentence]) -> list[str]:
-        self._last_open = _cleaned(join_continuations(([self._pending] if self._pending else []) + still_open))
+        self._last_open = _cleaned(still_open)
         return [sentence.text for sentence in self._last_open]
 
 

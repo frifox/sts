@@ -65,17 +65,15 @@ class VADConfig:
 @dataclass
 class ASRConfig:
     device: str = "cuda"
-    # Live captions (sts.transcript): what isn't locked yet is re-transcribed
-    # every `interval_ms`. A sentence is locked - sent on to translation and
-    # voicing, and never changed again - once `final_after_sentences` more
-    # sentences have followed it, or `final_after_seconds` after it ended
-    # (0 turns either rule off). Once nothing new has been recognized for
-    # `final_after_silence_seconds`, everything still open is locked too,
-    # finished sentence or not (0 turns this off).
+    # Live captions (sts.transcript): what isn't final yet is re-transcribed
+    # every `interval_ms`. A sentence is final - sent on to translation and
+    # voicing, and never changed again - once there's text after it, once
+    # its text hasn't changed for `final_after_unchanged_seconds`, or
+    # `final_force_after_seconds` after its first word however much it's
+    # still changing (0 turns either time rule off).
     interval_ms: int = 500
-    final_after_sentences: int = 2
-    final_after_seconds: float = 30.0
-    final_after_silence_seconds: float = 10.0
+    final_after_unchanged_seconds: float = 5.0
+    final_force_after_seconds: float = 30.0
 
 
 @dataclass

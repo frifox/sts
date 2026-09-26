@@ -72,19 +72,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum silence between consecutive spoken translations (seconds, default 1.0; 0 disables)",
     )
     parser.add_argument(
-        "--final-after-sentences",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Lock a caption sentence - send it on to translation and voicing, and never change it again - "
-        "once N more sentences have followed it (default 2; 0 turns this rule off)",
-    )
-    parser.add_argument(
-        "--final-after-seconds",
+        "--final-after-unchanged",
         type=float,
         default=None,
         metavar="S",
-        help="Lock a caption sentence once it ended S seconds ago (default 30; 0 turns this rule off)",
+        help="Finalize a caption sentence - send it on to translation and voicing, and never change it again - "
+        "once its text hasn't changed for S seconds (default 5; 0 turns this rule off). A sentence with text "
+        "after it is always final.",
+    )
+    parser.add_argument(
+        "--final-force-after",
+        type=float,
+        default=None,
+        metavar="S",
+        help="Finalize a caption sentence S seconds after its first word, even if it's still changing "
+        "(default 30; 0 turns this rule off)",
     )
     parser.add_argument(
         "--caption-interval-ms",
@@ -162,10 +164,10 @@ def main() -> None:
     )
     if args.pause_s is not None:
         cfg.audio.pause_between_s = args.pause_s
-    if args.final_after_sentences is not None:
-        cfg.asr.final_after_sentences = max(0, args.final_after_sentences)
-    if args.final_after_seconds is not None:
-        cfg.asr.final_after_seconds = max(0.0, args.final_after_seconds)
+    if args.final_after_unchanged is not None:
+        cfg.asr.final_after_unchanged_seconds = max(0.0, args.final_after_unchanged)
+    if args.final_force_after is not None:
+        cfg.asr.final_force_after_seconds = max(0.0, args.final_force_after)
     if args.caption_interval_ms is not None:
         cfg.asr.interval_ms = max(100, args.caption_interval_ms)
 

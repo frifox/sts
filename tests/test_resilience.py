@@ -124,8 +124,7 @@ def test_stop_finalizes_what_was_heard_so_it_is_still_translated():
     p._recent_text = "Недосказанное"
 
     class Transcript:
-        silence_s = None
-        after_silence = 10.0
+        finalize_in_s = None
 
         def flush(self):
             return [Sentence("Недосказанное", 3.0, 4.0, False)]
@@ -242,7 +241,7 @@ def test_a_broadcast_survives_a_page_disconnecting_mid_send():
     assert sorted(received) == ["a", "b", "c"]
 
 
-def test_finalize_countdown_starts_after_5_seconds_of_silence_and_clears():
+def test_finalize_countdown_shows_the_last_3_seconds_and_clears():
     p = _stub()
     sent = []
 
@@ -251,8 +250,8 @@ def test_finalize_countdown_starts_after_5_seconds_of_silence_and_clears():
             sent.append(seconds)
 
     p.broadcaster = Broadcaster()
-    p.transcript = Transcript(None, 2, 30)
-    for silence_s in (None, 2.0, 4.9, 5.0, 5.4, 6.2, 14.1, None):
-        p.transcript.silence_s = silence_s
+    p.transcript = Transcript(None)
+    for finalize_in_s in (None, 5.0, 3.1, 3.0, 2.6, 1.8, 0.0, None):
+        p.transcript.finalize_in_s = finalize_in_s
         p._publish_finalize_countdown()
-    assert sent == [5, 4, 1, None]  # only changes are sent
+    assert sent == [3, 2, 1, None]  # only changes are sent

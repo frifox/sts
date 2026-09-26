@@ -13,15 +13,12 @@ every --interval-ms, so the model sees more context each time and can revise
 what it heard - which is shown as it happens, one sentence per line,
 rewritten in place.
 
-A sentence is locked once --final-after-sentences more sentences have
-followed it (default 2), or it ended --final-after-seconds ago (default 30):
-its audio is dropped, so it's never re-transcribed or reworded again. A
-"sentence" the model starts with a lowercase letter isn't one - it's the
-rest of the previous sentence, cut by a pause - and is joined back onto it,
-even onto a locked one. So a locked sentence is shown as final - printed
-once, above a blank line, and never changed again - when the sentence after
-it is locked too, and no continuation can still join it. Piped to a file, only locked sentences are
-printed (plus whatever is still open on exit). GigaAM takes at most ~25 s
+A sentence is final once there's text after it, once its text hasn't
+changed for --final-after-unchanged seconds (default 5), or
+--final-force-after seconds after its first word (default 30): its audio is
+dropped, so it's never re-transcribed or reworded again, and it's printed
+once, above a blank line. Piped to a file, only final sentences are printed
+(plus whatever is still open on exit). GigaAM takes at most ~25 s
 at a time, so a longer stretch that isn't locked yet is cut into ~20 s
 chunks at quiet moments. Meant for exploratory runs.
 
@@ -32,7 +29,7 @@ said - e.g. to start fresh on a new speaker.
 Usage:
   .venv-xtts/bin/sts-caption --input-device 7
   .venv-xtts/bin/sts-caption --input-device 7 --interval-ms 1000
-  .venv-xtts/bin/sts-caption --input-device 7 --final-after-sentences 3 --final-after-seconds 20
+  .venv-xtts/bin/sts-caption --input-device 7 --final-after-unchanged 3 --final-force-after 20
   sts-caption --list-devices
 """
 
@@ -59,12 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-device", type=int, default=None, help="ALSA input device index")
     parser.add_argument("--asr-device", default="cuda", help="cuda | cpu | mps (default: cuda)")
     parser.add_argument(
-        "--final-after-sentences", type=int, default=2, metavar="N",
-        help="Lock a sentence once N more sentences have come after it (default: 2; 0 turns this rule off)",
+        "--final-after-unchanged", type=float, default=5.0, metavar="S",
+        help="Finalize a sentence once its text hasn't changed for S seconds (default: 5; 0 turns this "
+        "rule off). A sentence with text after it is always final.",
     )
     parser.add_argument(
-        "--final-after-seconds", type=float, default=30.0, metavar="S",
-        help="Lock a sentence once it ended S seconds ago (default: 30; 0 turns this rule off)",
+        "--final-force-after", type=float, default=30.0, metavar="S",
+        help="Finalize a sentence S seconds after its first word, even if it's still changing "
+        "(default: 30; 0 turns this rule off)",
     )
     parser.add_argument(
         "--interval-ms", type=int, default=500, help="How often to re-transcribe the whole buffer (default: 500)"
@@ -292,7 +291,7 @@ def main() -> None:
     restore_terminal = watch_keys(lambda key: clear.set() if key.lower() == "x" else None)
 
     line = LiveLine()
-    transcript = Transcript(asr, args.final_after_sentences, args.final_after_seconds)
+    transcript = Transcript(asr, args.final_after_unchanged, args.final_force_after)
     last_run = time.monotonic()
     interval_s = args.interval_ms / 1000
     other_output = _AboveLiveLine(line)
