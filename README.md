@@ -35,8 +35,7 @@ sound card / browser mic -> GigaAM captions (ru) -> MADLAD-400 (en) -> XTTS / Qw
 
 ## Caption page
 
-`http://localhost` on the machine running sts, or `https://<its address>`
-from other devices (the addresses are printed at start-up) - open it on any
+`http://<host>` (`https://<host>` for the browser mic) - open it on any
 number of screens (projector, phones); they stay in sync. Landscape shows original over translation; Portrait
 shows them side by side, one row per sentence.
 

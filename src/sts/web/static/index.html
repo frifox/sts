@@ -1821,12 +1821,6 @@
       // Browsers only allow the mic on a secure page: https, or localhost.
       const port = location.port ? `:${location.port}` : '';
       const rest = `${location.pathname}${location.search}`;
-      if (location.hostname === '0.0.0.0') {
-        // The server's "every interface" bind address, opened as-is: the same
-        // page at localhost is secure, over plain http.
-        location.href = `http://localhost${port}${rest}`;
-        return;
-      }
       if (location.protocol === 'http:' && serverHttpsPort) {
         location.href = `https://${location.hostname}${serverHttpsPort === 443 ? '' : `:${serverHttpsPort}`}${rest}`;
         return;

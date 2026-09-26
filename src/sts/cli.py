@@ -154,26 +154,6 @@ def port_unavailable(host: str, port: int) -> str | None:
     return None
 
 
-def page_hosts(web_host: str) -> list[str]:
-    """Hosts to open the caption page at. 0.0.0.0 / :: is the server listening
-    on every interface - not an address a browser can use (and not one that
-    allows the microphone) - so it's listed as localhost, for this machine,
-    plus this machine's network address, for other devices."""
-    if web_host not in ("0.0.0.0", "::", ""):
-        return [web_host]
-    hosts = ["localhost"]
-    try:
-        # Which local address would reach the network; a UDP "connect" sends nothing.
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-            probe.connect(("192.0.2.1", 9))
-            address = probe.getsockname()[0]
-        if not address.startswith("127."):
-            hosts.append(address)
-    except OSError:
-        pass
-    return hosts
-
-
 def saved_device(persistent_config, key: str, check) -> int | None:
     """The audio device index saved under `key`, or None (the system default)
     if nothing is saved - or if what's saved can no longer be used: devices
@@ -282,12 +262,10 @@ def main() -> None:
             daemon=True,
         ).start()
         http_port = "" if args.web_port == 80 else f":{args.web_port}"
-        for host in page_hosts(args.web_host):
-            print(f"Captions: http://{host}{http_port}/")
+        print(f"Captions: http://{args.web_host}{http_port}/")
         if args.https_port:
             secure_port = "" if args.https_port == 443 else f":{args.https_port}"
-            for host in page_hosts(args.web_host):
-                print(f"Captions (HTTPS, for the browser mic on other devices): https://{host}{secure_port}/")
+            print(f"Captions (HTTPS, needed for the browser mic): https://{args.web_host}{secure_port}/")
 
     vlog("init", f"loading models (asr=gigaam on {asr_device}, translation on {translation_device}, "
          f"tts={cfg.tts.backend} on {tts_device})")
