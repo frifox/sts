@@ -554,8 +554,15 @@
   /* #controls, like the other "on" rules: it has to outrank the general #controls button rule. */
   #controls .toggle-button.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   /* Landscape / Portrait: two buttons side by side, the current one lit. */
-  .engine-dropdown .render-mode { display: flex; gap: 0.5rem; }
+  .engine-dropdown .render-mode { display: flex; }
   .engine-dropdown .render-mode button { flex: 1 1 0; }
+  /* Joined into one group, like the device lists: square inner corners,
+     one shared border, the lit one drawn over its neighbor. */
+  #controls .render-mode button { border-radius: 0; position: relative; }
+  #controls .render-mode button + button { margin-left: -1px; }
+  #controls .render-mode button:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+  #controls .render-mode button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+  #controls .render-mode button.is-active { z-index: 1; }
   /* #controls, like the other "on" rules: it has to outrank the general
      #controls button rule, or its background wins and the button never turns green. */
   #controls .render-mode button.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
