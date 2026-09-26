@@ -459,6 +459,22 @@
   .engine-info b { color: #ddd; font-weight: 600; }
   .engine-dropdown label { display: block; margin: 0.6rem 0 0.3rem; color: #9a9aa5; }
   .engine-dropdown select { width: 100%; box-sizing: border-box; padding: 0.5rem; font: inherit; }
+  /* Input/output devices: one full-width button per device, stacked; the
+     one in use green with a check mark at its right edge. Scrolls if the
+     machine has a lot of them. */
+  .device-list { display: flex; flex-direction: column; gap: 0.3rem; max-height: 40vh; overflow-y: auto; }
+  .device-list .device-option {
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+    width: 100%;
+    box-sizing: border-box;
+    text-align: left;
+  }
+  .device-option .device-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .device-option .device-check { flex: 0 0 auto; width: 1em; text-align: center; }
+  .device-option.is-active .device-check::after { content: '✓'; }
+  #controls .device-option.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   .engine-dropdown .dropdown-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
   .engine-dropdown .mic-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.7rem; }
   .engine-dropdown .mic-row button { flex: 0 0 auto; }
@@ -606,8 +622,8 @@
         <span class="volume-bar"></span>
         <span class="volume-bar"></span>
         <div class="engine-dropdown" id="dropdown-input">
-          <label for="cfg-input">Input device (microphone / line in)</label>
-          <select id="cfg-input"></select>
+          <label id="cfg-input-label">Input device (microphone / line in)</label>
+          <div class="device-list" id="cfg-input" role="radiogroup" aria-labelledby="cfg-input-label"></div>
           <div class="mic-row">
             <button type="button" class="toggle-button" id="btn-browser-mic" title="Stream this browser's own microphone in as the input, instead of the server's sound card"><svg class="toggle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a4 4 0 0 0 4-4V5a4 4 0 0 0-8 0v6a4 4 0 0 0 4 4zm7-4a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.92V21H8a1 1 0 0 0 0 2h8a1 1 0 0 0 0-2h-3v-3.08A7 7 0 0 0 19 11z"/></svg><span class="toggle-label">Use this browser's mic</span><span class="check"></span></button>
           </div>
@@ -679,8 +695,8 @@
             </label>
             <button type="button" id="btn-test-output" title="Play a short pre-recorded clip through the selected output device, even with Voice off"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg><span>Test</span></button>
           </div>
-          <label for="cfg-output">Output device (voice playback)</label>
-          <select id="cfg-output"></select>
+          <label id="cfg-output-label">Output device (voice playback)</label>
+          <div class="device-list" id="cfg-output" role="radiogroup" aria-labelledby="cfg-output-label"></div>
           <div class="mic-row">
             <button type="button" class="toggle-button" id="stream-toggle" title="Play the synthesized voice in this browser too"><svg class="toggle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg><span class="toggle-label">Stream voice to this browser</span><span class="check"></span></button>
           </div>
@@ -1386,8 +1402,10 @@
   }
 
   function applyStatus(status) {
+    const sourceChanged = status.audio_source !== lastStatus.audio_source;
     lastStatus = status;
     if (typeof status.show_unfinished === 'boolean') setShowUnfinished(status.show_unfinished);
+    if (sourceChanged) renderDeviceLists();  // the input in use: a local device, or none (this browser's mic)
 
     asrToggleBtn.textContent = (status.active ? '● ' : '○ ') + 'Caption';
     asrToggleBtn.classList.toggle('is-active', status.active);
@@ -1609,35 +1627,45 @@
   // -- Audio devices (input in the Caption dropdown, output in the Voice one) --
   const deviceValue = (index) => (index == null ? '' : String(index));
 
-  function fillDeviceSelect(select, devices, selected) {
+  function fillDeviceList(list, devices, selected) {
     // No "System default" option: it can resolve to a device that conflicts
     // with another real device on the same physical hardware (seen here
     // with two ALSA views of one onboard codec) in a way that's outside
     // this app's control to fix, and the operator always wants a specific,
     // predictable device for a fixed A/V setup like this anyway.
-    select.innerHTML = '';
+    list.innerHTML = '';
     for (const device of devices) {
-      const option = document.createElement('option');
-      option.value = String(device.index);
-      option.textContent = `${device.index}: ${device.name}`;
-      select.appendChild(option);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'device-option';
+      button.dataset.value = String(device.index);
+      const on = selected != null && deviceValue(selected) === String(device.index);
+      button.classList.toggle('is-active', on);
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-checked', String(on));
+      const name = document.createElement('span');
+      name.className = 'device-name';
+      name.textContent = `${device.index}: ${device.name}`;
+      name.title = name.textContent;
+      const check = document.createElement('span');
+      check.className = 'device-check';
+      button.append(name, check);
+      list.appendChild(button);
     }
-    select.value = deviceValue(selected);
+  }
+
+  function renderDeviceLists() {
+    if (!lastDevices) return;
+    // While this browser's mic is the input, no local input device is in use.
+    const inputInUse = lastStatus.audio_source === 'browser' ? null : lastDevices.input;
+    fillDeviceList(cfgInput, lastDevices.inputs, inputInUse);
+    fillDeviceList(cfgOutput, lastDevices.outputs, lastDevices.output);
   }
 
   function applyDevices(msg) {
     lastDevices = msg;
-    // Don't rebuild the lists under the user's cursor while they're choosing,
-    // and never while a change of theirs is what's actually being applied.
-    if (document.activeElement !== cfgInput && document.activeElement !== cfgOutput) {
-      fillDeviceSelect(cfgInput, msg.inputs, msg.input);
-      fillDeviceSelect(cfgOutput, msg.outputs, msg.output);
-    }
-    if (msg.error) {
-      console.warn(`[audio] ${msg.error}`);
-      fillDeviceSelect(cfgInput, msg.inputs, msg.input);   // show what is really in use
-      fillDeviceSelect(cfgOutput, msg.outputs, msg.output);
-    }
+    if (msg.error) console.warn(`[audio] ${msg.error}`);
+    renderDeviceLists();  // what is really in use - after an error too
     // macOS denied the server the microphone: every local input records silence.
     const micStatus = document.getElementById('mic-status');
     if (msg.mic_blocked) {
@@ -1652,10 +1680,25 @@
     }
   }
 
-  // Each select applies on its own, immediately, carrying the other's current
-  // value along (the backend action always takes both together).
-  cfgInput.addEventListener('change', () => send('set_audio_devices', { input: cfgInput.value, output: cfgOutput.value }));
-  cfgOutput.addEventListener('change', () => send('set_audio_devices', { input: cfgInput.value, output: cfgOutput.value }));
+  // Each list applies on its own, immediately, carrying the other's current
+  // device along (the backend action always takes both together). The
+  // clicked one lights up right away; the server's device update confirms
+  // it, or puts back what's really in use if the device won't open.
+  function wireDeviceList(list, side) {
+    list.addEventListener('click', (event) => {
+      const button = event.target.closest('.device-option');
+      if (!button || !lastDevices) return;
+      for (const other of list.querySelectorAll('.device-option')) {
+        other.classList.toggle('is-active', other === button);
+        other.setAttribute('aria-checked', String(other === button));
+      }
+      const devices = { input: deviceValue(lastDevices.input), output: deviceValue(lastDevices.output) };
+      devices[side] = button.dataset.value;
+      send('set_audio_devices', devices);
+    });
+  }
+  wireDeviceList(cfgInput, 'input');
+  wireDeviceList(cfgOutput, 'output');
 
   // -- Browser microphone as an alternate ASR input ----------------------------
   // Mirrors the outgoing TTS-audio format (broadcast_audio/playAudioChunk):
