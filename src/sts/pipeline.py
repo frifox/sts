@@ -904,7 +904,7 @@ class Pipeline:
         if recent != self._recent_text:
             self._recent_text = recent
             if self.broadcaster:
-                self.broadcaster.broadcast_original_recent(recent)
+                self.broadcaster.broadcast_original_recent(recent, list(still_open))
 
     def _broadcast_bible_references(self, text: str) -> None:
         for ref in find_references(text):

@@ -76,7 +76,9 @@
   /* In each column the newest line stays bright and older ones are faded.
      For the original captions that means the newest final sentence; the
      text that isn't final yet (.recent) is faded too, in its own paragraph
-     below them (the last row in portrait), and doesn't count as a line. */
+     below them (the last row in portrait), and doesn't count as a line -
+     except its first sentence while it's about to be finalized (.pending,
+     the finalize clock showing), which is as bright as final text. */
   .line.old { opacity: 0.4; transition: opacity 0.6s ease; }
 
   #original-lines .line { color: #9cdcfe; }
@@ -119,8 +121,12 @@
      already large; em would double it). After .portrait-cell so it wins
      there too (same specificity - order decides). */
   /* Faded like older lines (.line.old). No fade-in: that runs to full
-     opacity, so it would flash bright every time the live text appears. */
-  .recent { font-size: 2rem; line-height: 1.25; opacity: 0.4; animation: none; }
+     opacity, so it would flash bright every time the live text appears.
+     The fade is on the text spans rather than .recent itself, so the first
+     sentence can be brought up to full brightness while it's pending. */
+  .recent { font-size: 2rem; line-height: 1.25; animation: none; }
+  .recent .recent-first, .recent .recent-rest { opacity: 0.4; transition: opacity 0.3s ease; }
+  .recent.pending .recent-first { opacity: 1; }
 
   /* Portrait mode has no separate original/translated panels to hide (both
      columns live in one shared panel) - Caption/Translate turning off is
@@ -865,6 +871,7 @@
   // landscape, the last row in portrait - and updated in place rather than
   // re-created, so it doesn't re-run the fade-in on every update. --
   let recentOriginal = '';
+  let recentSentences = [];  // recentOriginal, sentence by sentence
   let recentRow = null;  // portrait: [original cell, translated cell] of the live row
   // Per-viewer, like the render mode: whether the live text is shown at all.
   let showUnfinished = true;
@@ -872,8 +879,9 @@
     showUnfinished = localStorage.getItem('sts-unfinished-text') !== 'hide';
   } catch { /* storage blocked - default stands */ }
 
-  function setRecentOriginal(text) {
+  function setRecentOriginal(text, sentences) {
     recentOriginal = text;
+    recentSentences = sentences ?? (text ? [text] : []);
     renderRecentOriginal();
   }
 
@@ -900,7 +908,7 @@
           return cell;
         });
       }
-      setRecentContent(recentRow[0], text);
+      setRecentContent(recentRow[0], recentSentences);
       prunePortraitRows();
       return;
     }
@@ -917,21 +925,25 @@
       para.style.margin = '0';
       container.appendChild(para);
     }
-    setRecentContent(para, text);
+    setRecentContent(para, recentSentences);
   }
 
-  // The live caption's element: the finalize clock, then its text.
-  function setRecentContent(el, text) {
+  // The live caption's element: the finalize clock, then the first
+  // sentence (the one the clock is about) and the rest.
+  function setRecentContent(el, sentences) {
     if (!el.querySelector('.finalize-clock')) {
       el.textContent = '';
       const clock = document.createElement('span');
       clock.className = 'finalize-clock';
       clock.title = 'Finalized when this runs out';
-      const words = document.createElement('span');
-      words.className = 'recent-text';
-      el.append(clock, words);
+      const first = document.createElement('span');
+      first.className = 'recent-first';
+      const rest = document.createElement('span');
+      rest.className = 'recent-rest';
+      el.append(clock, first, rest);
     }
-    el.querySelector('.recent-text').textContent = text;
+    el.querySelector('.recent-first').textContent = sentences[0] ?? '';
+    el.querySelector('.recent-rest').textContent = sentences.length > 1 ? ' ' + sentences.slice(1).join(' ') : '';
     drawFinalizeClocks();
   }
 
@@ -954,6 +966,7 @@
     }
     for (const clock of document.querySelectorAll('.finalize-clock')) {
       clock.classList.toggle('idle', !finalizeTimer);
+      clock.parentElement.classList.toggle('pending', !!finalizeTimer);
       clock.style.setProperty('--left', fraction.toFixed(4));
     }
     cancelAnimationFrame(finalizeFrame);
@@ -1801,7 +1814,7 @@
       if (msg.type === 'original') {
         if (renderMode === 'portrait') addPortraitOriginal(msg.text, { batch: msg.batch }, msg.seq); else addLine('original-lines', msg.text, { batch: msg.batch }, msg.seq);
       } else if (msg.type === 'original_recent') {
-        setRecentOriginal(msg.text);
+        setRecentOriginal(msg.text, msg.sentences);
       } else if (msg.type === 'finalize_timer') {
         setFinalizeTimer(msg.left, msg.total);
       } else if (msg.type === 'translated') {

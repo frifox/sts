@@ -145,11 +145,15 @@ class CaptionBroadcaster:
         by the page's portrait layout, instead of by arrival order."""
         self._broadcast("original", text, seq, batch)
 
-    def broadcast_original_recent(self, text: str) -> None:
+    def broadcast_original_recent(self, text: str, sentences: list[str] | None = None) -> None:
         """The caption text that isn't final yet - replaces whatever the page
-        showed as such before ("" clears it). Remembered, so a page that
-        connects mid-sentence shows it too."""
-        message = {"type": "original_recent", "text": text}
+        showed as such before ("" clears it) - and the same as its separate
+        sentences, so the page can pick out the first one (the one the
+        finalize clock is about). Remembered, so a page that connects
+        mid-sentence shows it too."""
+        if sentences is None:
+            sentences = [text] if text else []
+        message = {"type": "original_recent", "text": text, "sentences": sentences}
         self._last_recent = message
         if self.loop is None:
             return

@@ -18,7 +18,7 @@ class _Broadcaster:
     def broadcast_original(self, text, seq=None, batch=None):
         self.original.append((text, seq))
 
-    def broadcast_original_recent(self, text):
+    def broadcast_original_recent(self, text, sentences=None):
         self.recent.append(text)
 
     def broadcast_translated(self, text, seq=None, batch=None):
