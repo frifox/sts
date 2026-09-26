@@ -49,6 +49,7 @@ from sts.config import PipelineConfig
 from sts.control import RecognitionControl
 from sts.log import vlog
 from sts.persistent_config import PersistentConfig
+from sts.startup_progress import StartupProgress
 from sts.translate.translator import Translator
 from sts.tts import create_synthesizer
 from sts.transcript import Sentence, Transcript
@@ -157,9 +158,11 @@ class Pipeline:
         cfg: PipelineConfig,
         broadcaster: CaptionBroadcaster | None = None,
         persistent_config: PersistentConfig | None = None,
+        startup: StartupProgress | None = None,
     ):
         self.cfg = cfg
         self.broadcaster = broadcaster
+        self._startup = startup  # times start-up's steps for the page's percentage (see _stage)
         # Remembers the operator's device/volume/voice choices across
         # restarts - see the persist-on-change calls below and
         # _restore_persisted_voice(). None (the default) just means nothing
@@ -234,6 +237,11 @@ class Pipeline:
 
     def _stage(self, text: str, ready: bool = False) -> None:
         vlog("init", text)
+        if self._startup is not None:
+            if ready:
+                self._startup.finish()
+            else:
+                self._startup.begin(text)
         if self.broadcaster:
             self.broadcaster.broadcast_stage(text, ready)
 
@@ -917,7 +925,8 @@ class Pipeline:
                 # for one that was never caught in the first place.
                 print(f"[bible] no verse text found in the bundled Bible data for {label}")
             self.broadcaster.broadcast_verse(
-                quote.ru_label, quote.chapter, quote.verse, quote.verse_end, quote.ru_text, quote.en_text
+                quote.ru_label, quote.chapter, quote.verse, quote.verse_end, quote.ru_text, quote.en_text,
+                en_reference=quote.en_reference,
             )
 
     def _translate_loop(self) -> None:

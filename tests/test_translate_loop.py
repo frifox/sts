@@ -24,7 +24,7 @@ class _Broadcaster:
     def broadcast_translated(self, text, seq=None, batch=None):
         self.translated.append((text, seq))
 
-    def broadcast_verse(self, *args):
+    def broadcast_verse(self, *args, **kwargs):
         pass
 
     def broadcast_rtf(self, stage, value):

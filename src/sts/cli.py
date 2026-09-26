@@ -11,6 +11,7 @@ from sts.audio.devices import check_input, check_output
 from sts.engine_args import add_engine_arguments, build_engine_config
 from sts.log import vlog
 from sts.persistent_config import PersistentConfig
+from sts.startup_progress import StartupProgress
 from sts.pipeline import Pipeline
 from sts.web.server import CaptionBroadcaster, run_server
 
@@ -147,6 +148,8 @@ def main() -> None:
     cfg, (asr_device, translation_device, tts_device) = build_engine_config(args)
 
     persistent_config = PersistentConfig(args.config_db) if args.config_db else None
+    startup = StartupProgress(persistent_config)
+    startup.begin("Starting…")
     if persistent_config is not None:
         saved_volume = persistent_config.get("output_volume")
         if saved_volume:
@@ -193,6 +196,7 @@ def main() -> None:
                 )
                 sys.exit(1)
         broadcaster = CaptionBroadcaster()
+        broadcaster.startup = startup
         threading.Thread(
             target=run_server,
             args=(broadcaster, args.web_host, args.web_port),
@@ -209,7 +213,7 @@ def main() -> None:
 
     vlog("init", f"loading models (asr=gigaam on {asr_device}, translation on {translation_device}, "
          f"tts={cfg.tts.backend} on {tts_device})")
-    pipeline = Pipeline(cfg, broadcaster=broadcaster, persistent_config=persistent_config)
+    pipeline = Pipeline(cfg, broadcaster=broadcaster, persistent_config=persistent_config, startup=startup)
     vlog("init", "models loaded")
     if args.clone:
         pipeline.clone_voice(args.clone, name=args.clone_name)

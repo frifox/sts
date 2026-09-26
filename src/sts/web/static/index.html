@@ -34,7 +34,15 @@
 
   #original-panel { background: #0b0b0f; border-bottom: 2px solid #222; }
   #translated-panel { background: #000; }
-  #portrait-panel { background: #000; }
+  /* Portrait: the original column on the original panel's background and
+     the translated one on the translated panel's, with the same divider
+     between them as between the landscape panels. The columns are
+     symmetric, so the split is at 50%. */
+  #portrait-panel {
+    background: linear-gradient(to right, #0b0b0f calc(50% - 1px), #222 0 calc(50% + 1px), #000 0);
+  }
+  #portrait-panel.hide-translated { background: #0b0b0f; }
+  #portrait-panel.hide-original { background: #000; }
   #original-panel[hidden], #translated-panel[hidden], #portrait-panel[hidden] { display: none; }
 
   #idle-message {
@@ -53,7 +61,10 @@
   .lines {
     height: 100%;
     box-sizing: border-box;
-    padding: 4.5vh 3vw 1.5vh;
+    /* Sides: room for the finalize clock, which sits in the left one (see
+       .finalize-clock) - the right one matching, so portrait's two columns
+       stay symmetric about the middle. */
+    padding: 4.5vh max(3vw, 1.9rem) 1.5vh;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -129,7 +140,15 @@
      opacity, so it would flash bright every time the live text appears.
      The fade is on the text spans rather than .recent itself, so the first
      sentence can be brought up to full brightness while it's pending. */
-  .recent { font-size: var(--unfinished-size); line-height: 1.25; animation: none; }
+  .recent {
+    font-size: var(--unfinished-size);
+    line-height: 1.25;
+    animation: none;
+    position: relative;  /* for the finalize clock */
+    /* A subtle line between the final text and this. */
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    padding-top: 0.25em;
+  }
   .recent .recent-first, .recent .recent-rest { opacity: 0.4; transition: opacity 0.3s ease; }
   .recent.pending .recent-first { opacity: 1; }
 
@@ -198,6 +217,7 @@
   }
 
   #stage.ready::before { background: #4cbb6c; animation: none; }
+  #stage-pct { font-variant-numeric: tabular-nums; color: #9a9aa5; }
 
   @keyframes pulse {
     50% { opacity: 0.3; }
@@ -270,23 +290,25 @@
     cursor: pointer;
   }
 
-  /* Before the first not-yet-final sentence, once it's about to be finalized
+  /* Left of the first not-yet-final sentence, in the panel's padding - so it
+     never moves the text - once that sentence is about to be finalized
      (see setFinalizeTimer): starts full and empties clockwise from 12
-     o'clock as the wait runs out - --left is the fraction left. Hidden, but
-     keeping its place so the text doesn't shift, while nothing is pending. */
+     o'clock as the wait runs out - --left is the fraction left. */
   .finalize-clock {
     --left: 1;
-    display: inline-block;
+    position: absolute;
+    right: calc(100% + 0.28em);
+    top: calc(0.25em + 0.32em);  /* .recent's padding-top, then centered on the first line */
     width: 0.62em;
     height: 0.62em;
-    margin-right: 0.35em;
-    vertical-align: 0.02em;
     border-radius: 50%;
     border: 0.08em solid currentColor;
     box-sizing: border-box;
     background: conic-gradient(transparent calc((1 - var(--left)) * 360deg), currentColor 0);
   }
   .finalize-clock.idle { visibility: hidden; }
+  /* Faded like the not-yet-final text that isn't pending (.recent-rest). */
+  .recent .finalize-clock { opacity: 0.4; }
 
   .verse-chip:hover { background: rgba(201, 162, 75, 0.18); }
   .verse-chip.show { display: inline-block; }
@@ -639,7 +661,7 @@
     </div>
   </div>
     <div class="panel" id="original-panel">
-      <button type="button" class="verse-chip" id="verse-chip-ru" title="Show the last detected passage again"></button>
+      <button type="button" class="verse-chip" id="verse-chip-ru" title="Show the full passage"></button>
       <div class="verse-banner ru" id="verse-banner-ru">
         <div class="verse-reference"></div>
         <div class="verse-text"></div>
@@ -647,7 +669,7 @@
       <div class="lines" id="original-lines"></div>
     </div>
     <div class="panel" id="translated-panel">
-      <button type="button" class="verse-chip" id="verse-chip-en" title="Show the last detected passage again"></button>
+      <button type="button" class="verse-chip" id="verse-chip-en" title="Show the full passage"></button>
       <div class="verse-banner en" id="verse-banner-en">
         <div class="verse-reference"></div>
         <div class="verse-text"></div>
@@ -655,8 +677,8 @@
       <div class="lines" id="translated-lines"></div>
     </div>
     <div class="panel" id="portrait-panel" hidden>
-      <button type="button" class="verse-chip" id="verse-chip-portrait-ru" title="Show the last detected passage again"></button>
-      <button type="button" class="verse-chip right" id="verse-chip-portrait-en" title="Show the last detected passage again"></button>
+      <button type="button" class="verse-chip" id="verse-chip-portrait-ru" title="Show the full passage"></button>
+      <button type="button" class="verse-chip right" id="verse-chip-portrait-en" title="Show the full passage"></button>
       <div class="verse-banner ru verse-banner-left" id="verse-banner-portrait-ru">
         <div class="verse-reference"></div>
         <div class="verse-text"></div>
@@ -1064,78 +1086,72 @@
     for (const t of translateds) addLine('translated-lines', t.text, { forceNewBatch: true }, t.seq);
   }
 
-  const VERSE_DISPLAY_MS = 25000;
-  let verseHideTimer = null;
-  let lastVerseMsg = null;  // re-shown by the recall chips, below - null until the first verse this session
+  let lastVerseMsg = null;  // shown by the verse chips, below - null until the first verse this session
   // One banner per language per render mode - all four are kept in sync on
   // every "verse" message; only the ones in the currently visible panel(s)
   // are ever actually seen, same as the RTF indicators always update
   // regardless of what's on screen.
+  // `field`/`ref`: the message fields with the banner's text and reference
+  // (the translated side gets the English reference, e.g. "Psalm 23:1" for
+  // "Псалтирь 22:1" - the numbering can differ).
   const verseBanners = [
-    { el: document.getElementById('verse-banner-ru'), field: 'ru_text' },
-    { el: document.getElementById('verse-banner-en'), field: 'en_text' },
-    { el: document.getElementById('verse-banner-portrait-ru'), field: 'ru_text' },
-    { el: document.getElementById('verse-banner-portrait-en'), field: 'en_text' },
+    { el: document.getElementById('verse-banner-ru'), field: 'ru_text', ref: 'reference' },
+    { el: document.getElementById('verse-banner-en'), field: 'en_text', ref: 'en_reference' },
+    { el: document.getElementById('verse-banner-portrait-ru'), field: 'ru_text', ref: 'reference' },
+    { el: document.getElementById('verse-banner-portrait-en'), field: 'en_text', ref: 'en_reference' },
   ];
-  // Small recall buttons - one alongside each banner - that bring the last
-  // detected verse back after it's auto-dismissed (or been manually
-  // dismissed). Unlike the banners, these stay up once shown.
+  // A detected passage only shows as a small chip with its reference
+  // ("Иоанна 3:15-16") - one alongside each banner. Clicking it opens the
+  // banners with the full text (original + translated); clicking it again,
+  // or anywhere else, closes them.
   const verseChips = [
-    document.getElementById('verse-chip-ru'),
-    document.getElementById('verse-chip-en'),
-    document.getElementById('verse-chip-portrait-ru'),
-    document.getElementById('verse-chip-portrait-en'),
+    { el: document.getElementById('verse-chip-ru'), ref: 'reference' },
+    { el: document.getElementById('verse-chip-en'), ref: 'en_reference' },
+    { el: document.getElementById('verse-chip-portrait-ru'), ref: 'reference' },
+    { el: document.getElementById('verse-chip-portrait-en'), ref: 'en_reference' },
   ];
 
   function applyVerseText(msg) {
-    for (const { el, field } of verseBanners) {
-      el.querySelector('.verse-reference').textContent = msg.reference;
+    for (const { el, field, ref } of verseBanners) {
+      el.querySelector('.verse-reference').textContent = msg[ref] || msg.reference;
       el.querySelector('.verse-text').textContent = msg[field] || '';
     }
   }
 
   function dismissVerse() {
-    clearTimeout(verseHideTimer);
     for (const { el } of verseBanners) el.classList.remove('show');
   }
 
-  // Brings the last detected verse back with no auto-dismiss timer - only
-  // dismissVerse() (the click-outside handler, below) hides it again.
-  function pinVerse() {
+  function openVerse() {
     if (!lastVerseMsg) return;
     applyVerseText(lastVerseMsg);
     for (const { el } of verseBanners) el.classList.add('show');
-    clearTimeout(verseHideTimer);
   }
 
+  // A newly detected passage: its chip only. Banners already open (the
+  // viewer is reading one) switch to the new passage.
   function showVerse(msg) {
     lastVerseMsg = msg;
     applyVerseText(msg);
-    for (const { el } of verseBanners) el.classList.add('show');
-    for (const chip of verseChips) {
-      chip.textContent = msg.reference;
-      chip.classList.add('show');
+    for (const { el, ref } of verseChips) {
+      el.textContent = msg[ref] || msg.reference;
+      el.classList.add('show');
     }
-
-    clearTimeout(verseHideTimer);
-    verseHideTimer = setTimeout(dismissVerse, VERSE_DISPLAY_MS);
   }
 
-  for (const chip of verseChips) {
+  for (const { el: chip } of verseChips) {
     chip.addEventListener('click', (event) => {
       event.stopPropagation();  // don't let this same click reach the outside-click handler below
-      pinVerse();
+      if (verseBanners.some(({ el }) => el.classList.contains('show'))) dismissVerse(); else openVerse();
     });
   }
 
-  // Clicking anywhere outside a shown banner (and outside the chips, which
-  // have their own handler above) dismisses it - the "manually click out to
-  // dismiss" behavior a pinned verse needs, but applied whenever a banner is
-  // showing, auto-dismiss pending or not.
+  // Clicking anywhere outside an open banner (and outside the chips, which
+  // have their own handler above) closes it.
   document.addEventListener('click', (event) => {
     if (!verseBanners.some(({ el }) => el.classList.contains('show'))) return;
     if (verseBanners.some(({ el }) => el.contains(event.target))) return;
-    if (verseChips.some((chip) => chip.contains(event.target))) return;
+    if (verseChips.some(({ el }) => el.contains(event.target))) return;
     dismissVerse();
   });
 
@@ -1149,7 +1165,7 @@
     pendingTranslationCells.clear();
     dismissVerse();
     lastVerseMsg = null;
-    for (const chip of verseChips) chip.classList.remove('show');
+    for (const { el } of verseChips) el.classList.remove('show');
   }
 
   const asrToggleBtn = document.getElementById('btn-asr-toggle');
@@ -1787,6 +1803,38 @@
     nextStartTime = startAt + audioBuffer.duration;
   }
 
+  // -- Start-up percentage next to the stage text: the server's expected
+  // place of the current step on the whole start-up (StartupProgress), run
+  // forward smoothly from its start to its end over the step's expected
+  // time - never past 99% before "Listening". --
+  let stageProgress = null;  // {start, end, stepS, at: performance.now() when the step began}
+  let stageProgressTimer = null;
+  function setStage(text, ready, progress) {
+    const stage = document.getElementById('stage');
+    stage.textContent = text;
+    stage.className = ready ? 'ready' : '';
+    stageProgress = !ready && progress ? {
+      start: progress.start, end: progress.end, stepS: progress.step_s,
+      at: performance.now() - (progress.elapsed_s || 0) * 1000,
+    } : null;
+    clearInterval(stageProgressTimer);
+    stageProgressTimer = null;
+    if (stageProgress) {
+      const pct = document.createElement('span');
+      pct.id = 'stage-pct';
+      stage.appendChild(pct);
+      drawStageProgress();
+      stageProgressTimer = setInterval(drawStageProgress, 250);
+    }
+  }
+  function drawStageProgress() {
+    const pct = document.getElementById('stage-pct');
+    if (!pct || !stageProgress) return;
+    const { start, end, stepS, at } = stageProgress;
+    const through = stepS > 0 ? Math.min(1, (performance.now() - at) / 1000 / stepS) : 1;
+    pct.textContent = `${Math.min(99, Math.floor((start + (end - start) * through) * 100))}%`;
+  }
+
   function connect() {
     const stage = document.getElementById('stage');
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -1802,8 +1850,7 @@
     };
     ws.onerror = () => ws.close();
     ws.onclose = () => {
-      stage.textContent = 'Reconnecting…';
-      stage.className = '';
+      setStage('Reconnecting…', false, null);
       systemReady = false;
       volumeBars.forEach((bar) => bar.classList.remove('lit-quiet', 'lit-good'));
       outputBars.forEach((bar) => bar.classList.remove('lit-quiet', 'lit-good'));
@@ -1828,8 +1875,7 @@
       else if (msg.type === 'verse') showVerse(msg);
       else if (msg.type === 'reset') clearCaptions();
       else if (msg.type === 'stage') {
-        stage.textContent = msg.text;
-        stage.className = msg.ready ? 'ready' : '';
+        setStage(msg.text, msg.ready, msg.progress);
         systemReady = !!msg.ready;
         updateEngineAvailability();
       }

@@ -51,6 +51,9 @@ class CaptionBroadcaster:
         self._last_engines: dict | None = None
         self._last_design: dict = {"type": "design", "state": "idle", "message": "", "has_voice": False}
         self._last_stage: dict = {"type": "stage", "text": "Starting…", "ready": False}
+        # sts.startup_progress.StartupProgress, when start-up is being timed:
+        # stage messages carry its percentage (see broadcast_stage).
+        self.startup = None
         # Latest real-time-factor reading per pipeline stage ("asr" |
         # "translate" | "voice"), so a page that connects mid-session sees
         # the current numbers immediately instead of blank ones until the
@@ -68,7 +71,7 @@ class CaptionBroadcaster:
 
     async def register(self, websocket: WebSocket) -> None:
         self._clients.add(websocket)
-        await websocket.send_text(json.dumps(self._last_stage))
+        await websocket.send_text(json.dumps(self._stage_message()))
         vlog("web", f"caption page connected ({len(self._clients)} client(s))")
         if self._last_status is not None:
             await websocket.send_text(json.dumps(self._last_status))
@@ -186,13 +189,17 @@ class CaptionBroadcaster:
         verse_end: int | None,
         ru_text: str | None,
         en_text: str | None,
+        en_reference: str | None = None,
     ) -> None:
+        """A detected passage. `en_reference` is its English form ("Psalm
+        23:1"), for the translated side; the Russian one is used without it."""
         if self.loop is None or not (ru_text or en_text):
             return
         reference = f"{ru_label} {chapter}:{verse}" + (f"-{verse_end}" if verse_end else "")
         message = {
             "type": "verse",
             "reference": reference,
+            "en_reference": en_reference or reference,
             "ru_text": ru_text,
             "en_text": en_text,
         }
@@ -216,7 +223,14 @@ class CaptionBroadcaster:
         self._last_stage = {"type": "stage", "text": text, "ready": ready}
         if self.loop is None:
             return
-        asyncio.run_coroutine_threadsafe(self._send_to_all(self._last_stage), self.loop)
+        asyncio.run_coroutine_threadsafe(self._send_to_all(self._stage_message()), self.loop)
+
+    def _stage_message(self) -> dict:
+        """The current stage, with how far start-up has got (`progress`, see
+        StartupProgress.progress - its `elapsed_s` as of now, so a page
+        connecting mid-step picks up where it is)."""
+        progress = self.startup.progress() if self.startup is not None and not self._last_stage["ready"] else None
+        return {**self._last_stage, "progress": progress}
 
     def broadcast_devices(self, message: dict) -> None:
         """The audio device lists and current selection (plus an `error`/`applied` note after an Apply)."""

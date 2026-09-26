@@ -47,3 +47,26 @@ def test_psalm_without_a_clean_mapping_has_no_english_text():
 def test_pilcrow_paragraph_markers_are_stripped():
     quote = _lookup.lookup("John", "Иоанна", 3, 16)
     assert not quote.en_text.startswith("¶")
+
+
+def test_english_reference_uses_english_names_and_kjv_psalm_numbering():
+    from sts.bible.lookup import english_reference
+
+    assert english_reference("John", 3, 14, 15) == "John 3:14-15"
+    assert english_reference("I Corinthians", 13, 4, None) == "1 Corinthians 13:4"
+    assert english_reference("III John", 1, 2, None) == "3 John 1:2"
+    assert english_reference("Revelation of John", 21, 4, None) == "Revelation 21:4"
+    # Synodal Psalm 22 is KJV Psalm 23.
+    assert english_reference("Psalms", 22, 1, None) == "Psalm 23:1"
+    assert english_reference("Psalms", 22, 1, 3) == "Psalm 23:1-3"
+    assert english_reference("Psalms", 1, 1, None) == "Psalm 1:1"
+    # No 1:1 mapping (Synodal 9 = KJV 9 + 10): left as it is.
+    assert english_reference("Psalms", 9, 5, None) == "Psalm 9:5"
+
+
+def test_a_lookup_carries_its_english_reference():
+    from sts.bible.lookup import BibleLookup
+
+    quote = BibleLookup().lookup("Psalms", "Псалтирь", 22, 1)
+    assert quote.en_reference == "Psalm 23:1"
+    assert "Lord is my shepherd" in quote.en_text

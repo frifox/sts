@@ -31,6 +31,35 @@ class VerseQuote:
     verse_end: int | None
     ru_text: str | None
     en_text: str | None
+    # The same reference in English (KJV) naming and numbering, e.g. "Psalm
+    # 23:1" for the Synodal "Псалтирь 22:1" - the numbers en_text was taken
+    # from.
+    en_reference: str | None = None
+
+
+# Dataset book name -> how it's written in an English reference, where different.
+_EN_NAMES = {"Psalms": "Psalm", "Revelation of John": "Revelation"}
+_ROMAN = {"I": "1", "II": "2", "III": "3"}
+
+
+def english_book_name(book: str) -> str:
+    if book in _EN_NAMES:
+        return _EN_NAMES[book]
+    first, _, rest = book.partition(" ")
+    return f"{_ROMAN[first]} {rest}" if first in _ROMAN and rest else book
+
+
+def english_reference(book: str, chapter: int, verse: int, verse_end: int | None) -> str:
+    """The reference as written in English, with a Psalm's chapter and verses
+    in KJV numbering (see _synodal_psalm_to_kjv) - left as they are for the
+    few psalms without a 1:1 mapping."""
+    if book == "Psalms":
+        start = _synodal_psalm_to_kjv(chapter, verse)
+        end = _synodal_psalm_to_kjv(chapter, verse_end) if verse_end else None
+        if start and (end or not verse_end):
+            chapter, verse = start
+            verse_end = end[1] if end else None
+    return f"{english_book_name(book)} {chapter}:{verse}" + (f"-{verse_end}" if verse_end else "")
 
 
 def _synodal_psalm_to_kjv(chapter: int, verse: int) -> tuple[int, int] | None:
@@ -93,4 +122,5 @@ class BibleLookup:
             verse_end=verse_end,
             ru_text=ru_text,
             en_text=en_text,
+            en_reference=english_reference(book, chapter, verse, verse_end),
         )
