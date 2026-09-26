@@ -13,9 +13,9 @@ every --interval-ms, so the model sees more context each time and can revise
 what it heard - which is shown as it happens, one sentence per line,
 rewritten in place.
 
-A sentence is final once there's text after it, once its text hasn't
-changed for --final-after-unchanged seconds (default 5), or
---final-force-after seconds after its first word (default 30): its audio is
+A sentence is final once it ends with a sentence-ending mark and hasn't
+changed (text or punctuation) for --final-after-unchanged seconds (default
+5), or --final-force-after seconds after its first word (default 30): its audio is
 dropped, so it's never re-transcribed or reworded again, and it's printed
 once, above a blank line. Piped to a file, only final sentences are printed
 (plus whatever is still open on exit). GigaAM takes at most ~25 s
@@ -57,8 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--asr-device", default="cuda", help="cuda | cpu | mps (default: cuda)")
     parser.add_argument(
         "--final-after-unchanged", type=float, default=5.0, metavar="S",
-        help="Finalize a sentence once its text hasn't changed for S seconds (default: 5; 0 turns this "
-        "rule off). A sentence with text after it is always final.",
+        help="Finalize a sentence once it ends with a sentence-ending mark and hasn't changed (text or "
+        "punctuation) for S seconds (default: 5; 0 turns this rule off)",
     )
     parser.add_argument(
         "--final-force-after", type=float, default=30.0, metavar="S",

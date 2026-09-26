@@ -77,8 +77,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="S",
         help="Finalize a caption sentence - send it on to translation and voicing, and never change it again - "
-        "once its text hasn't changed for S seconds (default 5; 0 turns this rule off). A sentence with text "
-        "after it is always final.",
+        "once it ends with a sentence-ending mark and hasn't changed (text or punctuation) for S seconds "
+        "(default 5; 0 turns this rule off)",
     )
     parser.add_argument(
         "--final-force-after",

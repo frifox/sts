@@ -223,23 +223,22 @@ def test_a_sentence_never_starts_with_punctuation():
     assert [x.text for x in sentences] == ["способны приносить.", "Ну"]
 
 
-def test_locked_by_text_after_it_by_being_unchanged_or_by_force():
+def test_final_when_finished_and_unchanged_or_forced():
     from sts.transcript import Sentence, count_final
 
     s = [Sentence("A.", 0, 2, True), Sentence("B.", 3, 5, True), Sentence("C", 6, 7, False)]
-    changing = [9.0, 9.0, 9.0]  # every text just changed at now_s=9
-    # Text after it is enough, complete or not: A and B; the last one waits.
-    assert count_final(s, now_s=9, unchanged_since=changing, after_unchanged=5, force_after=30) == 2
-    # The last one, unchanged for 5 s.
-    assert count_final(s, now_s=14, unchanged_since=[9.0, 9.0, 9.0], after_unchanged=5, force_after=30) == 3
-    assert count_final(s, now_s=13.9, unchanged_since=[9.0, 9.0, 9.0], after_unchanged=5, force_after=30) == 2
-    # Still changing, but 30 s since its first word (at 6).
+    # Text after a sentence doesn't make it final: each must sit unchanged for 5 s.
+    assert count_final(s, now_s=9, unchanged_since=[5.0, 8.0, 8.0], after_unchanged=5, force_after=30) == 0
+    assert count_final(s, now_s=10, unchanged_since=[5.0, 8.0, 8.0], after_unchanged=5, force_after=30) == 1
+    assert count_final(s, now_s=13, unchanged_since=[5.0, 8.0, 8.0], after_unchanged=5, force_after=30) == 2
+    # One without an end mark never settles, however long it's unchanged...
+    assert count_final(s, now_s=35.9, unchanged_since=[0.0] * 3, after_unchanged=5, force_after=30) == 2
+    # ...only the 30 s rule, counted from its first word (at 6), finalizes it.
     assert count_final(s, now_s=36, unchanged_since=[36.0] * 3, after_unchanged=5, force_after=30) == 3
-    # 0 turns the time rules off; the text-after rule always applies.
-    assert count_final(s, now_s=100, unchanged_since=[0.0] * 3, after_unchanged=0, force_after=0) == 2
+    # 0 turns a rule off.
+    assert count_final(s, now_s=100, unchanged_since=[0.0] * 3, after_unchanged=0, force_after=0) == 0
     # Only a leading run: a sentence that isn't final keeps everything after it open.
-    lone = [Sentence("A", 0, 20, False)]
-    assert count_final(lone, now_s=21, unchanged_since=[21.0], after_unchanged=5, force_after=30) == 0
+    assert count_final(s, now_s=10, unchanged_since=[9.0, 0.0, 0.0], after_unchanged=5, force_after=30) == 0
 
 
 class _ScriptedAsr:
@@ -276,42 +275,64 @@ def _feed(transcript, until_s, fed):
     transcript.add(samples)
 
 
-def test_a_sentence_is_final_once_text_follows_it():
+def test_text_after_a_sentence_does_not_finalize_it_but_5_unchanged_seconds_do():
     from sts.transcript import Transcript
 
-    script = _words(
-        ("Первое.", 0.5, 1.5), ("Второе", 2.0, 2.5), ("предложение.", 2.6, 3.5),
-        ("Третье", 4.0, 4.5),
-    )
+    script = _words(("Первое.", 0.5, 1.5), ("Второе", 2.0, 2.5), ("предложение.", 2.6, 3.5))
     asr = _ScriptedAsr(script)
     t = Transcript(asr, after_unchanged=5, force_after=30)
     fed = [0]
-
     _feed(t, 1.6, fed)
-    assert _texts(t.step()) == ([], ["Первое."])
+    assert _texts(t.step()) == ([], ["Первое."])  # finished at 1.6: its 5 s start
     _feed(t, 2.6, fed)
-    # "Первое." has text after it now, even an unfinished sentence.
-    assert _texts(t.step()) == (["Первое."], ["Второе"])
-    _feed(t, 4.6, fed)
-    assert _texts(t.step()) == (["Второе предложение."], ["Третье"])
-    # The later passes heard audio from shortly before the first open word, not the whole recording.
+    assert _texts(t.step()) == ([], ["Первое.", "Второе"])  # text after it: not final
+    _feed(t, 6.5, fed)
+    assert _texts(t.step()) == ([], ["Первое.", "Второе предложение."])
+    assert t.finalize_in_s == pytest.approx(0.1)
+    _feed(t, 6.6, fed)
+    assert _texts(t.step()) == (["Первое."], ["Второе предложение."])
+    _feed(t, 11.4, fed)  # "Второе предложение." was first heard finished at 6.5
+    assert _texts(t.step()) == ([], ["Второе предложение."])
+    _feed(t, 11.5, fed)
+    assert _texts(t.step()) == (["Второе предложение."], [])
+    # Once "Первое." was final, passes heard audio from shortly before the next open word, not the whole recording.
     assert asr.heard[-1][0] == pytest.approx(2.0 - Transcript.CONTEXT_S)
 
 
-def test_the_last_sentence_is_final_once_unchanged_for_5_seconds():
+def test_the_5_seconds_start_over_whenever_the_sentence_changes():
     from sts.transcript import Transcript
 
-    script = _words(("Первое.", 0.5, 1.5), ("Второе", 2.0, 2.5))
+    # The model hears the end mark at 1.5, then revises the sentence at 4.0
+    # (a word is added before the mark) - its 5 s start over from there.
+    script = _words(("Мы", 0.5, 0.8), ("пришли.", 0.9, 1.5))
+    revised = _words(("Мы", 0.5, 0.8), ("сюда", 0.9, 1.2), ("пришли.", 1.3, 1.5))
+    asr = _ScriptedAsr(script)
+    t = Transcript(asr, after_unchanged=5, force_after=30)
+    fed = [0]
+    _feed(t, 2.0, fed)
+    assert _texts(t.step()) == ([], ["Мы пришли."])
+    _feed(t, 4.0, fed)
+    asr.script = revised
+    assert _texts(t.step()) == ([], ["Мы сюда пришли."])
+    _feed(t, 8.9, fed)
+    assert _texts(t.step()) == ([], ["Мы сюда пришли."])  # 7 s since the mark, 4.9 since the change
+    _feed(t, 9.0, fed)
+    assert _texts(t.step()) == (["Мы сюда пришли."], [])
+
+
+def test_an_unfinished_sentence_waits_for_its_end_mark():
+    from sts.transcript import Transcript
+
+    script = _words(("Второе", 2.0, 2.5))
     t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30)
     fed = [0]
     _feed(t, 3.0, fed)
-    assert _texts(t.step()) == (["Первое."], ["Второе"])  # "Второе" first seen at 3.0
-    _feed(t, 7.9, fed)
     assert _texts(t.step()) == ([], ["Второе"])
-    assert t.finalize_in_s == pytest.approx(0.1)
-    _feed(t, 8.0, fed)
+    _feed(t, 20.0, fed)
+    assert _texts(t.step()) == ([], ["Второе"])  # 17 s unchanged, but no end mark
+    assert t.finalize_in_s == pytest.approx(12.0)  # the 30 s rule, from its first word at 2.0
+    _feed(t, 32.0, fed)
     assert _texts(t.step()) == (["Второе"], [])
-    assert t.finalize_in_s is None
 
 
 def test_a_changing_sentence_is_forced_final_30_seconds_after_its_first_word():

@@ -67,10 +67,10 @@ class ASRConfig:
     device: str = "cuda"
     # Live captions (sts.transcript): what isn't final yet is re-transcribed
     # every `interval_ms`. A sentence is final - sent on to translation and
-    # voicing, and never changed again - once there's text after it, once
-    # its text hasn't changed for `final_after_unchanged_seconds`, or
-    # `final_force_after_seconds` after its first word however much it's
-    # still changing (0 turns either time rule off).
+    # voicing, and never changed again - once it ends with a sentence-ending
+    # mark and its text (punctuation included) hasn't changed for
+    # `final_after_unchanged_seconds`, or `final_force_after_seconds` after
+    # its first word however much it's still changing (0 turns either rule off).
     interval_ms: int = 500
     final_after_unchanged_seconds: float = 5.0
     final_force_after_seconds: float = 30.0

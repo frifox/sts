@@ -81,9 +81,9 @@ def test_flush_returns_what_is_still_open_as_final_and_empties_the_buffer():
     asr = _Asr([("Первое.", 0.1, 0.9), ("Второе", 1.0, 1.5)])
     t = Transcript(asr)
     t.add(_samples(0, 2))
-    assert [s.text for s in t.step()[0]] == ["Первое."]  # text follows it: final
+    t.step()
     flushed = t.flush()
-    assert [s.text for s in flushed] == ["Второе"]
+    assert [s.text for s in flushed] == ["Первое.", "Второе"]
     assert not t.has_audio
     assert t.flush() == []
 
@@ -122,7 +122,7 @@ def test_add_and_step_from_two_threads():
 
 
 def test_finalize_in_counts_down_to_the_first_open_sentence_being_final():
-    asr = _Asr([("Второе", 1.0, 2.0)])
+    asr = _Asr([("Второе.", 1.0, 2.0)])
     t = Transcript(asr)
     assert t.finalize_in_s is None
     t.add(_samples(0, 3))
@@ -132,5 +132,5 @@ def test_finalize_in_counts_down_to_the_first_open_sentence_being_final():
     t.step()
     assert t.finalize_in_s == pytest.approx(2.0)
     t.add(_samples(6, 8))
-    assert [s.text for s in t.step()[0]] == ["Второе"]
+    assert [s.text for s in t.step()[0]] == ["Второе."]
     assert t.finalize_in_s is None

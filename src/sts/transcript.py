@@ -5,13 +5,14 @@ sts-caption.
 The audio that isn't final yet is re-transcribed every step, so the model
 keeps hearing more context and can revise what it heard. A sentence is
 final - its audio dropped, so it's never re-transcribed or reworded again -
-as soon as any of these holds (see count_final):
+as soon as either of these holds (see count_final):
 
-- there is text after it: another sentence, complete or not;
-- its text hasn't changed for `after_unchanged` seconds (which is also what
-  finishes the last, maybe unfinished, sentence once the speaker stops);
+- it ends with a sentence-ending mark and its text, punctuation included,
+  hasn't changed for `after_unchanged` seconds. The wait starts only once
+  the mark is there, and any change to the sentence starts it over. Text
+  after it doesn't count;
 - `force_after` seconds have passed since its first word, however much it's
-  still changing.
+  still changing, finished or not.
 """
 
 import re
@@ -61,18 +62,18 @@ def sentences_from_words(words: list[TimedWord]) -> list[Sentence]:
 
 def count_final(sentences: list[Sentence], now_s: float, unchanged_since: list[float],
                 after_unchanged: float, force_after: float) -> int:
-    """How many of the leading `sentences` are final: those with text after
-    them, those whose text has stayed the same since `unchanged_since[i]`
-    for at least `after_unchanged` seconds, and those whose first word was
-    `force_after` or more seconds before `now_s` (0 turns either time rule
-    off). Only a leading run can be final - a sentence is never locked while
-    one before it could still change."""
+    """How many of the leading `sentences` are final: complete ones whose
+    text has stayed the same since `unchanged_since[i]` for at least
+    `after_unchanged` seconds, and any whose first word was `force_after` or
+    more seconds before `now_s` (0 turns either rule off). A sentence's text
+    includes its end mark, so it's unchanged only since it got that mark.
+    Only a leading run can be final - a sentence is never final while one
+    before it could still change."""
     count = 0
     for i, sentence in enumerate(sentences):
-        followed = i < len(sentences) - 1
-        settled = after_unchanged > 0 and now_s - unchanged_since[i] >= after_unchanged
+        settled = after_unchanged > 0 and sentence.complete and now_s - unchanged_since[i] >= after_unchanged
         forced = force_after > 0 and now_s - sentence.start >= force_after
-        if not (followed or settled or forced):
+        if not (settled or forced):
             break
         count = i + 1
     return count
@@ -176,7 +177,7 @@ class Transcript:
         if not still_open:
             return None
         waits = []
-        if self.after_unchanged > 0:
+        if self.after_unchanged > 0 and still_open[0].complete:
             waits.append(self.after_unchanged - (now_s - unchanged_since[0]))
         if self.force_after > 0:
             waits.append(self.force_after - (now_s - still_open[0].start))

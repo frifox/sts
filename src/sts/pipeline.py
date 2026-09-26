@@ -4,7 +4,7 @@ slow stage (translation, TTS) doesn't stall audio capture.
 
 Captions (sts.transcript): the audio that isn't settled yet is
 re-transcribed every ASRConfig.interval_ms; a sentence is locked once it
-has settled (text after it, unchanged for a while, or open too long - see
+has settled (finished and unchanged for a while, or open too long - see
 sts.transcript), and only then sent on to translation and voicing. The not-yet-locked text is pushed to
 the caption page as it changes, as one running line.
 
