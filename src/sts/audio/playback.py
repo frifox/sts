@@ -93,6 +93,21 @@ class AudioPlayback:
                 # and a fresh one is opened on the next clip.
                 vlog("audio", f"output stream didn't close cleanly ({exc!r}); discarded anyway")
 
+    def while_idle(self, fn, wait_s: float = 15.0) -> None:
+        """Runs fn() with the output stream closed and no clip playing: no
+        new clip starts meanwhile, and one already playing is let finish
+        first (up to `wait_s`) - closing the stream under a clip that's
+        mid-write has been seen to crash PortAudio. For re-initializing the
+        audio system (which invalidates open streams)."""
+        with self._lock:
+            deadline = time.monotonic() + wait_s
+            while self._scheduled_end > time.monotonic() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self._close_stream()
+            self._resolved_rates.clear()
+            self._scheduled_end = 0.0
+            fn()
+
     def forget_devices(self) -> None:
         """Drops everything learned about the output device - to be called
         after the audio system is re-initialized (see

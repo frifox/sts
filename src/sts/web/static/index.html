@@ -520,6 +520,13 @@
   .engine-info b { color: #ddd; font-weight: 600; }
   .engine-dropdown label { display: block; margin: 0.6rem 0 0.3rem; color: #9a9aa5; }
   .engine-dropdown select { width: 100%; box-sizing: border-box; padding: 0.5rem; font: inherit; }
+  /* Heading of the input/output device lists, with the rescan button at its right. */
+  .device-header { display: flex; align-items: center; justify-content: space-between; gap: 0.6em; margin: 0.6rem 0 0.3rem; }
+  .engine-dropdown .device-header label { margin: 0; }
+  #controls .refresh-devices { display: inline-flex; padding: 0.25em; border-radius: 6px; line-height: 0; }
+  .refresh-devices svg { width: 1.1em; height: 1.1em; fill: currentColor; }
+  .refresh-devices.busy svg { animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   /* Input/output devices: one full-width button per device, stacked; the
      one in use green with a check mark at its right edge. Scrolls if the
      machine has a lot of them. */
@@ -698,7 +705,10 @@
         <span class="volume-bar"></span>
         <span class="volume-bar"></span>
         <div class="engine-dropdown" id="dropdown-input">
-          <label id="cfg-input-label">Input device (microphone / line in)</label>
+          <div class="device-header">
+            <label id="cfg-input-label">Input device (microphone / line in)</label>
+            <button type="button" class="refresh-devices" title="Rescan audio devices - e.g. after plugging one in"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
+          </div>
           <div class="device-list" id="cfg-input" role="radiogroup" aria-labelledby="cfg-input-label"></div>
           <div class="mic-row">
             <button type="button" class="toggle-button" id="btn-browser-mic" title="Stream this browser's own microphone in as the input, instead of the server's sound card"><svg class="toggle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a4 4 0 0 0 4-4V5a4 4 0 0 0-8 0v6a4 4 0 0 0 4 4zm7-4a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.92V21H8a1 1 0 0 0 0 2h8a1 1 0 0 0 0-2h-3v-3.08A7 7 0 0 0 19 11z"/></svg><span class="toggle-label">Use this browser's mic</span><span class="check"></span></button>
@@ -767,7 +777,10 @@
         <span class="volume-bar"></span>
         <span class="volume-bar"></span>
         <div class="engine-dropdown" id="dropdown-output">
-          <label id="cfg-output-label">Output device (voice playback)</label>
+          <div class="device-header">
+            <label id="cfg-output-label">Output device (voice playback)</label>
+            <button type="button" class="refresh-devices" title="Rescan audio devices - e.g. after plugging one in"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
+          </div>
           <div class="device-list" id="cfg-output" role="radiogroup" aria-labelledby="cfg-output-label"></div>
           <div class="volume-row">
             <label id="volume-control" title="Volume of the local sound card output only - doesn't affect a browser stream's own volume">
@@ -1886,8 +1899,26 @@
     fillDeviceList(cfgOutput, lastDevices.outputs, lastDevices.output_off ? null : output);
   }
 
+  // Rescan (the refresh button in either device list's heading): the server
+  // restarts its audio system to find devices plugged in since it started;
+  // the button spins until the new list arrives.
+  const refreshButtons = document.querySelectorAll('.refresh-devices');
+  let rescanTimer = null;
+  function setRescanning(on) {
+    for (const button of refreshButtons) button.classList.toggle('busy', on);
+    clearTimeout(rescanTimer);
+    if (on) rescanTimer = setTimeout(() => setRescanning(false), 20000);
+  }
+  for (const button of refreshButtons) {
+    button.addEventListener('click', () => {
+      setRescanning(true);
+      send('rescan_devices');
+    });
+  }
+
   function applyDevices(msg) {
     lastDevices = msg;
+    if (msg.applied) setRescanning(false);
     if (msg.error) console.warn(`[audio] ${msg.error}`);
     renderDeviceLists();  // what is really in use - after an error too
     // macOS denied the server the microphone: every local input records silence.

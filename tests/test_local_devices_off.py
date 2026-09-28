@@ -124,3 +124,17 @@ def test_a_side_saved_as_off_is_not_taken_for_a_device(tmp_path):
     pc.set("input_device", "off")
     pc.set("output_device", "off")
     assert cli.saved_device(pc, "input_device", lambda device: None) is None  # no device to restore
+
+
+def test_a_rescan_finds_the_devices_in_use_again_by_name(monkeypatch):
+    from sts import pipeline
+
+    after = [  # the list after plugging in a USB interface: indices shifted
+        {"name": "MacBook Pro Microphone", "max_input_channels": 1, "max_output_channels": 0},
+        {"name": "USB Interface", "max_input_channels": 2, "max_output_channels": 2},
+        {"name": "Loopback", "max_input_channels": 2, "max_output_channels": 2},
+    ]
+    monkeypatch.setattr(pipeline.sd, "query_devices", lambda *args: after)
+    assert pipeline._device_by_name("Loopback", "input", 1) == 2  # was index 1 before
+    assert pipeline._device_by_name("Unplugged Mic", "input", 4) is None  # gone: system default
+    assert pipeline._device_by_name(None, "output", None) is None  # the system default stays that

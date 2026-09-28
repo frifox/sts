@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import sounddevice as sd
 import torch
 
 from sts.asr import create_asr
@@ -141,6 +142,30 @@ class _Clip:
     @property
     def seconds(self) -> float:
         return self.pause_before + self.audio.size / self.sample_rate
+
+
+def _device_name(index: int | None, kind: str) -> str | None:
+    """The name of audio device `index` (None: the system default - not a
+    specific device)."""
+    if index is None:
+        return None
+    try:
+        return sd.query_devices(index, kind)["name"]
+    except Exception:
+        return None
+
+
+def _device_by_name(name: str | None, kind: str, index: int | None) -> int | None:
+    """The index `name` has now (the device list was just re-read), or None
+    - the system default - if it's gone. A device that had no name to go by
+    keeps `index`'s default meaning."""
+    if name is None:
+        return None if index is None else index
+    for i, device in enumerate(sd.query_devices()):
+        if device["name"] == name and device[f"max_{kind}_channels"] > 0:
+            return i
+    print(f"[audio] {kind} device {name!r} is gone after the rescan; using the system default")
+    return None
 
 
 def _running_average(previous: float | None, value: float, weight: float = 0.3) -> float:
@@ -299,7 +324,7 @@ class Pipeline:
     _INSTANT_ACTIONS = frozenset({
         "start", "stop", "voice_on", "voice_off", "translate_on", "translate_off", "reset",
         "test_output", "train_start", "train_stop", "set_output_volume", "show_unfinished",
-        "refresh_devices", "set_audio_devices", "mic_start", "mic_stop",
+        "refresh_devices", "rescan_devices", "set_audio_devices", "mic_start", "mic_stop",
         "design_generate", "design_play",
     })
 
@@ -379,7 +404,7 @@ class Pipeline:
             self._select_speaker(None)  # picking a built-in voice drops any cloned/trained one
             if self._persistent_config is not None:
                 self._persistent_config.set(f"voice:{self.cfg.tts.backend}", f"default:{voice}")
-        elif action in ("refresh_devices", "set_audio_devices", "mic_start", "mic_stop"):
+        elif action in ("refresh_devices", "rescan_devices", "set_audio_devices", "mic_start", "mic_stop"):
             threading.Thread(target=self._handle_device_action, args=(action, data), daemon=True).start()
             return
         elif action == "set_output_volume":
@@ -586,6 +611,9 @@ class Pipeline:
         if action == "refresh_devices":
             self._broadcast_devices()
             return
+        if action == "rescan_devices":
+            self._rescan_audio_devices()
+            return
         if action == "mic_start":
             with self._device_lock:
                 if self.cfg.audio.source != "browser":
@@ -679,6 +707,40 @@ class Pipeline:
                     )
             self._broadcast_devices(applied=True)
         self._broadcast_status()  # audio.source may have just changed too
+
+    def _rescan_audio_devices(self) -> None:
+        """The page's refresh button: finds audio devices plugged in (or
+        removed) since start-up. PortAudio only lists the machine's devices
+        when it starts, so it's restarted - which closes every audio stream
+        (the output waits for the clip playing to finish) - and the devices
+        in use are found again by name, since their numbers can change.
+        One that's gone falls back to the system default."""
+        with self._device_lock:
+            audio = self.cfg.audio
+            input_name = _device_name(audio.input_device, "input")
+            output_name = _device_name(audio.output_device, "output")
+            self.capture.stop()
+            try:
+                self.playback.while_idle(reinitialize_audio_system)
+            except Exception as exc:
+                print(f"[audio] couldn't rescan the audio devices: {exc!r}")
+            audio.input_device = _device_by_name(input_name, "input", audio.input_device)
+            audio.output_device = _device_by_name(output_name, "output", audio.output_device)
+            if audio.source == "alsa":
+                try:
+                    self.capture.start()
+                except Exception as exc:
+                    print(f"[audio] input device didn't reopen after the rescan ({exc}); using the system default")
+                    audio.input_device = None
+                    self.capture.start()
+            if self._persistent_config is not None:
+                for key, device, on in (("input_device", audio.input_device, audio.source != "none"),
+                                        ("output_device", audio.output_device, audio.output_enabled)):
+                    if on:
+                        self._persistent_config.set(key, "" if device is None else str(device))
+            vlog("audio", f"rescanned audio devices: input={audio.input_device}, output={audio.output_device}")
+        self._broadcast_devices(applied=True)
+        self._broadcast_status()
 
     def _handle_mic_frame(self, payload: bytes) -> None:
         """One block_ms worth of PCM pushed by the browser tab currently
