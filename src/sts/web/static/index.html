@@ -1031,6 +1031,8 @@
     const norm = (s) => s.replace(/\s+/g, ' ').trim();
     if (!recentSentences.length || norm(recentSentences[0]) !== norm(text)) return false;
     const rest = recentSentences.slice(1);
+    const container = renderMode === 'portrait' ? '#portrait-grid' : '#original-lines';
+    fadeOutClock(document.querySelector(`${container} .recent > .finalize-clock`));
     finalizeTimers = finalizeTimers.slice(1);  // the rest keep theirs; the server's update follows
     setRecentOriginal(rest.join(' '), rest);
     return true;
@@ -1108,6 +1110,26 @@
       return span;
     }));
     drawFinalizeClocks();
+  }
+
+  // A promoted sentence's clock fades out where it was (0.2 s) instead of
+  // vanishing: a copy of it, as it looks right now, is left there to fade,
+  // while the real one goes on to the next sentence.
+  function fadeOutClock(clock) {
+    if (!clock || clock.classList.contains('idle')) return;
+    const box = clock.getBoundingClientRect();
+    const look = getComputedStyle(clock);
+    const ghost = document.createElement('span');
+    Object.assign(ghost.style, {
+      position: 'fixed', left: `${box.left}px`, top: `${box.top}px`,
+      width: `${box.width}px`, height: `${box.height}px`, boxSizing: 'border-box',
+      borderRadius: '50%', border: `${look.borderTopWidth} solid ${look.borderTopColor}`,
+      backgroundColor: look.backgroundColor, backgroundImage: look.backgroundImage,
+      opacity: look.opacity, zIndex: 5, pointerEvents: 'none', transition: 'opacity 0.2s ease',
+    });
+    document.body.appendChild(ghost);
+    requestAnimationFrame(() => { ghost.style.opacity = '0'; });
+    setTimeout(() => ghost.remove(), 300);
   }
 
   // The clock for the `index`th not-yet-final sentence (0: the first).
