@@ -66,3 +66,12 @@ def test_voice_off_clears_what_was_still_to_be_spoken():
     p._clear_voice_states()
     assert p.broadcaster.states[-2:] == [(5, None), (6, None)]
     assert p._voice_states == {}
+
+
+def test_the_generating_estimate_comes_from_recent_speed_and_pace():
+    import pytest
+
+    p = _pipeline()
+    assert p._voice_generation_estimate("Hello there.") is None  # nothing voiced yet
+    p._voice_rtf, p._voice_pace = 0.41, 0.07  # 0.41x real time, 70 ms of speech per character
+    assert p._voice_generation_estimate("x" * 100) == pytest.approx(0.41 * 0.07 * 100)
