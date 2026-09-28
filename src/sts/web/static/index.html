@@ -1112,7 +1112,7 @@
     drawFinalizeClocks();
   }
 
-  // A promoted sentence's clock fades out where it was (1 s) instead of
+  // A promoted sentence's clock fades out where it was (0.5 s) instead of
   // vanishing: a copy of it, as it looks right now, is left there to fade,
   // while the real one goes on to the next sentence.
   function fadeOutClock(clock) {
@@ -1125,11 +1125,11 @@
       width: `${box.width}px`, height: `${box.height}px`, boxSizing: 'border-box',
       borderRadius: '50%', border: `${look.borderTopWidth} solid ${look.borderTopColor}`,
       backgroundColor: look.backgroundColor, backgroundImage: look.backgroundImage,
-      opacity: look.opacity, zIndex: 5, pointerEvents: 'none', transition: 'opacity 1s ease',
+      opacity: look.opacity, zIndex: 5, pointerEvents: 'none', transition: 'opacity 0.5s ease',
     });
     document.body.appendChild(ghost);
     requestAnimationFrame(() => { ghost.style.opacity = '0'; });
-    setTimeout(() => ghost.remove(), 1100);
+    setTimeout(() => ghost.remove(), 600);
   }
 
   // The clock for the `index`th not-yet-final sentence (0: the first).
