@@ -1137,8 +1137,7 @@
   // keyed by caption seq): queued = an empty ring; generating = the ring
   // filling clockwise with orange over the server's estimate of how long it
   // takes (an hourglass in it while there's no estimate yet); generated =
-  // orange; playing = green with a play triangle; played = green with a
-  // check mark. Shown only while Voice is on
+  // orange; playing = green with a play triangle; played = plain green. Shown only while Voice is on
   // (body.voice-on).
   const voiceStates = new Map();
   const GREEN = '#4cbb6c', ORANGE = '#e0864c', DARK = '#0b0b0f';
@@ -1148,7 +1147,7 @@
     generating: [null, '<path d="M8.5 6.5h7M8.5 17.5h7M9.5 6.5c0 3.2 5 3.6 5 5.5s-5 2.3-5 5.5M14.5 6.5c0 3.2-5 3.6-5 5.5s5 2.3 5 5.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>'],
     generated: [ORANGE, ''],
     playing: [GREEN, `<path d="M10 7.8l6.2 4.2-6.2 4.2z" fill="${DARK}"/>`],
-    played: [GREEN, `<path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="${DARK}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>`],
+    played: [GREEN, ''],
   };
   const voiceEstimates = new Map();  // seq -> {estimateS, at: performance.now()}, while generating
   let voiceFrame = null;
