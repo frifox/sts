@@ -77,6 +77,11 @@ class Translator:
         # MADLAD detects the source language itself; only the target is named.
         self._prefix = f"<2{cfg.target_lang}> "
 
+    def memory_bytes(self) -> int:
+        from sts.gpu import model_bytes
+
+        return model_bytes(self.model)
+
     def translate(self, text: str) -> str:
         return " ".join(self.translate_sentences(text)).strip()
 

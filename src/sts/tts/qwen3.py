@@ -161,6 +161,14 @@ class Qwen3TTSSynthesizer:
         self._lora_models: dict[str, tuple[Qwen3TTSModel, str]] = {}  # speaker_id -> (model, speaker_name)
         self._active_lora_speaker_id: str | None = None
 
+    def memory_bytes(self) -> int:
+        """Every Qwen3 model currently loaded: the base cloning model, the
+        preset-voice model, the voice designer, and trained (LoRA) voices."""
+        from sts.gpu import model_bytes
+
+        loras = [model for model, _ in self._lora_models.values()]
+        return model_bytes(self.model, self._custom_model, self._design_model, *loras)
+
     def _sampling(self) -> dict:
         """Sampling settings that keep delivery consistent between sentences."""
         return dict(

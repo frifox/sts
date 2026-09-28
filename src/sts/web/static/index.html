@@ -687,6 +687,7 @@
           <div class="engine-info">
             <div>Model: <b id="asr-info-model">–</b></div>
             <div>Device: <b id="asr-info-device">–</b></div>
+            <div><span id="asr-info-memory-label">VRAM</span>: <b id="asr-info-memory" title="Memory taken by the model weights (not counting working memory while it runs)">–</b></div>
             <div>Input: <b id="asr-info-source">–</b></div>
           </div>
           <div class="mic-row">
@@ -700,6 +701,7 @@
           <div class="engine-info">
             <div>Model: <b id="translate-info-model">–</b></div>
             <div>Device: <b id="translate-info-device">–</b></div>
+            <div><span id="translate-info-memory-label">VRAM</span>: <b id="translate-info-memory" title="Memory taken by the model weights (not counting working memory while it runs)">–</b></div>
           </div>
           <label id="render-mode-label">Render</label>
           <div class="render-mode" role="group" aria-labelledby="render-mode-label">
@@ -714,6 +716,7 @@
           <div class="engine-info">
             <div>Model: <b id="tts-info-model">–</b></div>
             <div>Device: <b id="tts-info-device">–</b></div>
+            <div><span id="tts-info-memory-label">VRAM</span>: <b id="tts-info-memory" title="Memory taken by the model weights (not counting working memory while it runs)">–</b></div>
           </div>
           <label for="voice-select">Voice</label>
           <select id="voice-select" title="Voice: built-in (Default) or a saved trained voice (Custom)"></select>
@@ -1338,7 +1341,8 @@
     // 'engines' message replaces this once the backend is back.
     for (const id of ['asr-info-model', 'asr-info-device', 'asr-info-source',
                        'translate-info-model', 'translate-info-device',
-                       'tts-info-model', 'tts-info-device']) {
+                       'tts-info-model', 'tts-info-device',
+                       'asr-info-memory', 'translate-info-memory', 'tts-info-memory']) {
       document.getElementById(id).textContent = '–';
     }
   }
@@ -1553,6 +1557,17 @@
     document.getElementById('translate-info-device').textContent = msg.translation?.device || '–';
     document.getElementById('tts-info-model').textContent = msg.tts?.model || '–';
     document.getElementById('tts-info-device').textContent = msg.tts?.device || '–';
+    for (const [key, info] of [['asr', msg.asr], ['translate', msg.translation], ['tts', msg.tts]]) {
+      // Weights' memory: on the GPU (VRAM; unified memory on Apple Silicon), or in RAM on the CPU.
+      document.getElementById(`${key}-info-memory-label`).textContent = info?.device === 'cpu' ? 'RAM' : 'VRAM';
+      document.getElementById(`${key}-info-memory`).textContent = formatBytes(info?.memory);
+    }
+  }
+
+  function formatBytes(bytes) {
+    if (typeof bytes !== 'number') return '–';
+    const gb = bytes / 1024 ** 3;
+    return gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
   }
 
   function applyRtf(msg) {

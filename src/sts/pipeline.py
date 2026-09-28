@@ -836,20 +836,41 @@ class Pipeline:
             ]
             self.broadcaster.broadcast_library(speakers)
 
+    def _engines_info(self) -> dict:
+        """Model, device and memory (bytes of model weights - see
+        sts.gpu.model_bytes) per stage, for the header dropdowns."""
+
+        def memory(component) -> int | None:
+            try:
+                return component.memory_bytes()
+            except Exception:
+                return None
+
+        tts_model = self.cfg.tts.qwen3_model_name if self.cfg.tts.backend == "qwen3" else self.cfg.tts.model_name
+        return {
+            "asr": {"model": ASR_MODEL_NAME, "device": self.cfg.asr.device, "memory": memory(self.asr)},
+            "translation": {
+                "model": self.cfg.translation.model_name, "device": self.cfg.translation.device,
+                "memory": memory(self.translator),
+            },
+            "tts": {"model": tts_model, "device": self.cfg.tts.device, "memory": memory(self.tts)},
+        }
+
     def _broadcast_engines(self) -> None:
-        """Model/device info for the header dropdowns - fixed for the life
-        of the process (set from CLI flags at startup)."""
         if self.broadcaster:
-            tts_model = (
-                self.cfg.tts.qwen3_model_name if self.cfg.tts.backend == "qwen3" else self.cfg.tts.model_name
-            )
-            self.broadcaster.broadcast_engines(
-                {
-                    "asr": {"model": ASR_MODEL_NAME, "device": self.cfg.asr.device},
-                    "translation": {"model": self.cfg.translation.model_name, "device": self.cfg.translation.device},
-                    "tts": {"model": tts_model, "device": self.cfg.tts.device},
-                }
-            )
+            self._last_engines = self._engines_info()
+            self.broadcaster.broadcast_engines(self._last_engines)
+
+    def _check_engines(self) -> None:
+        """Watchdog pass: re-sends the engines info when a stage's memory has
+        changed - the voice stage loads and drops models as it goes (Qwen3's
+        voice designer, preset model, trained voices) - at most every 5 s."""
+        now = time.monotonic()
+        if now - getattr(self, "_last_engines_check", 0.0) < 5.0:
+            return
+        self._last_engines_check = now
+        if self.broadcaster and self._engines_info() != getattr(self, "_last_engines", None):
+            self._broadcast_engines()
 
     # -- pipeline stages -----------------------------------------------
 
@@ -1308,7 +1329,7 @@ class Pipeline:
 
     def _audio_watchdog_loop(self) -> None:
         while not self._stop.wait(1.0):
-            for check in (self._check_audio_health, self._check_stage_threads):
+            for check in (self._check_audio_health, self._check_stage_threads, self._check_engines):
                 try:
                     check()
                 except Exception as exc:  # a health check must never take itself down

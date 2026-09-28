@@ -118,6 +118,11 @@ class XTTSSynthesizer:
         # Running speech level of the pieces spoken so far, per voice (see stream_chunks).
         self._voice_levels: dict[tuple, float] = {}
 
+    def memory_bytes(self) -> int:
+        from sts.gpu import model_bytes
+
+        return model_bytes(self.tts)
+
     def set_default_voice(self, voice: str) -> None:
         """Picks which built-in voice is used when no cloned voice is active."""
         voice = self.cfg.resolve_voice(voice)

@@ -95,6 +95,11 @@ class GigaAMASR:
         self.model = model.to(cfg.device).eval()
         self._cache: OrderedDict[bytes, str] = OrderedDict()
 
+    def memory_bytes(self) -> int:
+        from sts.gpu import model_bytes
+
+        return model_bytes(self.model)
+
     def close(self) -> None:
         """Releases the model's GPU memory now, even if something (a
         traceback, a stray reference) still holds on to this object."""
