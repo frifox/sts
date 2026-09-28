@@ -170,3 +170,17 @@ def test_finalize_timer_shows_the_last_5_seconds_of_silence_without_an_end_mark(
     t.add(_samples(7.0, 9.0))
     t.step()
     assert t.finalize_timer == pytest.approx((3.0, 5.0))
+
+
+def test_every_open_sentence_has_its_own_finalize_timer():
+    asr = _Asr([("Первое.", 1.0, 1.5), ("Второе.", 2.0, 2.5), ("Третье", 3.0, 3.5)])
+    t = Transcript(asr)
+    t.add(_samples(0, 4))
+    assert t.step() == ([], ["Первое.", "Второе.", "Третье"])  # all first seen at 4.0
+    assert t.finalize_timers == [pytest.approx((5.0, 5.0)), pytest.approx((5.0, 5.0)), None]  # "Третье": no end mark
+    asr.script = [("Первое.", 1.0, 1.5), ("Второе!", 2.0, 2.5), ("Третье", 3.0, 3.5)]
+    t.add(_samples(4, 6))
+    t.step()
+    # "Второе" changed at 6.0 and starts over; "Первое." keeps counting.
+    assert t.finalize_timers[0] == pytest.approx((3.0, 5.0))
+    assert t.finalize_timers[1] == pytest.approx((5.0, 5.0))

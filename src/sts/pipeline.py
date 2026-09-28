@@ -215,7 +215,7 @@ class Pipeline:
         self._original_seq = 0  # next sequence number for a broadcast original sentence
         self._last_final_end: float | None = None  # when the last locked sentence ended
         self._recent_text = ""  # the not-yet-locked caption text the page last got
-        self._finalize_timer: tuple[float, float] | None = None  # the finalize timer the page last got
+        self._finalize_timers: list = []  # the finalize timers the page last got
         self._last_caption_step = time.monotonic()
         # Rolling per-stage (processing_s, audio_s) readings for the header's
         # RTF display, each stage's own deque touched only by that stage's
@@ -953,14 +953,14 @@ class Pipeline:
         self._publish_finalize_timer()
 
     def _publish_finalize_timer(self) -> None:
-        """How far the first still-open caption sentence is from being
-        finalized by a time rule (Transcript.finalize_timer) - the page draws
-        it as a circle emptying clockwise - sent whenever it changes."""
-        timer = self.transcript.finalize_timer
-        if timer != self._finalize_timer:
-            self._finalize_timer = timer
+        """How far each still-open caption sentence is from being finalized
+        by a time rule (Transcript.finalize_timers) - the page draws them as
+        circles emptying clockwise - sent whenever they change."""
+        timers = list(self.transcript.finalize_timers)
+        if timers != self._finalize_timers:
+            self._finalize_timers = timers
             if self.broadcaster:
-                self.broadcaster.broadcast_finalize_timer(timer)
+                self.broadcaster.broadcast_finalize_timers(timers)
 
     def _publish_captions(self, final: list[Sentence], still_open: list[str]) -> None:
         """Locked sentences: shown as final, checked for Bible references,

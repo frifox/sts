@@ -166,16 +166,17 @@ class CaptionBroadcaster:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
-    def broadcast_finalize_timer(self, timer: tuple[float, float] | None) -> None:
-        """(seconds left, the whole wait) before the first still-open caption
-        sentence is finalized - drawn as a circle emptying clockwise - or
-        None while no finalize rule is running. Not replayed on connect: it
-        changes with every re-transcription anyway."""
+    def broadcast_finalize_timers(self, timers: list[tuple[float, float] | None]) -> None:
+        """Per still-open caption sentence (as in the last original_recent):
+        [seconds left, the whole wait] before it's finalized - drawn as a
+        circle emptying clockwise - or null while nothing is pending for it.
+        Not replayed on connect: it changes with every re-transcription."""
         if self.loop is None:
             return
-        message = {"type": "finalize_timer", "left": None, "total": None}
-        if timer is not None:
-            message.update(left=round(timer[0], 2), total=round(timer[1], 2))
+        message = {
+            "type": "finalize_timers",
+            "timers": [None if timer is None else [round(timer[0], 2), round(timer[1], 2)] for timer in timers],
+        }
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
     def broadcast_translated(self, text: str, seq: int | None = None, batch: int | None = None) -> None:

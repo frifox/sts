@@ -126,7 +126,7 @@ class Transcript:
 
     CONTEXT_S = 1.5
     # How long before the silence and force rules finalize a sentence they're
-    # reported (finalize_timer), as a wait of this length.
+    # reported (finalize_timers), as a wait of this length.
     WARN_S = 5.0
 
     def __init__(self, asr, after_unchanged: float = 5.0, force_after: float = 30.0, sample_rate: int = 16_000,
@@ -135,12 +135,14 @@ class Transcript:
         self.after_unchanged = after_unchanged  # 0 turns it off
         self.force_after = force_after  # 0 turns it off
         self.after_silence = after_silence  # 0 turns it off
-        # (seconds left, the whole wait) before the first still-open sentence
-        # is finalized: by the 5 s rule once it has its end mark, or in the
-        # last WARN_S before the silence or force rule - whichever is soonest.
-        # None otherwise. As of the last step(); for the page's finalize
-        # indicator.
-        self.finalize_timer: tuple[float, float] | None = None
+        # Per still-open sentence (the same ones, in the same order, as the
+        # texts step() returns): (seconds left, the whole wait) before it's
+        # finalized - by the 5 s rule once it has its end mark, or in the last
+        # WARN_S before the silence or force rule, whichever is soonest - or
+        # None. A later sentence's can run out while an earlier one is still
+        # open: it then waits for that one (sentences are final in order).
+        # As of the last step(); for the page's finalize indicators.
+        self.finalize_timers: list[tuple[float, float] | None] = []
         self.sample_rate = sample_rate
         # add() is called from the capture side while step() runs on another
         # thread; the lock covers the buffer, not the (slow) transcription.
@@ -156,7 +158,7 @@ class Transcript:
             self._cut_s = 0.0  # words centered before this are already locked
             # (text, unchanged since) of each still-open sentence, as of the last step().
             self._open_seen: list[tuple[str, float]] = []
-            self.finalize_timer = None
+            self.finalize_timers = []
             self._generation += 1  # a step() running across this drops its result
 
     def add(self, frame: np.ndarray) -> None:
@@ -205,7 +207,8 @@ class Transcript:
             still_open = sentences[n_locked:]
             self._open_seen = [(sentence.text, since) for sentence, since in
                                zip(still_open, unchanged_since[n_locked:])]
-            self.finalize_timer = self._finalize_timer(still_open, unchanged_since[n_locked:], now_s)
+            timers = [self._finalize_timer(still_open, i, since, now_s)
+                      for i, since in enumerate(unchanged_since[n_locked:])]
             if n_locked:
                 self._cut_s = sentences[n_locked - 1].end
             # Audio before the first still-open word (less CONTEXT_S) is done
@@ -215,24 +218,31 @@ class Transcript:
             drop = int(min(max(0.0, keep_from_s - offset_s), len(audio) / self.sample_rate) * self.sample_rate)
             self._frames = [audio[drop:], *self._frames]
             self._offset_s = offset_s + drop / self.sample_rate
-            return _cleaned(final), self._open_texts(still_open)
+            return _cleaned(final), self._open_texts(still_open, timers)
+
+    @property
+    def finalize_timer(self) -> tuple[float, float] | None:
+        """The first still-open sentence's entry of finalize_timers."""
+        return self.finalize_timers[0] if self.finalize_timers else None
 
     @property
     def finalize_in_s(self) -> float | None:
         """Seconds left on finalize_timer, if it's running."""
         return self.finalize_timer[0] if self.finalize_timer else None
 
-    def _finalize_timer(self, still_open: list[Sentence], unchanged_since: list[float],
+    def _finalize_timer(self, still_open: list[Sentence], i: int, unchanged_since: float,
                         now_s: float) -> tuple[float, float] | None:
-        if not still_open:
-            return None
+        """still_open[i]'s entry of finalize_timers."""
+        sentence = still_open[i]
         timers = []  # (seconds left, whole wait) per rule that's due to be shown
-        if self.after_unchanged > 0 and still_open[0].complete:
-            timers.append((self.after_unchanged - (now_s - unchanged_since[0]), self.after_unchanged))
-        for rule_s, left in (
-            (self.after_silence, self.after_silence - (now_s - still_open[-1].end)),
-            (self.force_after, self.force_after - (now_s - still_open[0].start)),
-        ):
+        if self.after_unchanged > 0 and sentence.complete:
+            timers.append((self.after_unchanged - (now_s - unchanged_since), self.after_unchanged))
+        rules = [(self.after_silence, self.after_silence - (now_s - still_open[-1].end))]
+        if sentence.complete:
+            # A sentence without its end mark is still being built: only the
+            # silence rule (the speaker stopped) is shown for it.
+            rules.append((self.force_after, self.force_after - (now_s - sentence.start)))
+        for rule_s, left in rules:
             if rule_s > 0 and left <= self.WARN_S:
                 timers.append((left, min(self.WARN_S, rule_s)))
         if not timers:
@@ -250,8 +260,16 @@ class Transcript:
         self.clear()
         return sentences
 
-    def _open_texts(self, still_open: list[Sentence]) -> list[str]:
-        self._last_open = _cleaned(still_open)
+    def _open_texts(self, still_open: list[Sentence], timers: list | None = None) -> list[str]:
+        """The still-open sentences' cleaned text (sets finalize_timers to
+        match: a sentence cleaned away takes its timer with it)."""
+        kept = [
+            (Sentence(clean_transcript(s.text), s.start, s.end, s.complete), timer)
+            for s, timer in zip(still_open, timers or [None] * len(still_open))
+        ]
+        kept = [(sentence, timer) for sentence, timer in kept if sentence.text]
+        self._last_open = [sentence for sentence, _ in kept]
+        self.finalize_timers = [timer for _, timer in kept]
         return [sentence.text for sentence in self._last_open]
 
 

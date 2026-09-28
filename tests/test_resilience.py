@@ -23,7 +23,7 @@ def _stub():
     p._threads = {}
     p._rtf_window = {}
     p._last_asr_audio_s = 0.0
-    p._finalize_timer = None
+    p._finalize_timers = []
     return p
 
 
@@ -124,7 +124,7 @@ def test_stop_finalizes_what_was_heard_so_it_is_still_translated():
     p._recent_text = "Недосказанное"
 
     class Transcript:
-        finalize_timer = None
+        finalize_timers = []
 
         def flush(self):
             return [Sentence("Недосказанное", 3.0, 4.0, False)]
@@ -241,17 +241,17 @@ def test_a_broadcast_survives_a_page_disconnecting_mid_send():
     assert sorted(received) == ["a", "b", "c"]
 
 
-def test_finalize_timer_is_sent_whenever_it_changes():
+def test_finalize_timers_are_sent_whenever_they_change():
     p = _stub()
     sent = []
 
     class Broadcaster:
-        def broadcast_finalize_timer(self, timer):
-            sent.append(timer)
+        def broadcast_finalize_timers(self, timers):
+            sent.append(timers)
 
     p.broadcaster = Broadcaster()
     p.transcript = Transcript(None)
-    for timer in (None, (5.0, 5.0), (5.0, 5.0), (4.5, 5.0), (0.0, 5.0), None, None):
-        p.transcript.finalize_timer = timer
+    for timers in ([], [(5.0, 5.0), None], [(5.0, 5.0), None], [(4.5, 5.0), (5.0, 5.0)], [], []):
+        p.transcript.finalize_timers = timers
         p._publish_finalize_timer()
-    assert sent == [(5.0, 5.0), (4.5, 5.0), (0.0, 5.0), None]  # only changes are sent
+    assert sent == [[(5.0, 5.0), None], [(4.5, 5.0), (5.0, 5.0)], []]  # only changes are sent

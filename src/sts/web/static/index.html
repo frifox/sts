@@ -152,13 +152,17 @@
     border-top: 1px solid rgba(255, 255, 255, 0.12);
     padding-top: 0.25em;
   }
-  .recent .recent-first, .recent .recent-rest { opacity: 0.4; transition: opacity 0.3s ease; }
+  .recent .recent-first, .recent .recent-sentence { opacity: 0.4; transition: opacity 0.3s ease; }
   .recent.pending .recent-first { opacity: 1; }
+  #portrait-grid .recent .recent-sentence.pending { opacity: 1; }
   /* Portrait: one not-yet-final sentence per line, like the final rows
      above (the same gap as the grid's row-gap: 0.6em of its 1rem). */
   #portrait-grid .recent .recent-first,
   #portrait-grid .recent .recent-sentence { display: block; }
-  #portrait-grid .recent .recent-sentence { margin-top: 0.6rem; }
+  #portrait-grid .recent .recent-sentence { margin-top: 0.6rem; position: relative; }
+  /* Each later sentence's own clock, left of its first line (portrait only). */
+  #portrait-grid .recent .recent-sentence .finalize-clock { top: 0.32em; }
+  #original-lines .recent .recent-sentence .finalize-clock { display: none; }
 
   /* Portrait mode has no separate original/translated panels to hide (both
      columns live in one shared panel) - Caption/Translate turning off is
@@ -339,7 +343,7 @@
 
   /* Left of the first not-yet-final sentence, in the panel's padding - so it
      never moves the text - once that sentence is about to be finalized
-     (see setFinalizeTimer): starts full and empties clockwise from 12
+     (see setFinalizeTimers): starts full and empties clockwise from 12
      o'clock as the wait runs out - --left is the fraction left. */
   .finalize-clock {
     --left: 1;
@@ -1024,7 +1028,7 @@
     const norm = (s) => s.replace(/\s+/g, ' ').trim();
     if (!recentSentences.length || norm(recentSentences[0]) !== norm(text)) return false;
     const rest = recentSentences.slice(1);
-    setFinalizeTimer(null);  // it was that sentence's; the next one's (if any) comes with the server's update
+    finalizeTimers = finalizeTimers.slice(1);  // the rest keep theirs; the server's update follows
     setRecentOriginal(rest.join(' '), rest);
     return true;
   }
@@ -1083,9 +1087,7 @@
   function setRecentContent(el, sentences) {
     if (!el.querySelector('.finalize-clock')) {
       el.textContent = '';
-      const clock = document.createElement('span');
-      clock.className = 'finalize-clock';
-      clock.title = 'Finalized when this runs out';
+      const clock = makeFinalizeClock(0);
       const first = document.createElement('span');
       first.className = 'recent-first';
       const rest = document.createElement('span');
@@ -1095,39 +1097,56 @@
     el.querySelector('.recent-first').textContent = sentences[0] ?? '';
     // One span per sentence, so portrait can put each on its own line (the
     // leading space separates them in landscape's flowing paragraph).
-    el.querySelector('.recent-rest').replaceChildren(...sentences.slice(1).map((sentence) => {
+    // Each has its own finalize clock too - shown in portrait only.
+    el.querySelector('.recent-rest').replaceChildren(...sentences.slice(1).map((sentence, i) => {
       const span = document.createElement('span');
       span.className = 'recent-sentence';
-      span.textContent = ' ' + sentence;
+      span.append(makeFinalizeClock(i + 1), ' ' + sentence);
       return span;
     }));
     drawFinalizeClocks();
   }
 
-  // -- Finalize clock: the server's (seconds left, whole wait) before the
-  // first open sentence is finalized - once it has its end mark, or in the
-  // last few seconds before the silence/force rules - or null while nothing
-  // is pending (Transcript.finalize_timer). Animated between its updates,
+  // The clock for the `index`th not-yet-final sentence (0: the first).
+  function makeFinalizeClock(index) {
+    const clock = document.createElement('span');
+    clock.className = 'finalize-clock';
+    clock.dataset.index = String(index);
+    clock.title = 'Finalized when this runs out';
+    return clock;
+  }
+
+  // -- Finalize clocks: per not-yet-final sentence, the server's (seconds
+  // left, whole wait) before it's finalized - once it has its end mark, or
+  // in the last few seconds before the silence rule - or null while nothing
+  // is pending for it (Transcript.finalize_timers). Landscape shows the
+  // first sentence's; portrait each sentence's. Animated between updates,
   // which come with every re-transcription (~2/s).
-  let finalizeTimer = null;  // {left, total, at: performance.now() when received}
+  let finalizeTimers = [];  // per sentence: {left, total, at: performance.now() when received} or null
   let finalizeFrame = null;
-  function setFinalizeTimer(left, total) {
-    finalizeTimer = left == null || !total ? null : { left, total, at: performance.now() };
+  function setFinalizeTimers(timers) {
+    const at = performance.now();
+    finalizeTimers = (timers || []).map((t) => (t && t[1] ? { left: t[0], total: t[1], at } : null));
     drawFinalizeClocks();
   }
   function drawFinalizeClocks() {
-    let fraction = 1;
-    if (finalizeTimer) {
-      const left = finalizeTimer.left - (performance.now() - finalizeTimer.at) / 1000;
-      fraction = Math.min(1, Math.max(0, left / finalizeTimer.total));
-    }
+    let running = false;
+    const now = performance.now();
     for (const clock of document.querySelectorAll('.finalize-clock')) {
-      clock.classList.toggle('idle', !finalizeTimer);
-      clock.parentElement.classList.toggle('pending', !!finalizeTimer);
+      const timer = finalizeTimers[Number(clock.dataset.index || 0)] || null;
+      let fraction = 1;
+      if (timer) {
+        fraction = Math.min(1, Math.max(0, (timer.left - (now - timer.at) / 1000) / timer.total));
+        running = running || fraction > 0;
+      }
+      clock.classList.toggle('idle', !timer);
+      // The first clock's owner is the whole live caption (.recent), a later
+      // one's its own sentence: either is brightened while pending.
+      clock.parentElement.classList.toggle('pending', !!timer);
       clock.style.setProperty('--left', fraction.toFixed(4));
     }
     cancelAnimationFrame(finalizeFrame);
-    finalizeFrame = finalizeTimer && fraction > 0 ? requestAnimationFrame(drawFinalizeClocks) : null;
+    finalizeFrame = running ? requestAnimationFrame(drawFinalizeClocks) : null;
   }
 
   const showUnfinishedBtn = document.getElementById('btn-show-unfinished');
@@ -1290,7 +1309,7 @@
     portraitGrid.innerHTML = '';
     recentRow = null;
     recentOriginal = '';
-    setFinalizeTimer(null);
+    setFinalizeTimers([]);
     pendingTranslationCells.clear();
     dismissVerse();
     lastVerseMsg = null;
@@ -2070,7 +2089,7 @@
       volumeBars.forEach((bar) => bar.classList.remove('lit-quiet', 'lit-good'));
       outputBars.forEach((bar) => bar.classList.remove('lit-quiet', 'lit-good'));
       closeDropdowns();  // don't leave one open showing now-stale info across a reconnect
-      setFinalizeTimer(null);  // the server's timer stops with the connection
+      setFinalizeTimers([]);  // the server's timers stop with the connection
       resetEngineInfo();
       updateEngineAvailability();
       setTimeout(connect, 1000);
@@ -2084,8 +2103,8 @@
         if (renderMode === 'portrait') addPortraitOriginal(msg.text, opts, msg.seq); else addLine('original-lines', msg.text, opts, msg.seq);
       } else if (msg.type === 'original_recent') {
         setRecentOriginal(msg.text, msg.sentences);
-      } else if (msg.type === 'finalize_timer') {
-        setFinalizeTimer(msg.left, msg.total);
+      } else if (msg.type === 'finalize_timers') {
+        setFinalizeTimers(msg.timers);
       } else if (msg.type === 'translated') {
         if (renderMode === 'portrait') addPortraitTranslated(msg.text, { batch: msg.batch }, msg.seq); else addLine('translated-lines', msg.text, { batch: msg.batch }, msg.seq);
       }

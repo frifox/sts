@@ -333,7 +333,7 @@ def test_an_unfinished_sentence_waits_for_its_end_mark():
     assert t.finalize_timer is None  # nothing pending yet: the 30 s rule is 12 s away
     _feed(t, 28.0, fed)
     t.step()
-    assert t.finalize_timer == pytest.approx((4.0, 5.0))  # its last 5 s are shown
+    assert t.finalize_timer is None  # no end mark: still being built, so no indicator even now
     _feed(t, 32.0, fed)
     assert _texts(t.step()) == (["Второе"], [])
 
