@@ -358,7 +358,8 @@
   /* Left of the first not-yet-final sentence, in the panel's padding - so it
      never moves the text - once that sentence is about to be finalized
      (see setFinalizeTimers): starts full and empties clockwise from 12
-     o'clock as the wait runs out - --left is the fraction left. */
+     o'clock as the wait runs out - --left is the fraction left. Orange,
+     like the voice indicator's generating/generated (pending, then ready). */
   .finalize-clock {
     --left: 1;
     position: absolute;
@@ -369,14 +370,12 @@
     border-radius: 50%;
     border: 0.08em solid currentColor;
     box-sizing: border-box;
-    background: conic-gradient(transparent calc((1 - var(--left)) * 360deg), currentColor 0);
+    background: conic-gradient(transparent calc((1 - var(--left)) * 360deg), #e0864c 0);
   }
   .finalize-clock.idle { visibility: hidden; }
-  /* Faded like the not-yet-final text that isn't pending (.recent-rest). */
-  .recent .finalize-clock { opacity: 0.4; }
   /* Time's up - ready to be finalized (or waiting only on the sentences
-     above it): a solid green dot instead of an empty ring. */
-  .recent .finalize-clock.done { background: #4cbb6c; border-color: #4cbb6c; opacity: 1; }
+     above it): a solid orange dot. */
+  .recent .finalize-clock.done { background: #e0864c; border-color: #e0864c; }
 
   .verse-chip:hover { background: rgba(201, 162, 75, 0.18); }
   .verse-chip.show { display: inline-block; }
