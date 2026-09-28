@@ -56,6 +56,7 @@ from sts.tts import create_synthesizer
 from sts.transcript import Sentence, Transcript
 from sts.tts.voice_library import BUNDLED_VOICES_DIR, VoiceLibrary
 from sts.web.server import CaptionBroadcaster
+from sts.worker import StageProcess
 
 # How far back the header's RTF readings look (seconds) - a single short
 # phrase's processing time can spike a one-shot RTF wildly (e.g. a 0.3s
@@ -116,6 +117,19 @@ def _free_gpu_memory() -> None:
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+
+def _stage_model(factory, cfg, name: str):
+    """`factory(cfg)`, in a process of its own when it runs on mps (see
+    sts.worker for why); elsewhere, in this process as before."""
+    if cfg.device == "mps":
+        return StageProcess(factory, cfg, name=f"sts-{name}")
+    return factory(cfg)
+
+
+def _wait_ready(model) -> None:
+    if isinstance(model, StageProcess):
+        model.wait_ready()
 
 
 @dataclass
@@ -211,12 +225,16 @@ class Pipeline:
         self.playback = AudioPlayback(cfg.audio)
         self._stage("Loading speech detector…")
         self.segmenter = SpeechSegmenter(cfg.audio, cfg.vad)  # for "Train voice" only
+        # On mps, translation and TTS each run in a process of their own (see
+        # sts.worker), started first so they load while ASR does.
+        self.translator = _stage_model(Translator, cfg.translation, "translation")
+        self.tts = _stage_model(create_synthesizer, cfg.tts, "tts")
         self._stage("Loading speech recognition…")
         self.asr = create_asr(cfg.asr)
         self._stage("Loading translation model…")
-        self.translator = Translator(cfg.translation)
+        _wait_ready(self.translator)
         self._stage(f"Loading voice synthesis ({cfg.tts.backend})…")
-        self.tts = create_synthesizer(cfg.tts)
+        _wait_ready(self.tts)
         self._stage("Loading voice library and Bible data…")
         self.voice_library = VoiceLibrary(cfg.tts.voice_library_dir, bundled_dir=BUNDLED_VOICES_DIR)
         self.bible_lookup = BibleLookup()
@@ -1525,3 +1543,6 @@ class Pipeline:
             thread.join(timeout=QUEUE_POLL_S * 2)
         self.capture.stop()
         self.playback.stop()
+        for model in (getattr(self, "translator", None), getattr(self, "tts", None)):
+            if isinstance(model, StageProcess):
+                model.close()

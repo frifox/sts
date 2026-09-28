@@ -2,10 +2,15 @@
 
 PyTorch's MPS (Metal) backend aborts the whole process with
 "failed assertion _status < MTLCommandBufferStatusCommitted" when two threads
-submit GPU work at once. The pipeline naturally does exactly that: the
-translation thread and the TTS thread both run models on the GPU. Every model
-call on `mps` therefore takes this one shared lock. On other devices there is
-nothing to share, so callers get their own private lock (or a no-op).
+submit GPU work at once. Every model call on `mps` therefore takes this one
+shared lock. On other devices there is nothing to share, so callers get their
+own private lock (or a no-op).
+
+The live pipeline avoids needing it across stages: on mps, translation and
+TTS each run in a process of their own (sts.worker), so this lock only ever
+sees one stage per process - it still guards a stage against its own other
+threads (captions vs. a voice-training transcription, the voice-design
+dialog vs. live synthesis).
 """
 
 import contextlib
