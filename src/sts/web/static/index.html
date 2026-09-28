@@ -584,6 +584,10 @@
   .device-option.is-active .device-check::after { content: '✓'; }
   #controls .device-option.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   .engine-dropdown .dropdown-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
+  .voice-select-row { display: flex; gap: 0.5rem; align-items: stretch; }
+  .voice-select-row select { flex: 1; min-width: 0; }
+  .engine-dropdown .voice-actions { flex-wrap: nowrap; }
+  .voice-actions button { flex: 1 1 0; white-space: nowrap; }
   .engine-dropdown .mic-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.7rem; }
   .engine-dropdown .mic-row button { flex: 0 0 auto; }
   #mic-status { font-size: 0.78rem; color: #9a9aa5; }
@@ -788,12 +792,14 @@
             <div><span id="tts-info-memory-label">VRAM</span>: <b id="tts-info-memory" title="Memory taken by the model weights (not counting working memory while it runs)">–</b></div>
           </div>
           <label for="voice-select">Voice</label>
-          <select id="voice-select" title="Voice: built-in (Default) or a saved trained voice (Custom)"></select>
-          <div class="dropdown-actions">
-            <button id="btn-create-voice" hidden title="Design a new voice from a text description (Qwen3 backend)">Create Voice</button>
-            <button id="btn-train">Train voice</button>
-            <button id="btn-save-voice" disabled title="Save the trained voice to the library">Save Voice</button>
+          <div class="voice-select-row">
+            <select id="voice-select" title="Voice: built-in (Default) or a saved trained voice (Custom)"></select>
             <button id="btn-delete-voice" hidden title="Delete the selected saved voice">Delete</button>
+          </div>
+          <div class="dropdown-actions voice-actions">
+            <button id="btn-create-voice" hidden title="Design a new voice from a text description (Qwen3 backend)">Design Voice</button>
+            <button id="btn-train" title="Clone the speaker's voice from what the input hears next">Clone</button>
+            <button id="btn-save-voice" disabled title="Save the cloned voice to the library">Save</button>
           </div>
         </div>
       </div>
@@ -1672,9 +1678,9 @@
     highlightLines();
 
     if (status.training) {
-      trainBtn.textContent = `Stop training (${status.training_seconds}s / ${status.training_target_seconds}s)`;
+      trainBtn.textContent = `Stop (${status.training_seconds}s / ${status.training_target_seconds}s)`;
     } else {
-      trainBtn.textContent = status.cloned ? 'Train voice (cloned ✓)' : 'Train voice';
+      trainBtn.textContent = status.cloned ? 'Clone ✓' : 'Clone';
     }
     trainBtn.classList.toggle('is-active', status.training);
     saveBtn.disabled = !status.can_save || status.training;
