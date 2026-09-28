@@ -182,6 +182,12 @@
      so pending not-yet-final text stays faded too. */
   body.voice-on .recent.pending .recent-first,
   body.voice-on #portrait-grid .recent .recent-sentence.pending { opacity: 0.4; }
+  /* The first sentence's finalize clock isn't inside its text (it belongs to
+     the whole .recent), so it's given the same fading explicitly; a later
+     sentence's clock is inside that sentence and fades with it. */
+  .recent > .finalize-clock { opacity: 0.4; transition: opacity 0.3s ease; }
+  .recent.pending > .finalize-clock { opacity: 1; }
+  body.voice-on .recent.pending > .finalize-clock { opacity: 0.4; }
   /* Portrait: one not-yet-final sentence per line, like the final rows
      above (the same gap as the grid's row-gap: 0.6em of its 1rem). */
   #portrait-grid .recent .recent-first,
