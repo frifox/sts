@@ -1182,7 +1182,9 @@
   // state -> [circle fill (null: just a ring), ring color, icon]
   const VOICE_LOOK = {
     queued: [null, 'currentColor', ''],
-    generating: [null, ORANGE, `<path d="M6.5 8l5.5 4-5.5 4zM12 8l5.5 4-5.5 4z" fill="${ORANGE}"/>`],
+    // Shifted right of the box's geometric center by the triangles' own
+    // lopsidedness (their area sits near their flat side), so it looks centered.
+    generating: [null, ORANGE, `<path d="M7.4 8l5.5 4-5.5 4zM12.9 8l5.5 4-5.5 4z" fill="${ORANGE}"/>`],
     generated: [ORANGE, ORANGE, ''],
     playing: [GREEN, GREEN, `<path d="M10 7.8l6.2 4.2-6.2 4.2z" fill="${DARK}"/>`],
     played: [GREEN, GREEN, ''],
