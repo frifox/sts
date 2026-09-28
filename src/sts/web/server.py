@@ -184,11 +184,10 @@ class CaptionBroadcaster:
         }
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
-    def broadcast_voice_state(self, seq: int, state: str | None, estimate_s: float | None = None) -> None:
+    def broadcast_voice_state(self, seq: int, state: str | None) -> None:
         """Voice progress of one translated sentence (by its caption seq):
         queued | generating | generated | playing | played, or None - no
-        longer going to be spoken (Voice off, Reset). With "generating",
-        `estimate_s`: how long the synthesis is expected to take."""
+        longer going to be spoken (Voice off, Reset)."""
         if state is None:
             self._voice_states.pop(seq, None)
         else:
@@ -198,8 +197,6 @@ class CaptionBroadcaster:
         if self.loop is None:
             return
         message = {"type": "voice_state", "seq": seq, "state": state}
-        if estimate_s is not None:
-            message["estimate_s"] = round(estimate_s, 2)
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
     def broadcast_translated(self, text: str, seq: int | None = None, batch: int | None = None) -> None:

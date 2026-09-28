@@ -168,10 +168,6 @@ def _device_by_name(name: str | None, kind: str, index: int | None) -> int | Non
     return None
 
 
-def _running_average(previous: float | None, value: float, weight: float = 0.3) -> float:
-    return value if previous is None else (1 - weight) * previous + weight * value
-
-
 class Pipeline:
     # Bumped by _reset(). ASR, translation, and TTS each note it before a
     # slow call and drop their result if it changed meanwhile - so text or
@@ -184,10 +180,6 @@ class Pipeline:
     _voice_states: dict | None = None
     _voice_generated: set | None = None
     _voice_now_playing: int | None = None
-    # Running averages over recently voiced sentences, for estimating how long
-    # the next one takes to generate (see _voice_generation_estimate).
-    _voice_rtf: float | None = None  # generation time / speech duration
-    _voice_pace: float | None = None  # speech seconds per character of text
     # Slow operator actions (anything that touches a voice or the models) run
     # here, one at a time and in order, on the control thread - see
     # handle_control. None until start(), in which case they run inline
@@ -1125,8 +1117,7 @@ class Pipeline:
         if not self.control.voice_enabled.is_set():
             vlog("tts", "voice is off, skipping synthesis")
             return
-        self._set_voice_state(seq, "generating", estimate_s=self._voice_generation_estimate(text))
-        spoken_s = generating_s = 0.0
+        self._set_voice_state(seq, "generating")
         generation = self._reset_generation
         t0 = time.monotonic()
         # Each piece is handed to the playback thread as soon as it is ready,
@@ -1142,7 +1133,6 @@ class Pipeline:
                 continue
             processing_s = time.monotonic() - t0
             audio_s = audio.size / sample_rate
-            generating_s, spoken_s = generating_s + processing_s, spoken_s + audio_s
             vlog("tts", f"synthesized {audio_s:.1f}s of speech in {processing_s:.2f}s "
                         f"({self._translations.qsize()} sentences waiting)")
             self._broadcast_rtf("voice", processing_s, audio_s)
@@ -1164,17 +1154,6 @@ class Pipeline:
             first_piece = False
             t0 = time.monotonic()
         self._voice_generation_done(seq)
-        if spoken_s > 0 and text:
-            self._voice_rtf = _running_average(self._voice_rtf, generating_s / spoken_s)
-            self._voice_pace = _running_average(self._voice_pace, spoken_s / len(text))
-
-    def _voice_generation_estimate(self, text: str) -> float | None:
-        """Seconds `text` should take to synthesize: its expected speech
-        duration (characters x recent seconds per character) times the
-        voice's recent real-time factor. None until a sentence has been voiced."""
-        if self._voice_rtf is None or self._voice_pace is None:
-            return None
-        return self._voice_rtf * self._voice_pace * len(text)
 
     # -- voice-state indicators ------------------------------------------
     # Per translated sentence, while Voice is on: queued -> generating ->
@@ -1188,7 +1167,7 @@ class Pipeline:
             self._voice_states, self._voice_generated = {}, set()
         return self._voice_state_lock
 
-    def _set_voice_state(self, seq: int | None, state: str | None, estimate_s: float | None = None) -> None:
+    def _set_voice_state(self, seq: int | None, state: str | None) -> None:
         if seq is None:
             return
         with self._voice_lock():
@@ -1198,10 +1177,7 @@ class Pipeline:
             else:
                 self._voice_states[seq] = state
         if self.broadcaster and hasattr(self.broadcaster, "broadcast_voice_state"):
-            if estimate_s is None:
-                self.broadcaster.broadcast_voice_state(seq, state)
-            else:
-                self.broadcaster.broadcast_voice_state(seq, state, estimate_s=estimate_s)
+            self.broadcaster.broadcast_voice_state(seq, state)
 
     def _voice_generation_done(self, seq: int | None) -> None:
         """All of `seq`'s speech is synthesized: "generated" if it isn't

@@ -1170,51 +1170,24 @@
   }
 
   // -- Voice progress of translated sentences (the server's voice_state,
-  // keyed by caption seq): queued = an empty ring; generating = the ring
-  // filling clockwise with orange over the server's estimate of how long it
-  // takes (an hourglass in it while there's no estimate yet); generated =
-  // orange; playing = green with a play triangle; played = plain green.
+  // keyed by caption seq): queued = an empty ring; generating = an orange
+  // ring with a fast-forward icon; generated = orange; playing = green with
+  // a play triangle; played = plain green.
   // Shown only while Voice is on (body.voice-on).
   const voiceStates = new Map();
   const GREEN = '#4cbb6c', ORANGE = '#e0864c', DARK = '#0b0b0f';
-  // state -> [circle fill (null: an empty ring), icon (dark on a filled circle, the text color in a ring)]
+  // state -> [circle fill (null: just a ring), ring color, icon]
   const VOICE_LOOK = {
-    queued: [null, ''],
-    generating: [null, '<path d="M8.5 6.5h7M8.5 17.5h7M9.5 6.5c0 3.2 5 3.6 5 5.5s-5 2.3-5 5.5M14.5 6.5c0 3.2-5 3.6-5 5.5s5 2.3 5 5.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>'],
-    generated: [ORANGE, ''],
-    playing: [GREEN, `<path d="M10 7.8l6.2 4.2-6.2 4.2z" fill="${DARK}"/>`],
-    played: [GREEN, ''],
+    queued: [null, 'currentColor', ''],
+    generating: [null, ORANGE, `<path d="M6.5 8l5.5 4-5.5 4zM12 8l5.5 4-5.5 4z" fill="${ORANGE}"/>`],
+    generated: [ORANGE, ORANGE, ''],
+    playing: [GREEN, GREEN, `<path d="M10 7.8l6.2 4.2-6.2 4.2z" fill="${DARK}"/>`],
+    played: [GREEN, GREEN, ''],
   };
-  const voiceEstimates = new Map();  // seq -> {estimateS, at: performance.now()}, while generating
-  let voiceFrame = null;
-  function setVoiceState(seq, state, estimateS) {
+  function setVoiceState(seq, state) {
     if (seq == null) return;
     if (state) voiceStates.set(seq, state); else voiceStates.delete(seq);
-    if (state === 'generating' && estimateS > 0) voiceEstimates.set(seq, { estimateS, at: performance.now() });
-    else voiceEstimates.delete(seq);
     drawVoiceState(seq);
-    drawVoiceProgress();
-  }
-  // The orange wedge of each sentence still generating: a pie from 12
-  // o'clock, clockwise, as far as its estimated time has gone (full at 100%).
-  function pieToFraction(fraction) {
-    if (fraction >= 0.999) return 'M12 2a10 10 0 1 1 0 20a10 10 0 1 1 0-20z';
-    const angle = fraction * 2 * Math.PI;
-    const x = 12 + 10 * Math.sin(angle), y = 12 - 10 * Math.cos(angle);
-    return `M12 12L12 2A10 10 0 ${fraction > 0.5 ? 1 : 0} 1 ${x.toFixed(3)} ${y.toFixed(3)}Z`;
-  }
-  function drawVoiceProgress() {
-    const now = performance.now();
-    let running = false;
-    for (const [seq, { estimateS, at }] of voiceEstimates) {
-      const fraction = Math.min(1, (now - at) / 1000 / estimateS);
-      running = running || fraction < 1;
-      for (const el of translatedElementsOf(seq)) {
-        el.querySelector(':scope > .voice-state .voice-pie')?.setAttribute('d', pieToFraction(fraction));
-      }
-    }
-    cancelAnimationFrame(voiceFrame);
-    voiceFrame = running ? requestAnimationFrame(drawVoiceProgress) : null;
   }
   function translatedElementsOf(seq) {
     return [
@@ -1239,15 +1212,8 @@
       }
       if (icon.dataset.state === state) continue;
       icon.dataset.state = state;
-      const [fill, mark] = VOICE_LOOK[state] || VOICE_LOOK.queued;
-      if (state === 'generating' && voiceEstimates.has(seq)) {
-        icon.innerHTML = `<path class="voice-pie" d="${pieToFraction(0)}" fill="${ORANGE}"/>`
-          + '<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>';
-        continue;
-      }
-      icon.innerHTML = fill
-        ? `<circle cx="12" cy="12" r="10" fill="${fill}" stroke="${fill}" stroke-width="2"/>${mark}`
-        : `<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>${mark}`;
+      const [fill, ring, mark] = VOICE_LOOK[state] || VOICE_LOOK.queued;
+      icon.innerHTML = `<circle cx="12" cy="12" r="10" fill="${fill || 'none'}" stroke="${ring}" stroke-width="2"/>${mark}`;
     }
   }
 
@@ -1441,7 +1407,6 @@
 
   function clearCaptions() {
     voiceStates.clear();
-    voiceEstimates.clear();
     document.getElementById('original-lines').innerHTML = '';
     document.getElementById('translated-lines').innerHTML = '';
     portraitGrid.innerHTML = '';
@@ -1558,7 +1523,6 @@
     // wiping it - see transformLandscapeToPortrait/transformPortraitToLandscape.
     if (newMode === 'portrait') transformLandscapeToPortrait(); else transformPortraitToLandscape();
     for (const seq of voiceStates.keys()) drawVoiceState(seq);  // the translated lines were rebuilt
-    drawVoiceProgress();
     renderRecentOriginal();
     try { localStorage.setItem('sts-render-mode', renderMode); } catch { /* ignore */ }
   }
@@ -2267,9 +2231,8 @@
       } else if (msg.type === 'translated') {
         if (renderMode === 'portrait') addPortraitTranslated(msg.text, { batch: msg.batch }, msg.seq); else addLine('translated-lines', msg.text, { batch: msg.batch }, msg.seq);
         drawVoiceState(msg.seq);
-        drawVoiceProgress();
       } else if (msg.type === 'voice_state') {
-        setVoiceState(msg.seq, msg.state, msg.estimate_s);
+        setVoiceState(msg.seq, msg.state);
       } else if (msg.type === 'voice_states') {
         voiceStates.clear();
         for (const [seq, state] of Object.entries(msg.states || {})) setVoiceState(Number(seq), state);
