@@ -52,7 +52,7 @@ def test_a_failing_item_is_skipped_and_the_stage_keeps_going(monkeypatch):
     p._stop.set()
     thread.join(timeout=2)
 
-    assert translated == ("FINE", False, None)
+    assert translated == ("FINE", False, None, 0)
     assert not thread.is_alive()  # and stop() can actually end it now
 
 
@@ -153,7 +153,7 @@ def test_tts_stops_synthesizing_a_sentence_once_voice_is_turned_off():
                 yield np.zeros(100, dtype=np.float32), 24_000
 
     p.tts = Tts()
-    p._translations.put(("One. Two. Three.", False, None))
+    p._translations.put(("One. Two. Three.", False, None, None))
     p._tts_step()
 
     assert p._audio.qsize() == 1  # only the piece made before Voice went off

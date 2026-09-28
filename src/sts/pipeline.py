@@ -134,6 +134,9 @@ class _Clip:
     # measured from (see Pipeline._catch_up).
     sentence_start: bool = False
     finalized_at: float | None = None
+    # The translated sentence (its caption `seq`) this is speech of, for the
+    # page's voice-state indicators; None for the Test clip.
+    seq: int | None = None
 
     @property
     def seconds(self) -> float:
@@ -147,6 +150,11 @@ class Pipeline:
     # operator hit Reset doesn't show up after the queues were drained.
     # (A class attribute so test stubs built with object.__new__ get it too.)
     _reset_generation = 0
+    # Voice progress per translated sentence (by its caption seq) - see
+    # _set_voice_state. Created on first use, so test stubs get it too.
+    _voice_states: dict | None = None
+    _voice_generated: set | None = None
+    _voice_now_playing: int | None = None
     # Slow operator actions (anything that touches a voice or the models) run
     # here, one at a time and in order, on the control thread - see
     # handle_control. None until start(), in which case they run inline
@@ -322,6 +330,7 @@ class Pipeline:
             self.control.enable_voice()
         elif action == "voice_off":
             self.control.disable_voice()
+            self._clear_voice_states()
             # Drop anything already synthesized and queued but not yet handed
             # to the sound card (already covered by _playback_loop's own
             # voice_enabled check too, but no reason to let it sit there).
@@ -410,6 +419,7 @@ class Pipeline:
         self._drain(self._transcripts)
         self._drain(self._translations)
         self._drain(self._audio)
+        self._clear_voice_states()
         # Cuts a clip _playback_loop is mid-write on right now, the same safe
         # way voice_off does: bumping this makes _play()'s should_continue
         # return False on its next ~50ms poll, so _playback_loop's own thread
@@ -1032,16 +1042,20 @@ class Pipeline:
         if self.broadcaster:
             self.broadcaster.broadcast_translated(translated, seq, seq)
         self._broadcast_rtf("translate", processing_s, spoken_s)
-        self._translations.put((translated, continues, finalized_at))
+        control = getattr(self, "control", None)
+        if control is not None and control.voice_enabled.is_set():
+            self._set_voice_state(seq, "queued")
+        self._translations.put((translated, continues, finalized_at, seq))
 
     def _tts_loop(self) -> None:
         self._run_stage("tts", self._tts_step)
 
     def _tts_step(self) -> None:
-        text, continues, finalized_at = self._translations.get(timeout=QUEUE_POLL_S)
+        text, continues, finalized_at, seq = self._translations.get(timeout=QUEUE_POLL_S)
         if not self.control.voice_enabled.is_set():
             vlog("tts", "voice is off, skipping synthesis")
             return
+        self._set_voice_state(seq, "generating")
         generation = self._reset_generation
         t0 = time.monotonic()
         # Each piece is handed to the playback thread as soon as it is ready,
@@ -1073,9 +1087,85 @@ class Pipeline:
                 pause = self.cfg.audio.pause_within_s
             self._audio.put(_Clip(
                 audio, sample_rate, pause, seamless=seamless, sentence_start=first_piece, finalized_at=finalized_at,
+                seq=seq,
             ))
             first_piece = False
             t0 = time.monotonic()
+        self._voice_generation_done(seq)
+
+    # -- voice-state indicators ------------------------------------------
+    # Per translated sentence, while Voice is on: queued -> generating ->
+    # generated -> playing -> played (a streamed sentence starts playing
+    # while still generating). Sent to the page (keyed by caption seq),
+    # which marks each translated sentence with it.
+
+    def _voice_lock(self) -> threading.Lock:
+        if self.__dict__.get("_voice_state_lock") is None:
+            self._voice_state_lock = threading.Lock()
+            self._voice_states, self._voice_generated = {}, set()
+        return self._voice_state_lock
+
+    def _set_voice_state(self, seq: int | None, state: str | None) -> None:
+        if seq is None:
+            return
+        with self._voice_lock():
+            if state is None or state == "played":
+                self._voice_states.pop(seq, None)
+                self._voice_generated.discard(seq)
+            else:
+                self._voice_states[seq] = state
+        if self.broadcaster and hasattr(self.broadcaster, "broadcast_voice_state"):
+            self.broadcaster.broadcast_voice_state(seq, state)
+
+    def _voice_generation_done(self, seq: int | None) -> None:
+        """All of `seq`'s speech is synthesized: "generated" if it isn't
+        playing yet; if it is, "played" once nothing of it is left to play."""
+        if seq is None:
+            return
+        with self._voice_lock():
+            self._voice_generated.add(seq)
+            state = self._voice_states.get(seq)
+            finished = state == "playing" and self._voice_now_playing != seq and not self._queued_speech_of(seq)
+        if state == "generating":
+            self._set_voice_state(seq, "generated")
+        elif finished:
+            self._set_voice_state(seq, "played")
+
+    def _queued_speech_of(self, seq: int) -> bool:
+        with self._audio.mutex:
+            return any(clip.seq == seq for clip in self._audio.queue)
+
+    def _voice_playing(self, seq: int | None) -> None:
+        """A clip of `seq` starts playing: anything before it has played."""
+        if seq is None:
+            return
+        with self._voice_lock():
+            self._voice_now_playing = seq
+            earlier = [s for s in self._voice_states if s < seq]
+            already = self._voice_states.get(seq) == "playing"
+        for s in earlier:
+            self._set_voice_state(s, "played")
+        if not already:
+            self._set_voice_state(seq, "playing")
+
+    def _voice_clip_done(self, seq: int | None) -> None:
+        """A clip of `seq` finished playing: "played" if it was the last."""
+        if seq is None:
+            return
+        with self._voice_lock():
+            self._voice_now_playing = None
+            finished = seq in self._voice_generated and not self._queued_speech_of(seq)
+        if finished:
+            self._set_voice_state(seq, "played")
+
+    def _clear_voice_states(self) -> None:
+        """Voice off / Reset: what was waiting to be spoken won't be - its
+        indicators go (played ones stay)."""
+        with self._voice_lock():
+            pending = list(self._voice_states)
+            self._voice_now_playing = None
+        for seq in pending:
+            self._set_voice_state(seq, None)
 
     def _synthesize_pieces(self, text: str):
         """(audio, sample_rate, seamless) per piece. Backends that stream
@@ -1133,8 +1223,10 @@ class Pipeline:
         # immediately), so this doesn't delay local playback at all.
         if self.broadcaster:
             self.broadcaster.broadcast_audio(clip.audio, clip.sample_rate)
+        self._voice_playing(clip.seq)
         try:
             self._play(clip.audio, clip.sample_rate, clip.pause_before, clip.force, clip.seamless)
+            self._voice_clip_done(clip.seq)
         except Exception as exc:
             print(f"[audio] playback failed: {exc!r}")
             # Typically the output device went stale (laptop slept, the
@@ -1144,6 +1236,7 @@ class Pipeline:
             if self._recover_audio("playback failed"):
                 try:
                     self._play(clip.audio, clip.sample_rate, clip.pause_before, clip.force)
+                    self._voice_clip_done(clip.seq)
                 except Exception as exc2:
                     print(f"[audio] playback still failing after re-initializing audio: {exc2!r}")
 
@@ -1195,6 +1288,7 @@ class Pipeline:
         return _Clip(
             time_stretch(audio, clip.sample_rate, rate), clip.sample_rate, clip.pause_before / rate,
             seamless=clip.seamless, sentence_start=clip.sentence_start, finalized_at=clip.finalized_at,
+            seq=clip.seq,
         )
 
     # Playback speed for the sentence now playing, chosen at its start - see _catch_up.

@@ -124,7 +124,8 @@
   .portrait-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    column-gap: 3vw;
+    /* Room for the translated sentences' voice-state circles, which sit in it. */
+    column-gap: max(3vw, 2.4rem);
     row-gap: 0.6em;
   }
 
@@ -136,6 +137,14 @@
 
   #portrait-lines .original { color: #9cdcfe; }
   #portrait-lines .translated { color: #e8c07d; }
+
+  /* Voice progress of a translated sentence (only while Voice is on - see
+     setVoiceState): inline before it in landscape, in the column gap left
+     of it in portrait. */
+  .voice-state { display: none; width: 0.62em; height: 0.62em; vertical-align: -0.02em; margin-right: 0.3em; }
+  body.voice-on .voice-state { display: inline-block; }
+  #portrait-grid .translated { position: relative; }
+  #portrait-grid .translated .voice-state { position: absolute; right: calc(100% + 0.28em); top: 0.32em; margin: 0; }
 
   /* The caption text that isn't final yet (--unfinished-size). After
      .portrait-cell so it wins there too (same specificity - order decides). */
@@ -1119,6 +1128,51 @@
     return clock;
   }
 
+  // -- Voice progress of translated sentences (the server's voice_state,
+  // keyed by caption seq): queued = an empty ring, generating = an
+  // hourglass in it, generated = a check mark, playing = a play triangle,
+  // played = filled gray. Shown only while Voice is on (body.voice-on).
+  const voiceStates = new Map();
+  const VOICE_ICONS = {
+    queued: '',
+    generating: '<path d="M8.5 6.5h7M8.5 17.5h7M9.5 6.5c0 3.2 5 3.6 5 5.5s-5 2.3-5 5.5M14.5 6.5c0 3.2-5 3.6-5 5.5s5 2.3 5 5.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+    generated: '<path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+    playing: '<path d="M10 7.8l6.2 4.2-6.2 4.2z" fill="currentColor"/>',
+  };
+  function setVoiceState(seq, state) {
+    if (seq == null) return;
+    if (state) voiceStates.set(seq, state); else voiceStates.delete(seq);
+    drawVoiceState(seq);
+  }
+  function translatedElementsOf(seq) {
+    return [
+      ...[...document.querySelectorAll('#translated-lines .flow .line')].filter((el) => el.seq === seq),
+      ...[...portraitGrid.querySelectorAll('.translated:not(.recent)')].filter((el) => el.rowKey === seq && el.textContent),
+    ];
+  }
+  function drawVoiceState(seq) {
+    const state = voiceStates.get(seq);
+    for (const el of translatedElementsOf(seq)) {
+      let icon = el.querySelector(':scope > .voice-state');
+      if (!state) {
+        icon?.remove();
+        continue;
+      }
+      if (!icon) {
+        icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        icon.setAttribute('class', 'voice-state');
+        icon.setAttribute('viewBox', '0 0 24 24');
+        icon.setAttribute('aria-hidden', 'true');
+        el.prepend(icon);
+      }
+      if (icon.dataset.state === state) continue;
+      icon.dataset.state = state;
+      icon.innerHTML = state === 'played'
+        ? '<circle cx="12" cy="12" r="10" fill="#6b6b73" stroke="#6b6b73" stroke-width="2"/>'
+        : `<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>${VOICE_ICONS[state] || ''}`;
+    }
+  }
+
   // -- Finalize clocks: per not-yet-final sentence, the server's (seconds
   // left, whole wait) before it's finalized - once it has its end mark, or
   // in the last few seconds before the silence rule - or null while nothing
@@ -1308,6 +1362,7 @@
   });
 
   function clearCaptions() {
+    voiceStates.clear();
     document.getElementById('original-lines').innerHTML = '';
     document.getElementById('translated-lines').innerHTML = '';
     portraitGrid.innerHTML = '';
@@ -1423,6 +1478,7 @@
     // Carry the existing transcript over into the new layout rather than
     // wiping it - see transformLandscapeToPortrait/transformPortraitToLandscape.
     if (newMode === 'portrait') transformLandscapeToPortrait(); else transformPortraitToLandscape();
+    for (const seq of voiceStates.keys()) drawVoiceState(seq);  // the translated lines were rebuilt
     renderRecentOriginal();
     try { localStorage.setItem('sts-render-mode', renderMode); } catch { /* ignore */ }
   }
@@ -1504,6 +1560,7 @@
 
     ttsToggleBtn.textContent = (status.voice_enabled ? '● ' : '○ ') + 'Voice';
     ttsToggleBtn.classList.toggle('is-active', status.voice_enabled);
+    document.body.classList.toggle('voice-on', !!status.voice_enabled);
 
     if (status.training) {
       trainBtn.textContent = `Stop training (${status.training_seconds}s / ${status.training_target_seconds}s)`;
@@ -2111,6 +2168,12 @@
         setFinalizeTimers(msg.timers);
       } else if (msg.type === 'translated') {
         if (renderMode === 'portrait') addPortraitTranslated(msg.text, { batch: msg.batch }, msg.seq); else addLine('translated-lines', msg.text, { batch: msg.batch }, msg.seq);
+        drawVoiceState(msg.seq);
+      } else if (msg.type === 'voice_state') {
+        setVoiceState(msg.seq, msg.state);
+      } else if (msg.type === 'voice_states') {
+        voiceStates.clear();
+        for (const [seq, state] of Object.entries(msg.states || {})) setVoiceState(Number(seq), state);
       }
       else if (msg.type === 'verse') showVerse(msg);
       else if (msg.type === 'reset') clearCaptions();

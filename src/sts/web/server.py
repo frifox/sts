@@ -57,6 +57,9 @@ class CaptionBroadcaster:
         # The --https-port the page is also served on, if any: where the page
         # sends the browser for the browser mic, which needs a secure page.
         self.https_port: int | None = None
+        # Latest voice state per translated sentence (caption seq -> state),
+        # the most recent ones, replayed to a page that connects.
+        self._voice_states: dict[int, str] = {}
         # Latest real-time-factor reading per pipeline stage ("asr" |
         # "translate" | "voice"), so a page that connects mid-session sees
         # the current numbers immediately instead of blank ones until the
@@ -76,6 +79,8 @@ class CaptionBroadcaster:
         self._clients.add(websocket)
         await websocket.send_text(json.dumps(self._stage_message()))
         await websocket.send_text(json.dumps({"type": "server", "https_port": self.https_port}))
+        if self._voice_states:
+            await websocket.send_text(json.dumps({"type": "voice_states", "states": dict(self._voice_states)}))
         vlog("web", f"caption page connected ({len(self._clients)} client(s))")
         if self._last_status is not None:
             await websocket.send_text(json.dumps(self._last_status))
@@ -179,6 +184,21 @@ class CaptionBroadcaster:
         }
         asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
 
+    def broadcast_voice_state(self, seq: int, state: str | None) -> None:
+        """Voice progress of one translated sentence (by its caption seq):
+        queued | generating | generated | playing | played, or None - no
+        longer going to be spoken (Voice off, Reset)."""
+        if state is None:
+            self._voice_states.pop(seq, None)
+        else:
+            self._voice_states[seq] = state
+            while len(self._voice_states) > 200:  # only recent ones are ever still on screen
+                self._voice_states.pop(next(iter(self._voice_states)))
+        if self.loop is None:
+            return
+        message = {"type": "voice_state", "seq": seq, "state": state}
+        asyncio.run_coroutine_threadsafe(self._send_to_all(message), self.loop)
+
     def broadcast_translated(self, text: str, seq: int | None = None, batch: int | None = None) -> None:
         """`seq` is the `seq` of the original sentence this translates, and
         `batch` the batch of the commit it belongs to - so a translation that
@@ -256,6 +276,7 @@ class CaptionBroadcaster:
             for lines in self._history.values():
                 lines.clear()
         self._last_recent = None
+        self._voice_states.clear()
         if self.loop is None:
             return
         asyncio.run_coroutine_threadsafe(self._send_to_all({"type": "reset"}), self.loop)

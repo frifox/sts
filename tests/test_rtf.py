@@ -166,7 +166,7 @@ def test_tts_loop_broadcasts_voice_rtf_from_its_own_output_duration():
             return np.zeros(24_000, dtype=np.float32), 24_000  # 1s of audio at 24kHz
 
     p.tts = FakeTts()
-    p._translations.put(("Hello.", False, None))
+    p._translations.put(("Hello.", False, None, None))
 
     thread = threading.Thread(target=Pipeline._tts_loop, args=(p,), daemon=True)
     thread.start()
@@ -197,8 +197,8 @@ def test_tts_loop_paces_a_continuation_like_the_same_spoken_thought():
             return np.zeros(100, dtype=np.float32), 24_000
 
     p.tts = FakeTts()
-    p._translations.put(("Continues the previous sentence.", True, None))
-    p._translations.put(("A fresh, unrelated sentence.", False, None))
+    p._translations.put(("Continues the previous sentence.", True, None, None))
+    p._translations.put(("A fresh, unrelated sentence.", False, None, None))
 
     thread = threading.Thread(target=Pipeline._tts_loop, args=(p,), daemon=True)
     thread.start()
