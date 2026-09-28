@@ -90,10 +90,15 @@
 
   .line {
     animation: fade-in 0.25s ease-out;
+    transition: opacity 0.6s ease;
   }
   /* A sentence that was already on screen as not-yet-final text, moving up
-     above the divider: no fade-in, or it would blink out and back. */
-  .line.promoted { animation: none; }
+     above the divider: no fade-in, or it would blink out and back. And any
+     line whose fade-in is over (.settled, see the animationend handler):
+     otherwise the fade-in would start again - from invisible - every time
+     it's brightened after being faded (.old turns it off), which made the
+     translation being spoken blink. */
+  .line.promoted, .line.settled { animation: none; }
 
   /* In each column the newest line stays bright and older ones are faded.
      For the original captions that means the newest final sentence; the
@@ -103,7 +108,7 @@
      the finalize clock showing), which is as bright as final text. */
   /* No fade-in for a line that starts out faded (a translation added while
      another one is being spoken): it runs to full opacity, a bright flash. */
-  .line.old { opacity: 0.4; transition: opacity 0.6s ease; animation: none; }
+  .line.old { opacity: 0.4; animation: none; }
 
   #original-lines .line { color: #9cdcfe; }
   #translated-lines .line { color: #e8c07d; }
@@ -934,7 +939,7 @@
     else if (batch !== undefined) startsNewBatch = batch !== lastBatchId[key];
     else startsNewBatch = now - (lastAddTime[key] || 0) > BATCH_GAP_MS;
     if (startsNewBatch) {
-      for (const el of elements) el.classList.add('old');
+      for (const el of elements) fade(el, true);
     }
     lastAddTime[key] = now;
     lastBatchId[key] = forceNewBatch ? undefined : batch;
@@ -951,6 +956,20 @@
       container.insertBefore(flow, container.querySelector(':scope > .recent'));
     }
     return flow;
+  }
+
+  // A line's fade-in runs once (see .line.settled): it's settled once the
+  // fade-in is over, or cut short, or skipped because it was faded first.
+  for (const type of ['animationend', 'animationcancel']) {
+    document.addEventListener(type, (event) => {
+      if (event.animationName === 'fade-in' && event.target.classList.contains('line')) {
+        event.target.classList.add('settled');
+      }
+    });
+  }
+  function fade(el, on) {
+    el.classList.toggle('old', on);
+    if (on) el.classList.add('settled');
   }
 
   // The green dot marking a finalized original sentence (see .final-dot).
@@ -1214,7 +1233,7 @@
     const translated = portrait
       ? portraitGrid.querySelectorAll('.translated:not(.recent)')
       : document.querySelectorAll('#translated-lines .flow .line');
-    for (const el of translated) el.classList.toggle('old', !bright.has(seqOfEl(el)));
+    for (const el of translated) fade(el, !bright.has(seqOfEl(el)));
   }
   function translatedElementsOf(seq) {
     return [
