@@ -121,14 +121,12 @@ def test_qwen3_clone_mode_selection():
     stub = types.ModuleType("qwen_tts")
     stub.Qwen3TTSModel = object
     sys.modules.setdefault("qwen_tts", stub)
-    from sts.tts.qwen3 import transcript_is_english, use_icl_conditioning
+    from sts.tts.qwen3 import use_icl_conditioning
 
     ru, en = "Которые Он сказал во время Его последней беседы", "Brothers and sisters, we gather today."
-    assert not transcript_is_english(ru) and transcript_is_english(en) and not transcript_is_english(None)
-    assert not use_icl_conditioning("auto", ru)   # Russian reference -> embedding only
-    assert use_icl_conditioning("auto", en)       # English (designed voice) -> full conditioning
-    assert use_icl_conditioning("icl", ru) and not use_icl_conditioning("xvector", en)
-    assert not use_icl_conditioning("auto", None)
+    assert use_icl_conditioning("auto", ru) and use_icl_conditioning("icl", ru)  # a Russian transcript is used too
+    assert use_icl_conditioning("icl", en) and not use_icl_conditioning("xvector", en)
+    assert not use_icl_conditioning("icl", None)  # no transcript: embedding only
 
 
 def test_tts_backend_is_inferred_from_the_environment(monkeypatch):

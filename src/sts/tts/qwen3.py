@@ -60,24 +60,16 @@ from qwen_tts import Qwen3TTSModel
 
 from sts.config import TTSConfig
 from sts.devices import supports_bf16_and_flash_attention
-from sts.audioquality import clarity_db, match_level
+from sts.audioquality import clarity_db, final_pitch_st, match_level, match_tone, tone_profile
 from sts.gpu import gpu_lock
 from sts.log import vlog
 from sts.tts.voice_library import VoiceEntry
 
 
-def transcript_is_english(text: str | None) -> bool:
-    """True for a Latin-script transcript; False for Cyrillic/other scripts or no transcript."""
-    if not text:
-        return False
-    letters = [c for c in text if c.isalpha()]
-    return bool(letters) and sum(c.isascii() for c in letters) / len(letters) > 0.8
-
-
 def use_icl_conditioning(mode: str, ref_text: str | None) -> bool:
-    if ref_text is None or mode == "xvector":
-        return False
-    return mode == "icl" or transcript_is_english(ref_text)
+    """Clip + transcript ("icl"; "auto" is the same), or the speaker embedding
+    alone ("xvector", and whenever there's no transcript to go with the clip)."""
+    return ref_text is not None and mode != "xvector"
 
 
 MIN_CHARS_TO_JUDGE = 20  # shorter texts vary too much in pace to judge
@@ -149,6 +141,7 @@ class Qwen3TTSSynthesizer:
         self._lock = gpu_lock(cfg.device) if cfg.device == "mps" else threading.Lock()
         self._pace_history: deque = deque(maxlen=20)  # seconds/character of recently accepted sentences
         self._clarity_history: deque = deque(maxlen=20)  # clarity (dB) of recently accepted takes
+        self._tone_history: deque = deque(maxlen=20)  # tone_profile of recently voiced sentences
         self._design_model = None
         self._design_load_lock = threading.Lock()
         self._prompt = None
@@ -224,13 +217,14 @@ class Qwen3TTSSynthesizer:
                 ref_audio=reference_wav_path, ref_text=ref_text, x_vector_only_mode=False
             )
             wavs, sample_rate = self.model.generate_voice_clone(
-                text=text, language="English", voice_clone_prompt=prompt, **self._sampling()
+                text=text, language="English", voice_clone_prompt=prompt, non_streaming_mode=True, **self._sampling()
             )
         return np.asarray(wavs[0], dtype=np.float32), sample_rate
 
     def clone_voice(self, reference_wav_path: str, ref_text: str | None = None) -> None:
         self._pace_history.clear()
         self._clarity_history.clear()
+        self._tone_history.clear()
         with self._lock:
             self._prompt = self.model.create_voice_clone_prompt(
                 ref_audio=reference_wav_path,
@@ -251,6 +245,7 @@ class Qwen3TTSSynthesizer:
     def _activate_lora(self, entry: VoiceEntry) -> None:
         self._pace_history.clear()
         self._clarity_history.clear()
+        self._tone_history.clear()
         if entry.speaker_id not in self._lora_models:
             self._lora_models[entry.speaker_id] = _load_lora_model(self.cfg, entry)
         self._active_lora_speaker_id = entry.speaker_id
@@ -263,6 +258,7 @@ class Qwen3TTSSynthesizer:
             raise ValueError(f"unknown preset voice {voice!r}; choose from {self.cfg.all_voices()}")
         self._pace_history.clear()
         self._clarity_history.clear()
+        self._tone_history.clear()
         self.default_voice = voice
 
     def forget_voice(self, speaker_id: str) -> None:
@@ -273,6 +269,7 @@ class Qwen3TTSSynthesizer:
     def reset_voice(self) -> None:
         self._pace_history.clear()
         self._clarity_history.clear()
+        self._tone_history.clear()
         self._prompt = None
         self.cloned_speaker_wav = None
         self._active_lora_speaker_id = None
@@ -294,10 +291,48 @@ class Qwen3TTSSynthesizer:
         text = text.strip()
         if not text:
             return
-        audio, sample_rate = self._synthesize_checked(text)
+        audio, sample_rate = self._synthesize_ending_checked(text)
+        if self.cfg.qwen3_tone_match:
+            audio = self._even_out_tone(audio, sample_rate)
         if self.cfg.target_level:
             audio = match_level(audio, sample_rate, self.cfg.target_level)
         yield audio, sample_rate
+
+    def _synthesize_ending_checked(self, text: str) -> tuple[np.ndarray, int]:
+        """A sentence ending in a period whose take doesn't end on a falling pitch
+        (it sounds unfinished, as if a comma came next) is regenerated, up to
+        `qwen3_ending_retries` times, keeping the take whose pitch ends lowest."""
+        audio, sample_rate = self._synthesize_checked(text)
+        if not text.endswith(".") or text.endswith(".."):  # not "..." either: that may trail off
+            return audio, sample_rate
+        takes = []
+        for attempt in range(self.cfg.qwen3_ending_retries + 1):
+            if attempt:
+                audio, sample_rate = self._synthesize_checked(text)
+            try:
+                ending = final_pitch_st(audio, sample_rate)
+            except Exception as exc:  # no librosa: no check
+                vlog("tts", f"couldn't check the sentence ending ({exc})")
+                return audio, sample_rate
+            if ending is None or ending <= self.cfg.qwen3_ending_fall_st:
+                return audio, sample_rate
+            takes.append((ending, audio, sample_rate))
+            if attempt < self.cfg.qwen3_ending_retries:
+                vlog("tts", f"sentence doesn't end on a falling pitch ({ending:+.1f} semitones), "
+                            f"regenerating (attempt {attempt + 1}): {text[:60]!r}")
+        _, audio, sample_rate = min(takes, key=lambda take: take[0])
+        return audio, sample_rate
+
+    def _even_out_tone(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Equalizes the take toward this voice's recent average tone (see
+        sts.audioquality.match_tone), once there are a few takes to average."""
+        profile = tone_profile(audio, sample_rate)
+        if profile is None:
+            return audio
+        if len(self._tone_history) >= 3:
+            audio = match_tone(audio, sample_rate, profile, np.mean(self._tone_history, axis=0))
+        self._tone_history.append(profile)  # the take as generated, so the average is the voice's own
+        return audio
 
     def synthesize(self, text: str, pause_s: float = 0.35) -> tuple[np.ndarray, int]:
         """Whole text as one clip."""
@@ -365,7 +400,8 @@ class Qwen3TTSSynthesizer:
                 )
             elif self._prompt is not None:
                 wavs, sample_rate = self.model.generate_voice_clone(
-                    text=text, language="English", voice_clone_prompt=self._prompt, **self._sampling()
+                    text=text, language="English", voice_clone_prompt=self._prompt,
+                    non_streaming_mode=True, **self._sampling()
                 )
             else:
                 if self._custom_model is None:

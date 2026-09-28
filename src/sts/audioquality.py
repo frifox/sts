@@ -11,7 +11,7 @@ loudest half of the frames) separates them well.
 from math import gcd
 
 import numpy as np
-from scipy.signal import resample_poly, stft
+from scipy.signal import istft, resample_poly, stft
 
 _RATE = 16_000
 # The most match_level() will boost a clip, so noise isn't boosted.
@@ -64,3 +64,64 @@ def match_level(audio: np.ndarray, sample_rate: int, target: float, max_gain_db:
     audio = np.asarray(audio, dtype=np.float32)
     gain = level_gain(audio, sample_rate, target, max_gain_db, peak)
     return audio if gain == 1.0 else (audio * gain).astype(np.float32)
+
+
+# Tone matching: Qwen3 takes of the same voice come out with slightly different
+# tonal balance - one boomier and duller (close to the mic, speaking softly),
+# the next thinner and brighter (further away, speaking up) - even at the same
+# loudness. Each take's long-term spectrum, over the speech frames and with its
+# level taken out, is compared with the voice's recent average, and the take is
+# gently equalized toward it. Measured on 16-sentence runs, this halved the
+# take-to-take spread (about 2.2 -> 1.3 dB average deviation from the voice's
+# typical spectrum). Only partially and within limits: part of a sentence's
+# spectrum comes from its own vowels and consonants, not the "recording".
+_TONE_EDGES = np.geomspace(80, 10_000, 19)  # 18 bands, ~0.4 octave each
+_TONE_FFT = 1024
+
+
+def tone_profile(audio: np.ndarray, sample_rate: int) -> np.ndarray | None:
+    """The shape (dB per band, mean removed) of the speech's long-term spectrum, or None if too short."""
+    audio = np.asarray(audio, dtype=np.float32)
+    if len(audio) < 4 * _TONE_FFT or sample_rate < 2 * _TONE_EDGES[-1]:
+        return None
+    freqs, _, spectrum = stft(audio, fs=sample_rate, nperseg=_TONE_FFT, noverlap=_TONE_FFT * 3 // 4)
+    power = np.abs(spectrum) ** 2
+    total = power.sum(axis=0)
+    speech = total > np.percentile(total, 50)
+    if not speech.any():
+        return None
+    ltas = power[:, speech].mean(axis=1)
+    bands = np.array([ltas[(freqs >= lo) & (freqs < hi)].mean() for lo, hi in zip(_TONE_EDGES[:-1], _TONE_EDGES[1:])])
+    db = 10 * np.log10(bands + 1e-20)
+    return db - db.mean()
+
+
+def match_tone(audio: np.ndarray, sample_rate: int, profile: np.ndarray, reference: np.ndarray,
+               strength: float = 0.75, max_db: float = 6.0) -> np.ndarray:
+    """`audio` (whose tone_profile is `profile`) equalized `strength` of the way toward `reference`,
+    no band moved more than `max_db`. The overall level is then off by a little; match_level after."""
+    gains = np.clip(strength * (np.asarray(reference) - np.asarray(profile)), -max_db, max_db)
+    gains = np.convolve(np.pad(gains, 1, mode="edge"), [0.25, 0.5, 0.25], mode="valid")  # no sharp steps
+    freqs, _, spectrum = stft(audio, fs=sample_rate, nperseg=_TONE_FFT, noverlap=_TONE_FFT * 3 // 4)
+    centers = np.sqrt(_TONE_EDGES[:-1] * _TONE_EDGES[1:])
+    per_bin = np.interp(np.log(np.maximum(freqs, 1.0)), np.log(centers), gains)  # flat beyond the end bands
+    _, out = istft(spectrum * (10 ** (per_bin / 20))[:, None], fs=sample_rate, nperseg=_TONE_FFT, noverlap=_TONE_FFT * 3 // 4)
+    return out[: len(audio)].astype(np.float32)
+
+
+def final_pitch_st(audio: np.ndarray, sample_rate: int, tail_s: float = 0.35) -> float | None:
+    """Where the voice's pitch ends up: the average over its last `tail_s` of voiced speech, in semitones
+    relative to the whole clip's median pitch, or None if too little of it is voiced to tell. A statement
+    normally ends well below its median (-3 st on average in Qwen3's takes); one that ends near or above it
+    sounds unfinished, as if a comma came next."""
+    import librosa
+
+    hop = 512
+    f0, voiced, _ = librosa.pyin(np.asarray(audio, dtype=np.float32), fmin=60, fmax=400, sr=sample_rate,
+                                 frame_length=2048, hop_length=hop)
+    f0 = f0[voiced & ~np.isnan(f0)]
+    tail = max(3, int(tail_s * sample_rate / hop))
+    if len(f0) < 3 * tail:
+        return None
+    semitones = 12 * np.log2(f0 / np.median(f0))
+    return float(semitones[-tail:].mean())

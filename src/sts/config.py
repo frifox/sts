@@ -130,11 +130,15 @@ class TTSConfig:
     qwen3_min_seconds_per_char: float = 0.04   # absolute floor (typical is about 0.065)
     qwen3_max_seconds_per_char: float = 0.16
     # How a reference clip conditions the voice. "icl" feeds the clip *and its
-    # transcript* to the model (closest voice match, but a long or foreign-language
-    # transcript is a common cause of skipped speech); "xvector" uses only a speaker
-    # embedding (steadier, slightly less faithful). "auto" picks xvector when the
-    # transcript isn't English (e.g. a Russian speaker's clip) and icl otherwise.
-    qwen3_clone_mode: str = "auto"
+    # transcript* to the model - even a Russian transcript for English speech;
+    # "xvector" uses only a speaker embedding. xvector used to be picked for
+    # non-English transcripts, for fear of skipped words (none in 64 test takes),
+    # but it carries nothing of how the reference was spoken or recorded, and
+    # with it about 1 statement in 5 ended on a non-falling, "to be continued"
+    # pitch, against about 1 in 16 with icl. ("auto" = "icl".) The whole
+    # sentence is always given to the model up front (non_streaming_mode), not
+    # fed in as it speaks, so it knows where the sentence ends.
+    qwen3_clone_mode: str = "icl"
     qwen3_max_retries: int = 2
     # Voice cloning also copies a reference's recording conditions, and even a good
     # reference sometimes yields a dull, distant-sounding take. A take whose clarity
@@ -146,6 +150,17 @@ class TTSConfig:
     # judged until it has 3 of them. 0 retries turns this off.
     qwen3_quality_retries: int = 0  # off by default: each retry is a full extra generation, and it did not fix what listeners noticed
     qwen3_clarity_margin_db: float = 4.0
+    # Equalize each take gently toward the voice's recent average tonal balance
+    # (sts.audioquality.match_tone): evens out takes that sound closer to or further
+    # from the mic than the one before.
+    qwen3_tone_match: bool = True
+    # A statement ends on a falling pitch; now and then Qwen3 ends one level or
+    # rising, and it sounds unfinished. A sentence ending in "." whose pitch over its
+    # last 0.35 s isn't at least `-qwen3_ending_fall_st` semitones below its median is
+    # regenerated (up to `qwen3_ending_retries` times; about 1 sentence in 10 with
+    # icl cloning) and the take ending lowest kept. 0 turns this off.
+    qwen3_ending_retries: int = 1
+    qwen3_ending_fall_st: float = -1.0
     qwen3_style_instruct: str = (
         "Speak in a calm, warm, measured tone, like a gentle preacher delivering a sermon. "
         "American English accent."
