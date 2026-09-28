@@ -108,20 +108,3 @@ def match_tone(audio: np.ndarray, sample_rate: int, profile: np.ndarray, referen
     _, out = istft(spectrum * (10 ** (per_bin / 20))[:, None], fs=sample_rate, nperseg=_TONE_FFT, noverlap=_TONE_FFT * 3 // 4)
     return out[: len(audio)].astype(np.float32)
 
-
-def final_pitch_st(audio: np.ndarray, sample_rate: int, tail_s: float = 0.35) -> float | None:
-    """Where the voice's pitch ends up: the average over its last `tail_s` of voiced speech, in semitones
-    relative to the whole clip's median pitch, or None if too little of it is voiced to tell. A statement
-    normally ends well below its median (-3 st on average in Qwen3's takes); one that ends near or above it
-    sounds unfinished, as if a comma came next."""
-    import librosa
-
-    hop = 512
-    f0, voiced, _ = librosa.pyin(np.asarray(audio, dtype=np.float32), fmin=60, fmax=400, sr=sample_rate,
-                                 frame_length=2048, hop_length=hop)
-    f0 = f0[voiced & ~np.isnan(f0)]
-    tail = max(3, int(tail_s * sample_rate / hop))
-    if len(f0) < 3 * tail:
-        return None
-    semitones = 12 * np.log2(f0 / np.median(f0))
-    return float(semitones[-tail:].mean())

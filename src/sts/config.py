@@ -154,13 +154,6 @@ class TTSConfig:
     # (sts.audioquality.match_tone): evens out takes that sound closer to or further
     # from the mic than the one before.
     qwen3_tone_match: bool = True
-    # A statement ends on a falling pitch; now and then Qwen3 ends one level or
-    # rising, and it sounds unfinished. A sentence ending in "." whose pitch over its
-    # last 0.35 s isn't at least `-qwen3_ending_fall_st` semitones below its median is
-    # regenerated (up to `qwen3_ending_retries` times; about 1 sentence in 10 with
-    # icl cloning) and the take ending lowest kept. 0 turns this off.
-    qwen3_ending_retries: int = 1
-    qwen3_ending_fall_st: float = -1.0
     qwen3_style_instruct: str = (
         "Speak in a calm, warm, measured tone, like a gentle preacher delivering a sermon. "
         "American English accent."

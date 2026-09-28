@@ -60,7 +60,7 @@ from qwen_tts import Qwen3TTSModel
 
 from sts.config import TTSConfig
 from sts.devices import supports_bf16_and_flash_attention
-from sts.audioquality import clarity_db, final_pitch_st, match_level, match_tone, tone_profile
+from sts.audioquality import clarity_db, match_level, match_tone, tone_profile
 from sts.gpu import gpu_lock
 from sts.log import vlog
 from sts.tts.voice_library import VoiceEntry
@@ -291,37 +291,12 @@ class Qwen3TTSSynthesizer:
         text = text.strip()
         if not text:
             return
-        audio, sample_rate = self._synthesize_ending_checked(text)
+        audio, sample_rate = self._synthesize_checked(text)
         if self.cfg.qwen3_tone_match:
             audio = self._even_out_tone(audio, sample_rate)
         if self.cfg.target_level:
             audio = match_level(audio, sample_rate, self.cfg.target_level)
         yield audio, sample_rate
-
-    def _synthesize_ending_checked(self, text: str) -> tuple[np.ndarray, int]:
-        """A sentence ending in a period whose take doesn't end on a falling pitch
-        (it sounds unfinished, as if a comma came next) is regenerated, up to
-        `qwen3_ending_retries` times, keeping the take whose pitch ends lowest."""
-        audio, sample_rate = self._synthesize_checked(text)
-        if not text.endswith(".") or text.endswith(".."):  # not "..." either: that may trail off
-            return audio, sample_rate
-        takes = []
-        for attempt in range(self.cfg.qwen3_ending_retries + 1):
-            if attempt:
-                audio, sample_rate = self._synthesize_checked(text)
-            try:
-                ending = final_pitch_st(audio, sample_rate)
-            except Exception as exc:  # no librosa: no check
-                vlog("tts", f"couldn't check the sentence ending ({exc})")
-                return audio, sample_rate
-            if ending is None or ending <= self.cfg.qwen3_ending_fall_st:
-                return audio, sample_rate
-            takes.append((ending, audio, sample_rate))
-            if attempt < self.cfg.qwen3_ending_retries:
-                vlog("tts", f"sentence doesn't end on a falling pitch ({ending:+.1f} semitones), "
-                            f"regenerating (attempt {attempt + 1}): {text[:60]!r}")
-        _, audio, sample_rate = min(takes, key=lambda take: take[0])
-        return audio, sample_rate
 
     def _even_out_tone(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
         """Equalizes the take toward this voice's recent average tone (see

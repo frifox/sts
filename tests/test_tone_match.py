@@ -32,19 +32,3 @@ def test_a_take_already_matching_is_left_alone():
 def test_too_short_to_judge():
     assert tone_profile(np.zeros(1000, dtype=np.float32), SR) is None
 
-
-def _glide(start_hz, end_hz, seconds=2.0):
-    """A voice-like tone holding `start_hz`, gliding to `end_hz` over its last half second."""
-    n = int(SR * seconds)
-    hz = np.full(n, float(start_hz))
-    hz[-SR // 2:] = np.linspace(start_hz, end_hz, SR // 2)
-    phase = 2 * np.pi * np.cumsum(hz) / SR
-    return sum(np.sin(k * phase) / k for k in range(1, 6)).astype(np.float32) * 0.1
-
-
-def test_a_falling_ending_is_told_from_a_level_or_rising_one():
-    from sts.audioquality import final_pitch_st
-
-    assert final_pitch_st(_glide(150, 100), SR) < -3
-    assert final_pitch_st(_glide(150, 150), SR) > -1
-    assert final_pitch_st(_glide(150, 190), SR) > 1
