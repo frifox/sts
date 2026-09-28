@@ -941,7 +941,9 @@
     else if (batch !== undefined) startsNewBatch = batch !== lastBatchId[key];
     else startsNewBatch = now - (lastAddTime[key] || 0) > BATCH_GAP_MS;
     if (startsNewBatch) {
-      for (const el of elements) fade(el, true);
+      // Only noted here (.stale); whether a line actually shows faded is
+      // decided by highlightLines, which also weighs in the voice.
+      for (const el of elements) el.classList.add('stale');
     }
     lastAddTime[key] = now;
     lastBatchId[key] = forceNewBatch ? undefined : batch;
@@ -1213,29 +1215,33 @@
     if (seq == null) return;
     if (state) voiceStates.set(seq, state); else voiceStates.delete(seq);
     drawVoiceState(seq);
-    highlightTranslated();
+    highlightLines();
   }
 
-  // Which translated sentences are bright (the rest faded, .old): with Voice
-  // on, only the one being spoken right now - none while nothing plays; with
-  // Voice off, the translations of the original sentences that are bright.
-  function highlightTranslated() {
+  // Which final sentences are bright (the rest faded, .old). With Voice on:
+  // only the one being spoken right now, in both columns - none while
+  // nothing plays. With Voice off: the original's newest batch (the lines
+  // not .stale - see markOldIfNewBatch), and their translations.
+  function highlightLines() {
     const portrait = renderMode === 'portrait';
     const seqOfEl = (el) => (portrait ? el.rowKey : el.seq);
-    let bright;
-    if (lastStatus.voice_enabled) {
-      bright = new Set([...voiceStates].filter(([, state]) => state === 'playing').map(([seq]) => seq));
-    } else {
-      const originals = portrait
-        ? portraitGrid.querySelectorAll('.original:not(.recent)')
-        : document.querySelectorAll('#original-lines .flow .line');
-      bright = new Set([...originals].filter((el) => !el.classList.contains('old')).map(seqOfEl));
-    }
+    const originals = portrait
+      ? portraitGrid.querySelectorAll('.original:not(.recent)')
+      : document.querySelectorAll('#original-lines .flow .line');
     const translated = portrait
       ? portraitGrid.querySelectorAll('.translated:not(.recent)')
       : document.querySelectorAll('#translated-lines .flow .line');
+    let bright;
+    if (lastStatus.voice_enabled) {
+      bright = new Set([...voiceStates].filter(([, state]) => state === 'playing').map(([seq]) => seq));
+      for (const el of originals) fade(el, !bright.has(seqOfEl(el)));
+    } else {
+      for (const el of originals) fade(el, el.classList.contains('stale'));
+      bright = new Set([...originals].filter((el) => !el.classList.contains('stale')).map(seqOfEl));
+    }
     for (const el of translated) fade(el, !bright.has(seqOfEl(el)));
   }
+
   function translatedElementsOf(seq) {
     return [
       ...[...document.querySelectorAll('#translated-lines .flow .line')].filter((el) => el.seq === seq),
@@ -1570,7 +1576,7 @@
     // wiping it - see transformLandscapeToPortrait/transformPortraitToLandscape.
     if (newMode === 'portrait') transformLandscapeToPortrait(); else transformPortraitToLandscape();
     for (const seq of voiceStates.keys()) drawVoiceState(seq);  // the translated lines were rebuilt
-    highlightTranslated();
+    highlightLines();
     renderRecentOriginal();
     try { localStorage.setItem('sts-render-mode', renderMode); } catch { /* ignore */ }
   }
@@ -1653,7 +1659,7 @@
     ttsToggleBtn.textContent = (status.voice_enabled ? '● ' : '○ ') + 'Voice';
     ttsToggleBtn.classList.toggle('is-active', status.voice_enabled);
     document.body.classList.toggle('voice-on', !!status.voice_enabled);
-    highlightTranslated();
+    highlightLines();
 
     if (status.training) {
       trainBtn.textContent = `Stop training (${status.training_seconds}s / ${status.training_target_seconds}s)`;
@@ -2273,7 +2279,7 @@
         const promoted = promoteRecentSentence(msg.text);
         const opts = { batch: msg.batch, promoted };
         if (renderMode === 'portrait') addPortraitOriginal(msg.text, opts, msg.seq); else addLine('original-lines', msg.text, opts, msg.seq);
-        highlightTranslated();
+        highlightLines();
       } else if (msg.type === 'original_recent') {
         setRecentOriginal(msg.text, msg.sentences);
       } else if (msg.type === 'finalize_timers') {
@@ -2281,7 +2287,7 @@
       } else if (msg.type === 'translated') {
         if (renderMode === 'portrait') addPortraitTranslated(msg.text, { batch: msg.batch }, msg.seq); else addLine('translated-lines', msg.text, { batch: msg.batch }, msg.seq);
         drawVoiceState(msg.seq);
-        highlightTranslated();
+        highlightLines();
       } else if (msg.type === 'voice_state') {
         setVoiceState(msg.seq, msg.state);
       } else if (msg.type === 'voice_states') {
