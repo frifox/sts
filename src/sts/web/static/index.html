@@ -355,9 +355,9 @@
     cursor: pointer;
   }
 
-  /* Left of the first not-yet-final sentence, in the panel's padding - so it
-     never moves the text - once that sentence is about to be finalized
-     (see setFinalizeTimers): starts full and empties clockwise from 12
+  /* Left of a not-yet-final sentence, in the panel's padding - so it never
+     moves the text: a plain ring until its finalize countdown starts (see
+     setFinalizeTimers), then it starts full and empties clockwise from 12
      o'clock as the wait runs out - --left is the fraction left. Orange,
      like the voice indicator's generating/generated (pending, then ready). */
   .finalize-clock {
@@ -372,7 +372,9 @@
     box-sizing: border-box;
     background: conic-gradient(transparent calc((1 - var(--left)) * 360deg), #e0864c 0);
   }
-  .finalize-clock.idle { visibility: hidden; }
+  /* A new sentence whose countdown hasn't started: a plain ring in the
+     text color (like a voice indicator's "queued"). */
+  .finalize-clock.idle { background: none; border-color: currentColor; }
   /* Time's up - ready to be finalized (or waiting only on the sentences
      above it): a solid orange dot. */
   .recent .finalize-clock.done { background: #e0864c; }
