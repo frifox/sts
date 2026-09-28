@@ -360,6 +360,9 @@
   .finalize-clock.idle { visibility: hidden; }
   /* Faded like the not-yet-final text that isn't pending (.recent-rest). */
   .recent .finalize-clock { opacity: 0.4; }
+  /* Time's up - ready to be finalized (or waiting only on the sentences
+     above it): a solid green dot instead of an empty ring. */
+  .recent .finalize-clock.done { background: #4cbb6c; border-color: #4cbb6c; opacity: 1; }
 
   .verse-chip:hover { background: rgba(201, 162, 75, 0.18); }
   .verse-chip.show { display: inline-block; }
@@ -1140,6 +1143,7 @@
         running = running || fraction > 0;
       }
       clock.classList.toggle('idle', !timer);
+      clock.classList.toggle('done', !!timer && fraction === 0);
       // The first clock's owner is the whole live caption (.recent), a later
       // one's its own sentence: either is brightened while pending.
       clock.parentElement.classList.toggle('pending', !!timer);
