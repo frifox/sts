@@ -101,7 +101,9 @@
      below them (the last row in portrait), and doesn't count as a line -
      except its first sentence while it's about to be finalized (.pending,
      the finalize clock showing), which is as bright as final text. */
-  .line.old { opacity: 0.4; transition: opacity 0.6s ease; }
+  /* No fade-in for a line that starts out faded (a translation added while
+     another one is being spoken): it runs to full opacity, a bright flash. */
+  .line.old { opacity: 0.4; transition: opacity 0.6s ease; animation: none; }
 
   #original-lines .line { color: #9cdcfe; }
   #translated-lines .line { color: #e8c07d; }
@@ -1190,6 +1192,28 @@
     if (seq == null) return;
     if (state) voiceStates.set(seq, state); else voiceStates.delete(seq);
     drawVoiceState(seq);
+    highlightTranslated();
+  }
+
+  // Which translated sentences are bright (the rest faded, .old): with Voice
+  // on, only the one being spoken right now - none while nothing plays; with
+  // Voice off, the translations of the original sentences that are bright.
+  function highlightTranslated() {
+    const portrait = renderMode === 'portrait';
+    const seqOfEl = (el) => (portrait ? el.rowKey : el.seq);
+    let bright;
+    if (lastStatus.voice_enabled) {
+      bright = new Set([...voiceStates].filter(([, state]) => state === 'playing').map(([seq]) => seq));
+    } else {
+      const originals = portrait
+        ? portraitGrid.querySelectorAll('.original:not(.recent)')
+        : document.querySelectorAll('#original-lines .flow .line');
+      bright = new Set([...originals].filter((el) => !el.classList.contains('old')).map(seqOfEl));
+    }
+    const translated = portrait
+      ? portraitGrid.querySelectorAll('.translated:not(.recent)')
+      : document.querySelectorAll('#translated-lines .flow .line');
+    for (const el of translated) el.classList.toggle('old', !bright.has(seqOfEl(el)));
   }
   function translatedElementsOf(seq) {
     return [
@@ -1525,6 +1549,7 @@
     // wiping it - see transformLandscapeToPortrait/transformPortraitToLandscape.
     if (newMode === 'portrait') transformLandscapeToPortrait(); else transformPortraitToLandscape();
     for (const seq of voiceStates.keys()) drawVoiceState(seq);  // the translated lines were rebuilt
+    highlightTranslated();
     renderRecentOriginal();
     try { localStorage.setItem('sts-render-mode', renderMode); } catch { /* ignore */ }
   }
@@ -1607,6 +1632,7 @@
     ttsToggleBtn.textContent = (status.voice_enabled ? '● ' : '○ ') + 'Voice';
     ttsToggleBtn.classList.toggle('is-active', status.voice_enabled);
     document.body.classList.toggle('voice-on', !!status.voice_enabled);
+    highlightTranslated();
 
     if (status.training) {
       trainBtn.textContent = `Stop training (${status.training_seconds}s / ${status.training_target_seconds}s)`;
@@ -2226,6 +2252,7 @@
         const promoted = promoteRecentSentence(msg.text);
         const opts = { batch: msg.batch, promoted };
         if (renderMode === 'portrait') addPortraitOriginal(msg.text, opts, msg.seq); else addLine('original-lines', msg.text, opts, msg.seq);
+        highlightTranslated();
       } else if (msg.type === 'original_recent') {
         setRecentOriginal(msg.text, msg.sentences);
       } else if (msg.type === 'finalize_timers') {
@@ -2233,6 +2260,7 @@
       } else if (msg.type === 'translated') {
         if (renderMode === 'portrait') addPortraitTranslated(msg.text, { batch: msg.batch }, msg.seq); else addLine('translated-lines', msg.text, { batch: msg.batch }, msg.seq);
         drawVoiceState(msg.seq);
+        highlightTranslated();
       } else if (msg.type === 'voice_state') {
         setVoiceState(msg.seq, msg.state);
       } else if (msg.type === 'voice_states') {
