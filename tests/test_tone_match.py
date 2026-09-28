@@ -32,3 +32,13 @@ def test_a_take_already_matching_is_left_alone():
 def test_too_short_to_judge():
     assert tone_profile(np.zeros(1000, dtype=np.float32), SR) is None
 
+
+
+def test_silence_is_trimmed_from_the_ends_and_pauses_measured():
+    from sts.audioquality import longest_pause_s, trim_silence
+
+    audio = np.zeros(SR * 6, dtype=np.float32)
+    audio[SR: 2 * SR] = _speech_like(3)[:SR] + 0.05
+    audio[int(3.5 * SR): 4 * SR] = _speech_like(4)[: SR // 2] + 0.05
+    assert abs(len(trim_silence(audio, SR)) / SR - 3.3) < 0.05  # 1 s .. 4 s, plus 0.15 s each side
+    assert abs(longest_pause_s(audio, SR) - 1.5) < 0.05

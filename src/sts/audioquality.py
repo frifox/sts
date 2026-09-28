@@ -108,3 +108,30 @@ def match_tone(audio: np.ndarray, sample_rate: int, profile: np.ndarray, referen
     _, out = istft(spectrum * (10 ** (per_bin / 20))[:, None], fs=sample_rate, nperseg=_TONE_FFT, noverlap=_TONE_FFT * 3 // 4)
     return out[: len(audio)].astype(np.float32)
 
+
+
+def trim_silence(audio: np.ndarray, sample_rate: int, keep_s: float = 0.15, floor: float = 0.03) -> np.ndarray:
+    """`audio` without its leading/trailing silence (20 ms frames quieter than `floor` x the loudest),
+    keeping `keep_s` of it at each end."""
+    audio = np.asarray(audio, dtype=np.float32)
+    frame = max(1, sample_rate // 50)
+    energy = np.array([np.sqrt(np.mean(audio[i: i + frame] ** 2)) for i in range(0, max(1, len(audio) - frame + 1), frame)])
+    loud = np.where(energy > floor * energy.max())[0] if len(energy) and energy.max() > 0 else []
+    if not len(loud):
+        return audio
+    keep = int(keep_s * sample_rate)
+    return audio[max(0, loud[0] * frame - keep): min(len(audio), (loud[-1] + 1) * frame + keep)]
+
+
+def longest_pause_s(audio: np.ndarray, sample_rate: int, floor: float = 0.03) -> float:
+    """The longest run of silence (as in trim_silence) inside the speech."""
+    trimmed = trim_silence(audio, sample_rate, keep_s=0.0, floor=floor)
+    frame = max(1, sample_rate // 50)
+    energy = np.array([np.sqrt(np.mean(trimmed[i: i + frame] ** 2)) for i in range(0, max(1, len(trimmed) - frame + 1), frame)])
+    if not len(energy) or energy.max() == 0:
+        return 0.0
+    longest = run = 0
+    for quiet in energy <= floor * energy.max():
+        run = run + 1 if quiet else 0
+        longest = max(longest, run)
+    return longest * frame / sample_rate

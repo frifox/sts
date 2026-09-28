@@ -82,8 +82,9 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "--qwen-clone-mode",
         choices=["auto", "icl", "xvector"],
         default=None,
-        help="How Qwen3 clones a saved voice: 'icl' = reference clip + transcript (default; closest match, "
-        "steadier delivery and sentence endings), 'xvector' = speaker embedding only; 'auto' = icl",
+        help="How Qwen3 clones a saved voice: 'auto' (default) = the clip + its transcript if that's English, "
+        "otherwise an English clip made in the voice + its text; 'icl' = the clip + its transcript in any language "
+        "(a Russian one gives a strong Russian accent); 'xvector' = speaker embedding only",
     )
     parser.add_argument(
         "--qwen-preload-presets",

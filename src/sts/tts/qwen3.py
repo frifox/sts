@@ -49,10 +49,12 @@ mps or an older/absent GPU, same reasoning as the Metal case either way.
 """
 
 import gc
+import hashlib
 import re
 import statistics
 import threading
 from collections import deque
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -60,18 +62,44 @@ from qwen_tts import Qwen3TTSModel
 
 from sts.config import TTSConfig
 from sts.devices import supports_bf16_and_flash_attention
-from sts.audioquality import clarity_db, match_level, match_tone, tone_profile
+from sts.audioquality import clarity_db, longest_pause_s, match_level, match_tone, tone_profile, trim_silence
 from sts.gpu import gpu_lock
 from sts.log import vlog
+from sts.tts.numbers import spell_numbers
 from sts.tts.voice_library import VoiceEntry
 
 
-def use_icl_conditioning(mode: str, ref_text: str | None) -> bool:
-    """Clip + transcript ("icl"; "auto" is the same), or the speaker embedding
-    alone ("xvector", and whenever there's no transcript to go with the clip)."""
-    return ref_text is not None and mode != "xvector"
+def transcript_is_english(text: str | None) -> bool:
+    """True for a Latin-script transcript; False for Cyrillic/other scripts or no transcript."""
+    if not text:
+        return False
+    letters = [c for c in text if c.isalpha()]
+    return bool(letters) and sum(c.isascii() for c in letters) / len(letters) > 0.8
 
 
+def clone_conditioning(mode: str, ref_text: str | None) -> str:
+    """How a reference clip conditions the voice: "icl" (the clip + its
+    transcript), "bridge" (an English clip in the voice + its English text, see
+    `_english_reference`) or "xvector" (the speaker embedding alone)."""
+    if ref_text is None or mode == "xvector":
+        return "xvector"
+    if mode == "icl" or transcript_is_english(ref_text):
+        return "icl"
+    return "bridge"
+
+
+# What a voice cloned from a non-English reference first says in English (in
+# `_english_reference`): about 11 s, plain statements and a list, ending on a period.
+ENGLISH_BRIDGE_TEXT = (
+    "Good morning, brothers and sisters. Today we will read together from the Gospel, "
+    "and we will think about what these words mean for our lives. Let us listen carefully, and let us pray."
+)
+ENGLISH_BRIDGE_TAKES = 3
+BRIDGE_SECONDS_PER_CHAR = 0.058  # the passage's usual pace (about 11 s)
+
+
+CODEC_FRAMES_PER_SECOND = 12  # the 12 Hz codec: 12 generated tokens per second of audio
+MIN_CAP_SECONDS = 8.0  # the length cap for very short texts ("Amen.")
 MIN_CHARS_TO_JUDGE = 20  # shorter texts vary too much in pace to judge
 
 
@@ -157,13 +185,18 @@ class Qwen3TTSSynthesizer:
         loras = [model for model, _ in self._lora_models.values()]
         return model_bytes(self.model, self._custom_model, self._design_model, *loras)
 
-    def _sampling(self) -> dict:
-        """Sampling settings that keep delivery consistent between sentences."""
+    def _sampling(self, text: str) -> dict:
+        """Sampling settings that keep delivery consistent between sentences, and
+        a length cap: a take that babbles on past the end of its text would
+        otherwise run to the model's default 2048 codec frames (almost 3 minutes
+        of audio, many minutes of generating) before the length check sees it."""
+        seconds = max(MIN_CAP_SECONDS, len(text) * self.cfg.qwen3_max_seconds_per_char)
         return dict(
             temperature=self.cfg.qwen3_temperature,
             subtalker_temperature=self.cfg.qwen3_temperature,
             top_k=self.cfg.qwen3_top_k,
             subtalker_top_k=self.cfg.qwen3_top_k,
+            max_new_tokens=int(seconds * CODEC_FRAMES_PER_SECOND),
         )
 
     # -- voice design ("Create Voice" dialog) --------------------------------
@@ -217,7 +250,7 @@ class Qwen3TTSSynthesizer:
                 ref_audio=reference_wav_path, ref_text=ref_text, x_vector_only_mode=False
             )
             wavs, sample_rate = self.model.generate_voice_clone(
-                text=text, language="English", voice_clone_prompt=prompt, non_streaming_mode=True, **self._sampling()
+                text=text, language="English", voice_clone_prompt=prompt, non_streaming_mode=True, **self._sampling(text)
             )
         return np.asarray(wavs[0], dtype=np.float32), sample_rate
 
@@ -225,16 +258,72 @@ class Qwen3TTSSynthesizer:
         self._pace_history.clear()
         self._clarity_history.clear()
         self._tone_history.clear()
+        conditioning = clone_conditioning(self.cfg.qwen3_clone_mode, ref_text)
+        if conditioning == "bridge":
+            prompt_wav, prompt_text = str(self._english_reference(reference_wav_path)), ENGLISH_BRIDGE_TEXT
+        else:
+            prompt_wav, prompt_text = reference_wav_path, ref_text
         with self._lock:
             self._prompt = self.model.create_voice_clone_prompt(
-                ref_audio=reference_wav_path,
-                ref_text=ref_text,
-                x_vector_only_mode=not use_icl_conditioning(self.cfg.qwen3_clone_mode, ref_text),
+                ref_audio=prompt_wav, ref_text=prompt_text, x_vector_only_mode=conditioning == "xvector"
             )
-        vlog("tts", "voice conditioning: "
-                    + ("clip + transcript" if use_icl_conditioning(self.cfg.qwen3_clone_mode, ref_text) else "speaker embedding only"))
+        vlog("tts", "voice conditioning: " + {
+            "icl": "clip + transcript",
+            "bridge": "an English clip in the voice + its text",
+            "xvector": "speaker embedding only",
+        }[conditioning])
         self.cloned_speaker_wav = reference_wav_path
         self._active_lora_speaker_id = None
+
+    def _english_reference(self, reference_wav_path: str) -> Path:
+        """The voice of a non-English reference clip speaking ENGLISH_BRIDGE_TEXT,
+        for cloning from instead of the clip itself (zero-shot either way).
+
+        Cloned from a Russian clip + its Russian transcript, the model carries on
+        as that Russian speaker: English words read with Russian sounds, as if
+        spelled out letter by letter, digits read out in Russian, stray Russian-
+        sounding syllables before a sentence. The speaker embedding alone gives
+        English pronunciation but nothing else to hold on to - takes vary more,
+        and statements often end on a rising, unfinished pitch. So the embedding
+        is used once, here, to have the voice say an English passage; that clip
+        and its text are then the reference, and every sentence imitates English
+        speech in the speaker's voice. The best of a few takes (believable
+        length, clearest) is kept, cached by the reference clip's contents.
+        """
+        source = Path(reference_wav_path).read_bytes()
+        key = hashlib.sha1(source + ENGLISH_BRIDGE_TEXT.encode() + self.cfg.qwen3_model_name.encode()).hexdigest()[:16]
+        cached = Path(self.cfg.voice_library_dir) / ".english-references" / f"{key}-v2.wav"
+        if cached.is_file():
+            return cached
+        vlog("tts", "making an English reference for this voice (once; cached)")
+        with self._lock:
+            prompt = self.model.create_voice_clone_prompt(
+                ref_audio=reference_wav_path, ref_text=None, x_vector_only_mode=True
+            )
+        takes = []
+        for _ in range(ENGLISH_BRIDGE_TAKES):
+            with self._lock:
+                wavs, sample_rate = self.model.generate_voice_clone(
+                    text=ENGLISH_BRIDGE_TEXT, language="English", voice_clone_prompt=prompt,
+                    non_streaming_mode=True, **self._sampling(ENGLISH_BRIDGE_TEXT)
+                )
+            # Silence at the ends of a reference teaches the model to trail on
+            # after a sentence (takes that run to the length cap), so it's cut.
+            audio = trim_silence(np.asarray(wavs[0], dtype=np.float32), sample_rate)
+            seconds_per_char = len(audio) / sample_rate / len(ENGLISH_BRIDGE_TEXT)
+            takes.append((
+                longest_pause_s(audio, sample_rate) <= 1.0,           # no stall mid-passage
+                -abs(seconds_per_char - BRIDGE_SECONDS_PER_CHAR),     # a normal pace
+                audio, sample_rate,
+            ))
+            vlog("tts", f"  English reference take: {len(audio) / sample_rate:.1f}s, "
+                        f"longest pause {longest_pause_s(audio, sample_rate):.1f}s")
+        _, _, audio, sample_rate = max(takes, key=lambda take: (take[0], take[1]))
+        import soundfile
+
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        soundfile.write(str(cached), match_level(audio, sample_rate, 0.1), sample_rate)
+        return cached
 
     def clone_from_entry(self, entry: VoiceEntry) -> None:
         if entry.kind == "lora":
@@ -288,7 +377,7 @@ class Qwen3TTSSynthesizer:
         long: cut into pieces, the next piece often wasn't ready when a short
         one finished playing (a pause mid-sentence), and each piece got its
         own intonation. (A generator for the interface the pipeline uses.)"""
-        text = text.strip()
+        text = spell_numbers(text.strip())
         if not text:
             return
         audio, sample_rate = self._synthesize_checked(text)
@@ -371,12 +460,12 @@ class Qwen3TTSSynthesizer:
             if self._active_lora_speaker_id:
                 lora_model, speaker_name = self._lora_models[self._active_lora_speaker_id]
                 wavs, sample_rate = lora_model.generate_custom_voice(
-                    text=text, speaker=speaker_name, language="English", **self._sampling()
+                    text=text, speaker=speaker_name, language="English", **self._sampling(text)
                 )
             elif self._prompt is not None:
                 wavs, sample_rate = self.model.generate_voice_clone(
                     text=text, language="English", voice_clone_prompt=self._prompt,
-                    non_streaming_mode=True, **self._sampling()
+                    non_streaming_mode=True, **self._sampling(text)
                 )
             else:
                 if self._custom_model is None:
@@ -386,7 +475,7 @@ class Qwen3TTSSynthesizer:
                     speaker=self.default_voice.lower(),
                     language="English",
                     instruct=self.cfg.qwen3_style_instruct or None,
-                    **self._sampling(),
+                    **self._sampling(text),
                 )
         return np.asarray(wavs[0], dtype=np.float32), sample_rate
 

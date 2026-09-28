@@ -129,16 +129,17 @@ class TTSConfig:
     # or per syllable. Once a voice has a track record, its own pace sets the bar.
     qwen3_min_seconds_per_char: float = 0.04   # absolute floor (typical is about 0.065)
     qwen3_max_seconds_per_char: float = 0.16
-    # How a reference clip conditions the voice. "icl" feeds the clip *and its
-    # transcript* to the model - even a Russian transcript for English speech;
-    # "xvector" uses only a speaker embedding. xvector used to be picked for
-    # non-English transcripts, for fear of skipped words (none in 64 test takes),
-    # but it carries nothing of how the reference was spoken or recorded, and
-    # with it about 1 statement in 5 ended on a non-falling, "to be continued"
-    # pitch, against about 1 in 16 with icl. ("auto" = "icl".) The whole
-    # sentence is always given to the model up front (non_streaming_mode), not
-    # fed in as it speaks, so it knows where the sentence ends.
-    qwen3_clone_mode: str = "icl"
+    # How a reference clip conditions the voice (all zero-shot, no training):
+    # "auto" (default): an English transcript -> "icl"; any other language -> the
+    #   voice first says a fixed English passage (speaker embedding only), and that
+    #   clip + its text become the reference ("bridge", cached in the voice library;
+    #   see Qwen3TTSSynthesizer._english_reference);
+    # "icl": the clip + its own transcript, whatever the language - with a Russian
+    #   one the English comes out read with Russian sounds, digits in Russian;
+    # "xvector": the speaker embedding only - English pronunciation, but takes vary
+    #   more, and about 1 statement in 5 ends on a rising, unfinished pitch.
+    # The whole sentence is always given to the model up front (non_streaming_mode).
+    qwen3_clone_mode: str = "auto"
     qwen3_max_retries: int = 2
     # Voice cloning also copies a reference's recording conditions, and even a good
     # reference sometimes yields a dull, distant-sounding take. A take whose clarity
