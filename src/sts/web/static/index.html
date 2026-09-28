@@ -1129,16 +1129,17 @@
   }
 
   // -- Voice progress of translated sentences (the server's voice_state,
-  // keyed by caption seq): queued = an empty ring; generating = orange with
-  // an hourglass; generated = green; playing = green with a play triangle;
-  // played = green with a check mark. Shown only while Voice is on
+  // keyed by caption seq): queued = an empty ring; generating = an empty
+  // ring with an hourglass; generated = orange; playing = green with a play
+  // triangle; played = green with a check mark. Shown only while Voice is on
   // (body.voice-on).
   const voiceStates = new Map();
   const GREEN = '#4cbb6c', ORANGE = '#e0864c', DARK = '#0b0b0f';
-  const VOICE_LOOK = {  // state -> [circle fill (null: an empty ring), icon drawn in DARK on it]
+  // state -> [circle fill (null: an empty ring), icon (dark on a filled circle, the text color in a ring)]
+  const VOICE_LOOK = {
     queued: [null, ''],
-    generating: [ORANGE, `<path d="M8.5 6.5h7M8.5 17.5h7M9.5 6.5c0 3.2 5 3.6 5 5.5s-5 2.3-5 5.5M14.5 6.5c0 3.2-5 3.6-5 5.5s5 2.3 5 5.5" fill="none" stroke="${DARK}" stroke-width="1.8" stroke-linecap="round"/>`],
-    generated: [GREEN, ''],
+    generating: [null, '<path d="M8.5 6.5h7M8.5 17.5h7M9.5 6.5c0 3.2 5 3.6 5 5.5s-5 2.3-5 5.5M14.5 6.5c0 3.2-5 3.6-5 5.5s5 2.3 5 5.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>'],
+    generated: [ORANGE, ''],
     playing: [GREEN, `<path d="M10 7.8l6.2 4.2-6.2 4.2z" fill="${DARK}"/>`],
     played: [GREEN, `<path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="${DARK}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>`],
   };
