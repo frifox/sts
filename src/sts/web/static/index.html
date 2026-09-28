@@ -1129,14 +1129,18 @@
   }
 
   // -- Voice progress of translated sentences (the server's voice_state,
-  // keyed by caption seq): queued = an empty ring, generating = an
-  // hourglass in it, generated = a check mark, playing = a play triangle
-  // on green, played = filled gray. Shown only while Voice is on (body.voice-on).
+  // keyed by caption seq): queued = an empty ring; generating = orange with
+  // an hourglass; generated = green; playing = green with a play triangle;
+  // played = green with a check mark. Shown only while Voice is on
+  // (body.voice-on).
   const voiceStates = new Map();
-  const VOICE_ICONS = {
-    queued: '',
-    generating: '<path d="M8.5 6.5h7M8.5 17.5h7M9.5 6.5c0 3.2 5 3.6 5 5.5s-5 2.3-5 5.5M14.5 6.5c0 3.2-5 3.6-5 5.5s5 2.3 5 5.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
-    generated: '<path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+  const GREEN = '#4cbb6c', ORANGE = '#e0864c', DARK = '#0b0b0f';
+  const VOICE_LOOK = {  // state -> [circle fill (null: an empty ring), icon drawn in DARK on it]
+    queued: [null, ''],
+    generating: [ORANGE, `<path d="M8.5 6.5h7M8.5 17.5h7M9.5 6.5c0 3.2 5 3.6 5 5.5s-5 2.3-5 5.5M14.5 6.5c0 3.2-5 3.6-5 5.5s5 2.3 5 5.5" fill="none" stroke="${DARK}" stroke-width="1.8" stroke-linecap="round"/>`],
+    generated: [GREEN, ''],
+    playing: [GREEN, `<path d="M10 7.8l6.2 4.2-6.2 4.2z" fill="${DARK}"/>`],
+    played: [GREEN, `<path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="${DARK}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>`],
   };
   function setVoiceState(seq, state) {
     if (seq == null) return;
@@ -1166,12 +1170,10 @@
       }
       if (icon.dataset.state === state) continue;
       icon.dataset.state = state;
-      icon.innerHTML = state === 'played'
-        ? '<circle cx="12" cy="12" r="10" fill="#6b6b73" stroke="#6b6b73" stroke-width="2"/>'
-        : state === 'playing'  // green, like the finalize clock's "done", with a dark play triangle
-          ? '<circle cx="12" cy="12" r="10" fill="#4cbb6c" stroke="#4cbb6c" stroke-width="2"/>'
-            + '<path d="M10 7.8l6.2 4.2-6.2 4.2z" fill="#0b0b0f"/>'
-          : `<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>${VOICE_ICONS[state] || ''}`;
+      const [fill, mark] = VOICE_LOOK[state] || VOICE_LOOK.queued;
+      icon.innerHTML = fill
+        ? `<circle cx="12" cy="12" r="10" fill="${fill}" stroke="${fill}" stroke-width="2"/>${mark}`
+        : `<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>${mark}`;
     }
   }
 
