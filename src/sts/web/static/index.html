@@ -178,6 +178,10 @@
   .recent .recent-first, .recent .recent-sentence { opacity: 0.4; transition: opacity 0.3s ease; }
   .recent.pending .recent-first { opacity: 1; }
   #portrait-grid .recent .recent-sentence.pending { opacity: 1; }
+  /* With Voice on only the sentence being spoken is bright (highlightLines),
+     so pending not-yet-final text stays faded too. */
+  body.voice-on .recent.pending .recent-first,
+  body.voice-on #portrait-grid .recent .recent-sentence.pending { opacity: 0.4; }
   /* Portrait: one not-yet-final sentence per line, like the final rows
      above (the same gap as the grid's row-gap: 0.6em of its 1rem). */
   #portrait-grid .recent .recent-first,
