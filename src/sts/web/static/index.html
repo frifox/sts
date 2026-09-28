@@ -368,14 +368,28 @@
     width: 0.62em;
     height: 0.62em;
     border-radius: 50%;
-    border: 0.08em solid currentColor;
+    border: 0.08em solid #e0864c;
     box-sizing: border-box;
     background: conic-gradient(transparent calc((1 - var(--left)) * 360deg), #e0864c 0);
   }
   .finalize-clock.idle { visibility: hidden; }
   /* Time's up - ready to be finalized (or waiting only on the sentences
      above it): a solid orange dot. */
-  .recent .finalize-clock.done { background: #e0864c; border-color: #e0864c; }
+  .recent .finalize-clock.done { background: #e0864c; }
+  /* A finalized original sentence: a solid green dot - like a voiced
+     sentence's - in the margin left of its row in portrait (where its
+     finalize clock was), inline before it in landscape. */
+  .final-dot {
+    display: inline-block;
+    width: 0.62em;
+    height: 0.62em;
+    margin-right: 0.3em;
+    vertical-align: -0.02em;
+    border-radius: 50%;
+    background: #4cbb6c;
+  }
+  #portrait-grid .original:not(.recent) { position: relative; }
+  #portrait-grid .original .final-dot { position: absolute; right: calc(100% + 0.28em); top: 0.32em; margin: 0; }
 
   .verse-chip:hover { background: rgba(201, 162, 75, 0.18); }
   .verse-chip.show { display: inline-block; }
@@ -936,12 +950,21 @@
     return flow;
   }
 
+  // The green dot marking a finalized original sentence (see .final-dot).
+  function finalDot() {
+    const dot = document.createElement('span');
+    dot.className = 'final-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    return dot;
+  }
+
   function addLine(containerId, text, opts, seq) {
     const container = document.getElementById(containerId);
     const flow = flowOf(containerId);
     const snippet = document.createElement('span');
     snippet.className = opts?.promoted ? 'line promoted' : 'line';
     snippet.textContent = text + ' ';  // the space keeps consecutive snippets apart on one line
+    if (containerId === 'original-lines') snippet.prepend(finalDot());
     snippet.seq = seq;  // kept so a switch to portrait can pair originals with translations exactly
     markOldIfNewBatch(containerId, flow.children, opts);  // the live caption isn't in `flow`
     flow.appendChild(snippet);
@@ -1003,6 +1026,7 @@
     markOldIfNewBatch('portrait-original', portraitGrid.querySelectorAll('.original:not(.recent)'), opts);
     original.style.margin = '0';
     original.textContent = text;
+    original.prepend(finalDot());
     const translated = document.createElement('p');
     translated.className = 'portrait-cell line translated';
     translated.style.margin = '0';
