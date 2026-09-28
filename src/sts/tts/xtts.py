@@ -13,6 +13,7 @@ about per device.
 import queue
 import re
 import threading
+import time
 
 import numpy as np
 import soundfile as sf
@@ -82,10 +83,24 @@ class _TokenQueue(BaseStreamer):
 
 
 class _Cancelled(StoppingCriteria):
-    def __init__(self, event: threading.Event):
+    """Stops generation once `event` is set. Also where the GPU lock is
+    handed over between tokens (`lock`: the mps GPU lock the generation
+    holds, see sts.gpu): generate() calls this after every token, so
+    releasing the lock here for a moment lets the chunk decoding, captions
+    and translation run in between. Held for the whole generation instead,
+    nothing else could use the GPU until the entire sentence was generated
+    - so the first audio waited for all of it, and captions, translation
+    and the decoding stalled one another (pauses mid-sentence)."""
+
+    def __init__(self, event: threading.Event, lock=None):
         self.event = event
+        self.lock = lock if hasattr(lock, "release") else None
 
     def __call__(self, input_ids, scores, **kwargs):
+        if self.lock is not None:
+            self.lock.release()
+            time.sleep(0)  # let a thread waiting for the GPU take it
+            self.lock.acquire()
         return self.event.is_set()
 
 
@@ -227,11 +242,12 @@ class XTTSSynthesizer:
 
         def generate() -> None:
             try:
-                with torch.inference_mode(), gpu_lock(self.cfg.device):
+                lock = gpu_lock(self.cfg.device)
+                with torch.inference_mode(), lock:
                     model.gpt.generate(
                         cond_latents=gpt_latent, text_inputs=text_tokens, input_tokens=None,
                         do_sample=True, num_beams=1, num_return_sequences=1, output_attentions=False,
-                        streamer=tokens, stopping_criteria=StoppingCriteriaList([_Cancelled(cancelled)]),
+                        streamer=tokens, stopping_criteria=StoppingCriteriaList([_Cancelled(cancelled, lock)]),
                         **settings,
                     )
             except BaseException as exc:  # handed to the consumer, which re-raises it
