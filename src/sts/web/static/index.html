@@ -1137,8 +1137,8 @@
   // keyed by caption seq): queued = an empty ring; generating = the ring
   // filling clockwise with orange over the server's estimate of how long it
   // takes (an hourglass in it while there's no estimate yet); generated =
-  // orange; playing = green with a play triangle; played = plain green. Shown only while Voice is on
-  // (body.voice-on).
+  // orange; playing = green with a play triangle; played = plain green.
+  // Shown only while Voice is on (body.voice-on).
   const voiceStates = new Map();
   const GREEN = '#4cbb6c', ORANGE = '#e0864c', DARK = '#0b0b0f';
   // state -> [circle fill (null: an empty ring), icon (dark on a filled circle, the text color in a ring)]
