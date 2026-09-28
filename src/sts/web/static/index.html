@@ -154,6 +154,11 @@
   }
   .recent .recent-first, .recent .recent-rest { opacity: 0.4; transition: opacity 0.3s ease; }
   .recent.pending .recent-first { opacity: 1; }
+  /* Portrait: one not-yet-final sentence per line, like the final rows
+     above (the same gap as the grid's row-gap: 0.6em of its 1rem). */
+  #portrait-grid .recent .recent-first,
+  #portrait-grid .recent .recent-sentence { display: block; }
+  #portrait-grid .recent .recent-sentence { margin-top: 0.6rem; }
 
   /* Portrait mode has no separate original/translated panels to hide (both
      columns live in one shared panel) - Caption/Translate turning off is
@@ -1088,7 +1093,14 @@
       el.append(clock, first, rest);
     }
     el.querySelector('.recent-first').textContent = sentences[0] ?? '';
-    el.querySelector('.recent-rest').textContent = sentences.length > 1 ? ' ' + sentences.slice(1).join(' ') : '';
+    // One span per sentence, so portrait can put each on its own line (the
+    // leading space separates them in landscape's flowing paragraph).
+    el.querySelector('.recent-rest').replaceChildren(...sentences.slice(1).map((sentence) => {
+      const span = document.createElement('span');
+      span.className = 'recent-sentence';
+      span.textContent = ' ' + sentence;
+      return span;
+    }));
     drawFinalizeClocks();
   }
 
