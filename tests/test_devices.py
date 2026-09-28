@@ -106,13 +106,8 @@ def test_qwen3_text_splitting_and_plausibility():
     stub = types.ModuleType("qwen_tts")
     stub.Qwen3TTSModel = object
     sys.modules.setdefault("qwen_tts", stub)
-    from sts.tts.qwen3 import speech_length_plausible, split_for_qwen
+    from sts.tts.qwen3 import speech_length_plausible
 
-    text = "Short one. " + ("This is a long clause that keeps going, " * 8).strip(", ") + "."
-    pieces = split_for_qwen(text, 140)
-    assert all(len(p) <= 140 for p in pieces)
-    assert " ".join(pieces).replace(" ", "") == text.replace(" ", "")  # nothing dropped
-    assert split_for_qwen("  ", 140) == []
     text = "One two three four five six seven eight nine ten."  # 50 characters
     assert speech_length_plausible(text, 3.2, 0.04, 0.16)
     assert not speech_length_plausible(text, 1.0, 0.04, 0.16)   # skipped

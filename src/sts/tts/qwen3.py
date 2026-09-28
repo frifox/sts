@@ -63,12 +63,7 @@ from sts.devices import supports_bf16_and_flash_attention
 from sts.audioquality import clarity_db, match_level
 from sts.gpu import gpu_lock
 from sts.log import vlog
-from sts.textclean import split_for_tts
 from sts.tts.voice_library import VoiceEntry
-
-
-def split_for_qwen(text: str, limit: int) -> list[str]:
-    return split_for_tts(text, limit)
 
 
 def transcript_is_english(text: str | None) -> bool:
@@ -291,16 +286,21 @@ class Qwen3TTSSynthesizer:
         )
 
     def synthesize_stream(self, text: str):
-        """Yields (audio, sample_rate) per short piece, so playback can start
-        early and each piece can be checked (and regenerated) on its own."""
-        for piece in split_for_qwen(text, self.cfg.qwen3_max_chars):
-            audio, sample_rate = self._synthesize_checked(piece)
-            if self.cfg.target_level:
-                audio = match_level(audio, sample_rate, self.cfg.target_level)
-            yield audio, sample_rate
+        """Yields (audio, sample_rate) for `text` - one translated sentence,
+        as shown on the caption page - generated whole, in one go, however
+        long: cut into pieces, the next piece often wasn't ready when a short
+        one finished playing (a pause mid-sentence), and each piece got its
+        own intonation. (A generator for the interface the pipeline uses.)"""
+        text = text.strip()
+        if not text:
+            return
+        audio, sample_rate = self._synthesize_checked(text)
+        if self.cfg.target_level:
+            audio = match_level(audio, sample_rate, self.cfg.target_level)
+        yield audio, sample_rate
 
     def synthesize(self, text: str, pause_s: float = 0.35) -> tuple[np.ndarray, int]:
-        """Whole text as one clip, with `pause_s` of silence between sentences."""
+        """Whole text as one clip."""
         pieces = list(self.synthesize_stream(text))
         if not pieces:
             return np.zeros(0, dtype=np.float32), 24_000

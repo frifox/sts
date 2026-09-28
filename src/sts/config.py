@@ -120,14 +120,13 @@ class TTSConfig:
     # main generator and the "sub-talker" that shapes fine acoustic detail.
     qwen3_temperature: float = 0.6
     qwen3_top_k: int = 30
-    # Qwen3 sometimes speaks the start and end of a sentence and skips the middle.
-    # Long input makes it likelier, so text is synthesized in pieces of at most
-    # this many characters, and a piece whose audio is implausibly short (or
-    # long) for its length is regenerated, up to `qwen3_max_retries` times.
+    # Qwen3 sometimes speaks the start and end of a sentence and skips the middle
+    # (long input makes it likelier). Each translated sentence is generated whole
+    # - one generation, however long - and one whose audio is implausibly short
+    # (or long) for its length is regenerated, up to `qwen3_max_retries` times.
     # Length is judged per *character*: measured on a cloned voice it varied
     # 0.055-0.079 s/char across sentences, far steadier than per word (0.23-0.68)
     # or per syllable. Once a voice has a track record, its own pace sets the bar.
-    qwen3_max_chars: int = 140
     qwen3_min_seconds_per_char: float = 0.04   # absolute floor (typical is about 0.065)
     qwen3_max_seconds_per_char: float = 0.16
     # How a reference clip conditions the voice. "icl" feeds the clip *and its
