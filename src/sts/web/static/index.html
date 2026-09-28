@@ -124,8 +124,13 @@
   .portrait-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    /* Room for the translated sentences' voice-state circles, which sit in it. */
-    column-gap: max(3vw, 2.4rem);
+    /* The translated sentences' voice-state circles sit in this gap, left
+       of their text: each half of it is a space, the circle, and the same
+       space again - so the circle is as far from the divider in the middle
+       as from its text (see #portrait-grid .translated .voice-state). In
+       units of the caption text, which the circle's size is in; plus the
+       2px divider line itself. */
+    column-gap: calc(2 * (0.62 + 2 * 0.28) * var(--final-size) + 2px);
     row-gap: 0.6em;
   }
 
@@ -144,7 +149,7 @@
   .voice-state { display: none; width: 0.62em; height: 0.62em; vertical-align: -0.02em; margin-right: 0.3em; }
   body.voice-on .voice-state { display: inline-block; }
   #portrait-grid .translated { position: relative; }
-  #portrait-grid .translated .voice-state { position: absolute; right: calc(100% + 0.28em); top: 0.32em; margin: 0; }
+  #portrait-grid .translated .voice-state { position: absolute; right: calc(100% + 0.28em); top: 0.32em; margin: 0; }  /* 0.62em wide: see .portrait-grid's column-gap */
 
   /* The caption text that isn't final yet (--unfinished-size). After
      .portrait-cell so it wins there too (same specificity - order decides). */
