@@ -143,6 +143,11 @@ The app's sts keeps `sts.db`, `voices/` and `certs/` in
 ## Tools
 
 - **`sts-caption`** — captions only, in the terminal; for checking recognition.
+- **`sts-add-voices`** — adds a batch of voices: put video or audio files
+  (one speaker each, named after them) in `voices/new/` and run it. It picks
+  the best ~18 s of speech from each, transcribes it, saves it as a voice
+  (like Clone) and moves the file to `voices/new/done/`. `--start/--end`
+  limit it to part of a file; `--replace` redoes an existing voice.
 - **`translate.py`** — compares translation models (NLLB, MADLAD,
   HY-MT1.5, TranslateGemma) on the first minutes of a recording and writes
   each sentence with every model's English. Run from `.venv-qwen`.

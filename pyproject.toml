@@ -49,6 +49,7 @@ mlx = [
 [project.scripts]
 sts = "sts.cli:main"
 sts-import-voice = "sts.tts.import_cli:main"
+sts-add-voices = "sts.add_voices:main"
 sts-benchmark = "sts.benchmark:main"
 sts-caption = "sts.caption:main"
 
