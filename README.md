@@ -114,6 +114,22 @@ certificate, `certs/cert.pem` + `certs/key.pem`, made on first start (with
 `sts --help` lists everything else (per-stage devices, caption timing,
 pauses, Qwen3 options).
 
+## Mac app
+
+`mac/` is a native macOS wrapper: it starts sts on launch, shows the caption
+page in its window, and stops sts on quit.
+
+```bash
+mac/build.sh            # mac/build/STS.app; `mac/build.sh install` copies it to /Applications
+```
+
+- **STS ▸ Launch Configuration… (⌘,)** — working directory, virtualenv
+  (`.venv-mlx` by default), sts arguments, page URL; saving restarts sts.
+- **View ▸ Show/Hide Console (⌘J)** — sts's output in a panel at the bottom.
+- **Server** — start, stop (⌘.), restart (⇧⌘R).
+
+macOS asks for Microphone access for STS itself on first use.
+
 ## Tools
 
 - **`sts-caption`** — captions only, in the terminal; for checking recognition.
