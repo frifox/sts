@@ -947,13 +947,21 @@ class Pipeline:
                 return None
 
         tts_model = self.cfg.tts.qwen3_model_name if self.cfg.tts.backend == "qwen3" else self.cfg.tts.model_name
+        tts_device = self.cfg.tts.device
+        if self.cfg.tts.backend == "qwen3":
+            from sts.tts.qwen3_engine import resolve_engine
+
+            if resolve_engine(self.cfg.tts.qwen3_engine) == "mlx":
+                from sts.tts.qwen3_mlx import mlx_model_name
+
+                tts_model, tts_device = mlx_model_name(tts_model), f"{tts_device} (MLX)"
         return {
             "asr": {"model": ASR_MODEL_NAME, "device": self.cfg.asr.device, "memory": memory(self.asr)},
             "translation": {
                 "model": self.cfg.translation.model_name, "device": self.cfg.translation.device,
                 "memory": memory(self.translator),
             },
-            "tts": {"model": tts_model, "device": self.cfg.tts.device, "memory": memory(self.tts)},
+            "tts": {"model": tts_model, "device": tts_device, "memory": memory(self.tts)},
         }
 
     def _broadcast_engines(self) -> None:

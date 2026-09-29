@@ -69,14 +69,19 @@ Qwen3-TTS on pre-Ampere NVIDIA cards falls back to float16 automatically.
 
 ## Setup
 
-Python 3.10 or 3.11 (Coqui TTS doesn't support 3.12+). The two TTS backends
+Python 3.10 or 3.11 (Coqui TTS doesn't support 3.12+). The TTS options
 need conflicting `transformers` versions, so each gets its own virtualenv:
 
 ```bash
 git clone https://github.com/frifox/sts.git && cd sts
 python3.11 -m venv .venv-xtts && .venv-xtts/bin/pip install -e ".[xtts,dev]"
 python3.11 -m venv .venv-qwen && .venv-qwen/bin/pip install -e ".[qwen3,dev]"   # optional
+python3.11 -m venv .venv-mlx && .venv-mlx/bin/pip install -e ".[mlx,dev]"       # optional, Apple Silicon
 ```
+
+`.venv-mlx` runs Qwen3-TTS on Apple's MLX instead of PyTorch: the same voices
+at about 2.5x the speed on Apple Silicon (1.7B model: ~0.27x real time vs
+~0.72x). Zero-shot cloned voices only - no trained LoRA voices.
 
 - **NVIDIA:** install the driver, then PyTorch from the CUDA index before
   the project (`pip install torch --index-url https://download.pytorch.org/whl/cu124`).
@@ -90,7 +95,7 @@ Models download on first run.
 ## Usage
 
 ```bash
-.venv-xtts/bin/sts                          # XTTS voice (.venv-qwen/bin/sts for Qwen3-TTS)
+.venv-xtts/bin/sts                          # XTTS voice (.venv-mlx/bin/sts or .venv-qwen/bin/sts: Qwen3-TTS)
 sts --list-devices                          # find input/output device indexes
 sts --input-device 2 --output-device 3
 sts --translation-model google/madlad400-3b-mt   # less memory

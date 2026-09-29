@@ -58,7 +58,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from qwen_tts import Qwen3TTSModel
+try:
+    from qwen_tts import Qwen3TTSModel
+except ImportError:  # .venv-mlx: Qwen3-TTS runs on MLX instead (sts.tts.qwen3_mlx)
+    Qwen3TTSModel = None
 
 from sts.config import TTSConfig
 from sts.devices import supports_bf16_and_flash_attention
@@ -66,6 +69,7 @@ from sts.audioquality import clarity_db, longest_pause_s, match_level, match_ton
 from sts.gpu import gpu_lock
 from sts.log import vlog
 from sts.tts.numbers import spell_numbers
+from sts.tts.qwen3_engine import resolve_engine
 from sts.tts.voice_library import VoiceEntry
 
 
@@ -155,7 +159,18 @@ def _attn_impl_for_device(device: str) -> str:
 class Qwen3TTSSynthesizer:
     def __init__(self, cfg: TTSConfig):
         self.cfg = cfg
-        self.model = Qwen3TTSModel.from_pretrained(
+        self.engine = resolve_engine(cfg.qwen3_engine)
+        if self.engine == "mlx":
+            from sts.tts.qwen3_mlx import MLXQwen3TTSModel
+
+            self._model_class = MLXQwen3TTSModel
+        elif Qwen3TTSModel is None:
+            raise ImportError("qwen_tts isn't installed (pip install -e '.[qwen3]'); "
+                              "or use the MLX engine from .venv-mlx (pip install -e '.[mlx]')")
+        else:
+            self._model_class = Qwen3TTSModel
+        vlog("tts", f"Qwen3-TTS engine: {self.engine}")
+        self.model = self._model_class.from_pretrained(
             cfg.qwen3_model_name,
             device_map=cfg.device,
             dtype=_dtype_for_device(cfg.device),
@@ -220,7 +235,7 @@ class Qwen3TTSSynthesizer:
 
                 snapshot_download(self.cfg.qwen3_design_model_name)
                 with self._lock:
-                    self._design_model = Qwen3TTSModel.from_pretrained(
+                    self._design_model = self._model_class.from_pretrained(
                         self.cfg.qwen3_design_model_name,
                         device_map=self.cfg.device,
                         dtype=_dtype_for_device(self.cfg.device),
@@ -238,7 +253,11 @@ class Qwen3TTSSynthesizer:
             self._design_model = None
         gc.collect()
         with self._lock:
-            if self.cfg.device == "mps":
+            if self.engine == "mlx":
+                from sts.tts.qwen3_mlx import clear_cache
+
+                clear_cache()
+            elif self.cfg.device == "mps":
                 torch.mps.empty_cache()
             elif self.cfg.device == "cuda":
                 torch.cuda.empty_cache()
@@ -364,7 +383,7 @@ class Qwen3TTSSynthesizer:
         self._active_lora_speaker_id = None
 
     def _load_custom_model(self):
-        return Qwen3TTSModel.from_pretrained(
+        return self._model_class.from_pretrained(
             self.cfg.qwen3_custom_model_name,
             device_map=self.cfg.device,
             dtype=_dtype_for_device(self.cfg.device),
@@ -481,6 +500,9 @@ class Qwen3TTSSynthesizer:
 
 
 def _load_lora_model(cfg: TTSConfig, entry: VoiceEntry) -> tuple[Qwen3TTSModel, str]:
+    if Qwen3TTSModel is None or resolve_engine(cfg.qwen3_engine) == "mlx":
+        raise RuntimeError(f"voice {entry.name!r} is a trained (LoRA) voice, which needs the PyTorch "
+                           "engine (.venv-qwen); the MLX engine clones voices zero-shot only")
     from peft import PeftModel
 
     base = Qwen3TTSModel.from_pretrained(

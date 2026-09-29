@@ -107,6 +107,11 @@ class TTSConfig:
     # needed. Used when no cloned/trained voice is active. `qwen3_style_instruct`
     # steers delivery (ignored by the 0.6B variant).
     qwen3_custom_model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+    # What runs these models: "torch" (qwen-tts, PyTorch: .venv-qwen), "mlx"
+    # (mlx-audio, Apple's MLX: .venv-mlx - the same models converted, about 2.5x
+    # faster on Apple Silicon) or "auto" (whichever this environment has; see
+    # sts.tts.qwen3_engine).
+    qwen3_engine: str = "auto"
     # Load the preset-voice model at start-up (live use, where the preset is the
     # default voice). False loads it only if it is actually needed, which saves
     # several GB when a cloned voice is used throughout (video translation).

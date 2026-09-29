@@ -2,13 +2,13 @@ from sts.config import TTSConfig
 
 
 def _missing_backend(backend: str, exc: ImportError) -> str:
-    other = "qwen3" if backend == "xtts" else "xtts"
+    install = ("pip install -e '.[xtts]'" if backend == "xtts"
+               else "pip install -e '.[qwen3]'  (PyTorch), or  pip install -e '.[mlx]'  (MLX, Apple Silicon)")
     return (
         f"The '{backend}' TTS backend isn't installed in this environment ({exc}).\n"
-        f"  Install it with:  pip install -e '.[{backend}]'\n"
-        f"  The xtts and qwen3 extras need conflicting transformers versions, so use a separate\n"
-        f"  virtualenv per backend (e.g. .venv for xtts, .venv-qwen for qwen3) rather than adding\n"
-        f"  it on top of an environment that already has '{other}'."
+        f"  Install it with:  {install}\n"
+        f"  The TTS extras need conflicting transformers versions, so each has a virtualenv of its\n"
+        f"  own: .venv-xtts (xtts), .venv-qwen (qwen3), .venv-mlx (mlx).\n"
     )
 
 

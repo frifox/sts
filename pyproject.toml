@@ -13,6 +13,7 @@ dependencies = [
     "torchaudio>=2.1",
     "transformers>=4.40",
     "sentencepiece>=0.2",
+    "onnxruntime>=1.16",   # Silero VAD (loaded from torch hub) imports it
     "hydra-core>=1.3",     # GigaAM's model code (speech recognition) is built with it
     "omegaconf>=2.3",
     "soundfile>=0.12",
@@ -21,8 +22,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The two TTS backends need incompatible transformers versions (Coqui TTS
-# breaks on >=4.50, qwen-tts pins ==4.57.3), so install ONE per virtualenv.
+# The TTS extras need incompatible transformers versions (Coqui TTS breaks on
+# >=4.50, qwen-tts pins ==4.57.3, mlx-audio needs >=5), so install ONE per
+# virtualenv: .venv-xtts, .venv-qwen, .venv-mlx.
 xtts = [
     "TTS>=0.22",
     "transformers>=4.40,<4.50",
@@ -34,6 +36,14 @@ qwen3 = [
     "qwen-tts",
     "peft>=0.11",
     "safetensors>=0.4",
+]
+# Qwen3-TTS on Apple's MLX instead of PyTorch (Apple Silicon; about 2.5x faster
+# there). mlx-audio needs transformers>=5, qwen-tts pins 4.57.3: a virtualenv of
+# its own (.venv-mlx). No trained LoRA voices on this engine.
+mlx = [
+    "mlx-audio>=0.5.7",
+    "safetensors>=0.4",
+    "librosa>=0.10",
 ]
 
 [project.scripts]

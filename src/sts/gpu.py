@@ -47,6 +47,10 @@ def model_bytes(*models) -> int:
                     seen.add(key)
                     total += tensor.numel() * tensor.element_size()
             return
+        weight_bytes = getattr(obj, "weight_bytes", None)  # a model not in torch (MLX)
+        if callable(weight_bytes):
+            total += weight_bytes()
+            return
         visit(getattr(obj, "model", None), depth + 1)
 
     for model in models:

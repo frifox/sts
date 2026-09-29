@@ -79,6 +79,13 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "higher = more varied (default 0.6; the model's own default is 0.9)",
     )
     parser.add_argument(
+        "--qwen-engine",
+        choices=["auto", "torch", "mlx"],
+        default=None,
+        help="What runs Qwen3-TTS: 'torch' (qwen-tts, .venv-qwen), 'mlx' (mlx-audio, .venv-mlx: about 2.5x "
+        "faster on Apple Silicon) or 'auto' (default: whichever this environment has)",
+    )
+    parser.add_argument(
         "--qwen-clone-mode",
         choices=["auto", "icl", "xvector"],
         default=None,
@@ -122,11 +129,12 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 # The Python module each backend's extra installs.
-_BACKEND_MODULES = {"xtts": "TTS", "qwen3": "qwen_tts"}
+_BACKEND_MODULES = {"xtts": ("TTS",), "qwen3": ("qwen_tts", "mlx_audio")}  # qwen3: PyTorch or MLX
 
 
 def installed_backends() -> list[str]:
-    return [name for name, module in _BACKEND_MODULES.items() if importlib.util.find_spec(module) is not None]
+    return [name for name, modules in _BACKEND_MODULES.items()
+            if any(importlib.util.find_spec(module) is not None for module in modules)]
 
 
 def default_tts_backend(prefer: str = "xtts") -> str:
@@ -171,6 +179,8 @@ def build_engine_config(args: argparse.Namespace) -> tuple[PipelineConfig, tuple
         print(f"[tts] using the {cfg.tts.backend} backend (the one installed in this environment)", flush=True)
     cfg.tts.use_backend_voices()
     cfg.tts.voice_library_dir = args.voice_library_dir
+    if args.qwen_engine is not None:
+        cfg.tts.qwen3_engine = args.qwen_engine
     if args.qwen_clone_mode is not None:
         cfg.tts.qwen3_clone_mode = args.qwen_clone_mode
     if args.qwen_preload_presets is not None:

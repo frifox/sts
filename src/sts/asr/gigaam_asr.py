@@ -20,6 +20,8 @@ import hashlib
 from collections import OrderedDict
 from contextlib import contextmanager
 
+from pathlib import Path
+
 import numpy as np
 import torch
 
@@ -85,13 +87,42 @@ def _without_pyannote_check():
         dmu.get_imports = original
 
 
+def _load_without_meta_init():
+    """GigaAM built from its config and its weights file loaded into it. Needed
+    with transformers 5 (the .venv-mlx environment: mlx-audio requires it):
+    from_pretrained there first builds every model on the "meta" device, and
+    GigaAM's feature extractor computes a mel filterbank while it's built -
+    real tensors meeting meta ones ("Tensor on device cpu is not on the
+    expected device meta")."""
+    import torch
+    from huggingface_hub import snapshot_download
+    from safetensors.torch import load_file
+    from transformers import AutoConfig, AutoModel
+
+    config = AutoConfig.from_pretrained(MODEL_NAME, revision=REVISION, trust_remote_code=True)
+    model = AutoModel.from_config(config, trust_remote_code=True)
+    folder = Path(snapshot_download(MODEL_NAME, revision=REVISION))
+    weights: dict = {}
+    for file in sorted(folder.glob("*.safetensors")) or sorted(folder.glob("*.bin")):
+        weights.update(load_file(file) if file.suffix == ".safetensors" else torch.load(file, map_location="cpu"))
+    missing, unexpected = model.load_state_dict(weights, strict=False)
+    if missing or unexpected:
+        raise RuntimeError(f"GigaAM weights don't match the model: missing {missing[:5]}, unexpected {unexpected[:5]}")
+    return model
+
+
 class GigaAMASR:
     def __init__(self, cfg: ASRConfig):
         self.cfg = cfg
         from transformers import AutoModel
 
         with _without_pyannote_check():
-            model = AutoModel.from_pretrained(MODEL_NAME, revision=REVISION, trust_remote_code=True)
+            try:
+                model = AutoModel.from_pretrained(MODEL_NAME, revision=REVISION, trust_remote_code=True)
+            except Exception as exc:
+                if "meta" not in str(exc):
+                    raise
+                model = _load_without_meta_init()
         self.model = model.to(cfg.device).eval()
         self._cache: OrderedDict[bytes, str] = OrderedDict()
 
