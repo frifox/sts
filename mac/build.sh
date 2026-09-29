@@ -66,4 +66,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 PLIST
 
 codesign --force --sign - "$app"
+# Finder and the Dock cache an app's icon by path: have them pick up this build's.
+touch "$app"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
 echo "built $PWD/$app ($(du -sh "$app" | cut -f1))"
