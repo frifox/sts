@@ -145,6 +145,11 @@ class TTSConfig:
     #   more, and about 1 statement in 5 ends on a rising, unfinished pitch.
     # The whole sentence is always given to the model up front (non_streaming_mode).
     qwen3_clone_mode: str = "auto"
+    # "bridge" references take their American accent from this preset voice
+    # ("Aiden" or "Ryan"), or "" for none: the speaker's embedding alone, whose
+    # accent is left to chance (it once came out British). The caption page's
+    # Voice dropdown sets it too (remembered across restarts).
+    qwen3_accent_donor: str = "Aiden"
     qwen3_max_retries: int = 2
     # Voice cloning also copies a reference's recording conditions, and even a good
     # reference sometimes yields a dull, distant-sounding take. A take whose clarity

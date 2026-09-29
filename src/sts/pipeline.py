@@ -44,6 +44,7 @@ from sts.audio.devices import check_input, check_output, reinitialize_audio_syst
 from sts.audio.playback import AudioPlayback
 from sts.audio.tempo import time_stretch
 from sts.audio.vad import SpeechSegmenter
+from sts.tts.accent import ACCENT_DONORS
 from sts.bible.lookup import BibleLookup
 from sts.bible.reference import find_references
 from sts.config import PipelineConfig
@@ -436,6 +437,8 @@ class Pipeline:
             self._show_unfinished = bool(data.get("on"))
             if self._persistent_config is not None:
                 self._persistent_config.set("show_unfinished", "1" if self._show_unfinished else "0")
+        elif action == "set_accent_donor":
+            self._set_accent_donor(str(data.get("donor") or ""))
         elif action == "delete_voice":
             self._delete_voice(str(data.get("speaker_id") or ""))
         elif action == "select_speaker":
@@ -520,6 +523,24 @@ class Pipeline:
             self.tts.clone_from_entry(entry)
             self._voice_cloned = entry.kind != "lora"
             self._active_speaker_id = speaker_id
+
+    def _set_accent_donor(self, donor: str) -> None:
+        """Voice dropdown: which American preset voice English references take
+        their accent from ("": none). Runs on the control thread: the active
+        voice is cloned again with it, which makes a new reference the first
+        time (seconds)."""
+        if self.cfg.tts.backend != "qwen3" or (donor and donor not in ACCENT_DONORS):
+            return
+        self.cfg.tts.qwen3_accent_donor = donor
+        self.tts.set_accent_donor(donor)
+        if self._persistent_config is not None:
+            self._persistent_config.set("qwen3_accent_donor", donor)
+        vlog("voice", f"English accent from: {donor or 'the speaker alone'}")
+        if self._active_speaker_id:
+            self._select_speaker(self._active_speaker_id)
+        elif self._pending_voice is not None:
+            path, ref_text = self._pending_voice
+            self.tts.clone_voice(path, ref_text)
 
     def _delete_voice(self, speaker_id: str) -> None:
         entry = self.voice_library.get(speaker_id)
@@ -875,6 +896,8 @@ class Pipeline:
                 voice_groups=self.cfg.tts.voice_groups,
                 active_speaker_id=self._active_speaker_id,
                 show_unfinished=getattr(self, "_show_unfinished", True),
+                accent_donor=self.cfg.tts.qwen3_accent_donor,
+                accent_donors=list(ACCENT_DONORS) if self.cfg.tts.backend == "qwen3" else [],
             )
 
     def _broadcast_rtf(self, stage: str, processing_s: float, audio_s: float) -> None:

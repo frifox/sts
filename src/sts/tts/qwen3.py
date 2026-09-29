@@ -69,6 +69,7 @@ from sts.audioquality import clarity_db, longest_pause_s, match_level, match_ton
 from sts.gpu import gpu_lock
 from sts.log import vlog
 from sts.tts.numbers import spell_numbers
+from sts.tts.accent import ACCENT_DONORS
 from sts.tts.qwen3_engine import resolve_engine
 from sts.tts.voice_library import VoiceEntry
 
@@ -99,6 +100,16 @@ ENGLISH_BRIDGE_TEXT = (
     "and we will think about what these words mean for our lives. Let us listen carefully, and let us pray."
 )
 ENGLISH_BRIDGE_TAKES = 3
+# What an accent donor (sts.tts.accent, TTSConfig.qwen3_accent_donor) says for an
+# English reference, and how
+# much like the speaker a take must still sound (cosine similarity of speaker
+# embeddings: takes that kept the speaker's voice measured 0.97-0.99, ones that
+# slid into the donor's 0.91-0.93).
+DONOR_TEXT = (
+    "Welcome, everyone. It's good to see all of you here this morning. "
+    "We're going to open the Bible together, and I want us to listen closely to what it says."
+)
+MIN_SPEAKER_SIMILARITY = 0.96
 BRIDGE_SECONDS_PER_CHAR = 0.058  # the passage's usual pace (about 11 s)
 
 
@@ -295,30 +306,66 @@ class Qwen3TTSSynthesizer:
         self._active_lora_speaker_id = None
 
     def _english_reference(self, reference_wav_path: str) -> Path:
-        """The voice of a non-English reference clip speaking ENGLISH_BRIDGE_TEXT,
-        for cloning from instead of the clip itself (zero-shot either way).
+        """The voice of a non-English reference clip speaking ENGLISH_BRIDGE_TEXT
+        in an American accent, for cloning from instead of the clip itself
+        (zero-shot either way).
 
         Cloned from a Russian clip + its Russian transcript, the model carries on
         as that Russian speaker: English words read with Russian sounds, as if
         spelled out letter by letter, digits read out in Russian, stray Russian-
-        sounding syllables before a sentence. The speaker embedding alone gives
-        English pronunciation but nothing else to hold on to - takes vary more,
-        and statements often end on a rising, unfinished pitch. So the embedding
-        is used once, here, to have the voice say an English passage; that clip
-        and its text are then the reference, and every sentence imitates English
-        speech in the speaker's voice. The best of a few takes (believable
-        length, clearest) is kept, cached by the reference clip's contents.
+        sounding syllables before a sentence. So the voice first says an English
+        passage; that clip and its text are then the reference, and every
+        sentence imitates English speech in the speaker's voice.
+
+        With an accent donor (`cfg.qwen3_accent_donor`, one of ACCENT_DONORS),
+        the passage is spoken with the speaker's embedding (their voice) but
+        imitating that preset American voice saying DONOR_TEXT: with the
+        embedding alone (no donor), the accent is left to chance, and a
+        reference made that way once came out British. A take can drift into
+        the donor's own voice instead, so one that sounds less like the speaker
+        than MIN_SPEAKER_SIMILARITY is dropped; if every take does, the
+        embedding alone is used. Cached by the reference clip's contents and
+        the donor.
         """
+        donor_name = self.cfg.qwen3_accent_donor if self.cfg.qwen3_accent_donor in ACCENT_DONORS else ""
         source = Path(reference_wav_path).read_bytes()
-        key = hashlib.sha1(source + ENGLISH_BRIDGE_TEXT.encode() + self.cfg.qwen3_model_name.encode()).hexdigest()[:16]
-        cached = Path(self.cfg.voice_library_dir) / ".english-references" / f"{key}-v2.wav"
+        recipe = ENGLISH_BRIDGE_TEXT + (donor_name + DONOR_TEXT if donor_name else "") + self.cfg.qwen3_model_name
+        key = hashlib.sha1(source + recipe.encode()).hexdigest()[:16]
+        folder = Path(self.cfg.voice_library_dir) / ".english-references"
+        cached = folder / f"{key}-v3.wav"
         if cached.is_file():
             return cached
         vlog("tts", "making an English reference for this voice (once; cached)")
+        folder.mkdir(parents=True, exist_ok=True)
         with self._lock:
-            prompt = self.model.create_voice_clone_prompt(
+            speaker = self.model.create_voice_clone_prompt(
                 ref_audio=reference_wav_path, ref_text=None, x_vector_only_mode=True
             )
+        target = self._speaker_vector(speaker)
+        takes = []
+        if donor_name:
+            donor_clip = str(self._accent_donor_clip(folder, donor_name))
+            with self._lock:
+                donor = self.model.create_voice_clone_prompt(ref_audio=donor_clip, ref_text=DONOR_TEXT)
+            takes = self._bridge_takes(self._with_speaker(donor, speaker), folder, target)
+            takes = [take for take in takes if take[0] >= MIN_SPEAKER_SIMILARITY]
+            if not takes:
+                vlog("tts", f"  every take with {donor_name}'s accent drifted from the speaker's voice; "
+                            "using the speaker embedding alone")
+        if not takes:
+            takes = self._bridge_takes(speaker, folder, target)
+        _, _, _, audio, sample_rate = max(takes, key=lambda take: take[1:3])
+        import soundfile
+
+        soundfile.write(str(cached), match_level(audio, sample_rate, 0.1), sample_rate)
+        return cached
+
+    def _bridge_takes(self, prompt, folder: Path, target: np.ndarray) -> list:
+        """ENGLISH_BRIDGE_TAKES takes of the passage from `prompt`, each as
+        (similarity to the speaker, no stall mid-passage, closeness to the usual
+        pace, audio, sample rate)."""
+        import soundfile
+
         takes = []
         for _ in range(ENGLISH_BRIDGE_TAKES):
             with self._lock:
@@ -329,20 +376,58 @@ class Qwen3TTSSynthesizer:
             # Silence at the ends of a reference teaches the model to trail on
             # after a sentence (takes that run to the length cap), so it's cut.
             audio = trim_silence(np.asarray(wavs[0], dtype=np.float32), sample_rate)
+            scratch = folder / "take.wav"
+            soundfile.write(str(scratch), audio, sample_rate)
+            with self._lock:
+                vector = self._speaker_vector(self.model.create_voice_clone_prompt(
+                    ref_audio=str(scratch), ref_text=None, x_vector_only_mode=True
+                ))
+            scratch.unlink(missing_ok=True)
+            similarity = float(vector @ target / (np.linalg.norm(vector) * np.linalg.norm(target) + 1e-9))
+            pause = longest_pause_s(audio, sample_rate)
             seconds_per_char = len(audio) / sample_rate / len(ENGLISH_BRIDGE_TEXT)
-            takes.append((
-                longest_pause_s(audio, sample_rate) <= 1.0,           # no stall mid-passage
-                -abs(seconds_per_char - BRIDGE_SECONDS_PER_CHAR),     # a normal pace
-                audio, sample_rate,
-            ))
-            vlog("tts", f"  English reference take: {len(audio) / sample_rate:.1f}s, "
-                        f"longest pause {longest_pause_s(audio, sample_rate):.1f}s")
-        _, _, audio, sample_rate = max(takes, key=lambda take: (take[0], take[1]))
+            takes.append((similarity, pause <= 1.0, -abs(seconds_per_char - BRIDGE_SECONDS_PER_CHAR), audio, sample_rate))
+            vlog("tts", f"  English reference take: {len(audio) / sample_rate:.1f}s, longest pause {pause:.1f}s, "
+                        f"speaker similarity {similarity:.2f}")
+        return takes
+
+    def set_accent_donor(self, name: str) -> None:
+        """Which preset voice new English references take their accent from ("": none).
+        Takes effect on the next clone (the pipeline re-clones the active voice)."""
+        self.cfg.qwen3_accent_donor = name if name in ACCENT_DONORS else ""
+
+    def _accent_donor_clip(self, folder: Path, donor_name: str) -> Path:
+        """`donor_name` (a preset voice of the CustomVoice model) saying
+        DONOR_TEXT: the American delivery English references imitate."""
+        key = hashlib.sha1((donor_name + DONOR_TEXT + self.cfg.qwen3_custom_model_name).encode()).hexdigest()[:16]
+        path = folder / f"donor-{key}.wav"
+        if path.is_file():
+            return path
+        if self._custom_model is None:
+            self._custom_model = self._load_custom_model()
+        with self._lock:
+            wavs, sample_rate = self._custom_model.generate_custom_voice(
+                text=DONOR_TEXT, speaker=donor_name.lower() if self.engine == "torch" else donor_name,
+                language="English", **self._sampling(DONOR_TEXT)
+            )
         import soundfile
 
-        cached.parent.mkdir(parents=True, exist_ok=True)
-        soundfile.write(str(cached), match_level(audio, sample_rate, 0.1), sample_rate)
-        return cached
+        soundfile.write(str(path), trim_silence(np.asarray(wavs[0], dtype=np.float32), sample_rate), sample_rate)
+        return path
+
+    def _with_speaker(self, prompt, speaker):
+        """`prompt` (a clip + its text: how to speak) with `speaker`'s embedding (whose voice)."""
+        if self.engine == "mlx":
+            return self.model.with_speaker(prompt, speaker)
+        from dataclasses import replace
+
+        return [replace(item, ref_spk_embedding=voice.ref_spk_embedding) for item, voice in zip(prompt, speaker)]
+
+    def _speaker_vector(self, prompt) -> np.ndarray:
+        """The speaker embedding of a clone prompt, for comparing voices."""
+        if self.engine == "mlx":
+            return self.model.speaker_vector(prompt)
+        return prompt[0].ref_spk_embedding.detach().float().cpu().numpy().reshape(-1)
 
     def clone_from_entry(self, entry: VoiceEntry) -> None:
         if entry.kind == "lora":

@@ -212,6 +212,9 @@ def main() -> None:
     startup = StartupProgress(persistent_config)
     startup.begin("Starting…")
     if persistent_config is not None:
+        saved_donor = persistent_config.get("qwen3_accent_donor")
+        if saved_donor is not None and args.qwen_accent_donor is None:
+            cfg.tts.qwen3_accent_donor = saved_donor  # set from the caption page last time
         saved_volume = persistent_config.get("output_volume")
         if saved_volume:
             try:

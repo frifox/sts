@@ -86,6 +86,14 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "faster on Apple Silicon) or 'auto' (default: whichever this environment has)",
     )
     parser.add_argument(
+        "--qwen-accent-donor",
+        choices=["Aiden", "Ryan", "none"],
+        default=None,
+        help="Which American preset voice a non-English cloned voice's English reference takes its accent "
+        "from, or 'none' (the speaker's embedding alone; accent left to chance). Default Aiden, or what the "
+        "caption page last set",
+    )
+    parser.add_argument(
         "--qwen-clone-mode",
         choices=["auto", "icl", "xvector"],
         default=None,
@@ -181,6 +189,8 @@ def build_engine_config(args: argparse.Namespace) -> tuple[PipelineConfig, tuple
     cfg.tts.voice_library_dir = args.voice_library_dir
     if args.qwen_engine is not None:
         cfg.tts.qwen3_engine = args.qwen_engine
+    if args.qwen_accent_donor is not None:
+        cfg.tts.qwen3_accent_donor = "" if args.qwen_accent_donor == "none" else args.qwen_accent_donor
     if args.qwen_clone_mode is not None:
         cfg.tts.qwen3_clone_mode = args.qwen_clone_mode
     if args.qwen_preload_presets is not None:

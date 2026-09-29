@@ -33,6 +33,7 @@ def mlx_model_name(name: str) -> str:
 class _ClonePrompt:
     ref_audio: object  # mx.array at the model's sample rate
     ref_text: str | None  # None: speaker embedding only (x-vector)
+    speaker_audio: object = None  # whose voice, if not ref_audio's (see with_speaker)
 
 
 class MLXQwen3TTSModel:
@@ -61,13 +62,34 @@ class MLXQwen3TTSModel:
         audio = load_audio(ref_audio, sample_rate=self.sample_rate) if isinstance(ref_audio, str) else ref_audio
         return _ClonePrompt(audio, None if x_vector_only_mode else ref_text)
 
+    def with_speaker(self, prompt: _ClonePrompt, speaker: _ClonePrompt) -> _ClonePrompt:
+        """`prompt`'s clip + text (how to speak), in `speaker`'s voice."""
+        return _ClonePrompt(prompt.ref_audio, prompt.ref_text, speaker.speaker_audio or speaker.ref_audio)
+
+    def speaker_vector(self, prompt: _ClonePrompt) -> np.ndarray:
+        audio = prompt.speaker_audio if prompt.speaker_audio is not None else prompt.ref_audio
+        return np.asarray(self._extract_speaker_embedding(audio), dtype=np.float32).reshape(-1)
+
+    def _extract_speaker_embedding(self, audio):
+        model = self._model
+        original = model.__class__.extract_speaker_embedding
+        return original(model, audio)
+
     def generate_voice_clone(self, text, language="English", voice_clone_prompt=None, non_streaming_mode=True, **sampling):
         # ICL (clip + transcript) always runs non-streaming text input in mlx-audio.
         prompt = voice_clone_prompt
-        return self._collect(self._model.generate(
-            text=text, ref_audio=prompt.ref_audio, ref_text=prompt.ref_text,
-            lang_code=language.lower(), split_pattern="", **_mlx_sampling(sampling),
-        ))
+        model = self._model
+        if prompt.speaker_audio is not None:
+            # mlx-audio takes the speaker embedding from ref_audio; here it's another clip's.
+            embedding = self._extract_speaker_embedding(prompt.speaker_audio)
+            model.extract_speaker_embedding = lambda _audio: embedding
+        try:
+            return self._collect(model.generate(
+                text=text, ref_audio=prompt.ref_audio, ref_text=prompt.ref_text,
+                lang_code=language.lower(), split_pattern="", **_mlx_sampling(sampling),
+            ))
+        finally:
+            model.__dict__.pop("extract_speaker_embedding", None)
 
     def generate_custom_voice(self, text, speaker, language="English", instruct=None, **sampling):
         return self._collect(self._model.generate_custom_voice(

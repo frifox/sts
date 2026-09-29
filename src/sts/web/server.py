@@ -334,6 +334,8 @@ class CaptionBroadcaster:
         default_voice: str | None = None,
         voice_groups: dict[str, list[str]] | None = None,
         show_unfinished: bool = True,
+        accent_donor: str = "",
+        accent_donors: list[str] | None = None,
     ) -> None:
         message = {
             "type": "status",
@@ -352,6 +354,8 @@ class CaptionBroadcaster:
             "default_voice": default_voice,
             "voice_groups": voice_groups,
             "show_unfinished": show_unfinished,
+            "accent_donor": accent_donor,
+            "accent_donors": accent_donors or [],
         }
         self._last_status = message
         if self.loop is None:

@@ -628,6 +628,9 @@
   #controls .toggle-button.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
   /* Landscape / Portrait: two buttons side by side, the current one lit. */
   .engine-dropdown .render-mode { display: flex; }
+  #accent-row { margin-top: 0.6rem; }
+  #accent-row label { display: block; margin-bottom: 0.3rem; }
+  #controls .render-mode button.is-pending { animation: pulse 1s ease-in-out infinite; }
   .engine-dropdown .render-mode button { flex: 1 1 0; }
   /* Joined into one group, like the device lists: square inner corners,
      one shared border, the lit one drawn over its neighbor. */
@@ -803,6 +806,11 @@
             <button id="btn-create-voice" hidden title="Design a new voice from a text description (Qwen3 backend)">Design</button>
             <button id="btn-train" title="Clone the speaker's voice from what the input hears next">Clone</button>
             <button id="btn-save-voice" disabled title="Save the cloned voice to the library">Save</button>
+          </div>
+          <div id="accent-row" hidden>
+            <label id="accent-label">English accent</label>
+            <div class="render-mode" id="accent-donors" role="group" aria-labelledby="accent-label"
+                 title="A voice cloned from a non-English speaker speaks English by imitating an English clip made in its voice first. That clip can take its American accent from a built-in voice (Aiden or Ryan), or come from the speaker alone - then the accent is left to chance. Changing it re-clones the current voice (a few seconds)."></div>
           </div>
         </div>
       </div>
@@ -1681,6 +1689,35 @@
     syncDeleteButton();
   }
 
+  // "English accent" in the Voice dropdown (Qwen3 only): which built-in
+  // American voice a non-English cloned voice's English reference imitates,
+  // or none. Clicked: shown chosen, pulsing, until the server confirms.
+  const accentRow = document.getElementById('accent-row');
+  const accentGroup = document.getElementById('accent-donors');
+  let pendingAccent = null;
+  function renderAccentDonors(status) {
+    const donors = status.accent_donors || [];
+    accentRow.hidden = !donors.length;
+    if (!donors.length) return;
+    if (pendingAccent !== null && status.accent_donor === pendingAccent) pendingAccent = null;
+    const chosen = pendingAccent !== null ? pendingAccent : (status.accent_donor || '');
+    const options = [...donors.map((name) => [name, name]), ['', 'Speaker only']];
+    accentGroup.replaceChildren(...options.map(([value, label]) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.classList.toggle('is-active', value === chosen);
+      button.classList.toggle('is-pending', value === chosen && pendingAccent !== null);
+      button.addEventListener('click', () => {
+        if (value === (lastStatus.accent_donor || '') && pendingAccent === null) return;
+        pendingAccent = value;
+        send('set_accent_donor', { donor: value });
+        renderAccentDonors(lastStatus);
+      });
+      return button;
+    }));
+  }
+
   function applyStatus(status) {
     const sourceChanged = status.audio_source !== lastStatus.audio_source;
     lastStatus = status;
@@ -1706,6 +1743,7 @@
     trainBtn.classList.toggle('is-active', status.training);
     saveBtn.disabled = !status.can_save || status.training;
     createBtn.hidden = !status.can_design;
+    renderAccentDonors(status);
     if (!status.can_save) closeSaveDialog();
 
     if (status.output_volume != null && !draggingVolume) {
