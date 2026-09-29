@@ -527,6 +527,9 @@
      Translate/Voice) an upstream stage they'd have nothing to work with is
      off - toggling wouldn't do anything, so don't invite the click. */
   #controls .engine-toggle:disabled { opacity: 0.4; cursor: default; }
+  /* The on/off circle in Caption/Translate/Voice: filled = on, ring = off,
+     ring with a spinner = clicked, waiting for the server to confirm. */
+  .toggle-dot { width: 0.8em; height: 0.8em; vertical-align: -0.1em; margin-right: 0.35em; overflow: visible; }
   .engine-dropdown {
     display: none;
     position: absolute;
@@ -1491,6 +1494,24 @@
   const asrToggleBtn = document.getElementById('btn-asr-toggle');
   const translateToggleBtn = document.getElementById('btn-translate-toggle');
   const ttsToggleBtn = document.getElementById('btn-tts-toggle');
+  const ENGINE_TOGGLES = [
+    { button: asrToggleBtn, label: 'Caption', key: 'active', on: 'start', off: 'stop' },
+    { button: translateToggleBtn, label: 'Translate', key: 'translation_enabled', on: 'translate_on', off: 'translate_off' },
+    { button: ttsToggleBtn, label: 'Voice', key: 'voice_enabled', on: 'voice_on', off: 'voice_off' },
+  ];
+  const pendingToggles = new Map();  // status key -> {want, timer}
+  function drawEngineToggle(toggle) {
+    const on = !!lastStatus[toggle.key];
+    const pending = pendingToggles.has(toggle.key);
+    const dot = pending
+      ? '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.4"/>'
+        + '<path class="voice-spin" d="M12 6.5a5.5 5.5 0 0 1 5.5 5.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>'
+      : `<circle cx="12" cy="12" r="9" fill="${on ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2.4"/>`;
+    toggle.button.innerHTML = `<svg class="toggle-dot" viewBox="0 0 24 24" aria-hidden="true">${dot}</svg>${toggle.label}`;
+    toggle.button.classList.toggle('is-active', on);
+    toggle.button.setAttribute('aria-pressed', String(on));
+    toggle.button.setAttribute('aria-busy', String(pending));
+  }
   const trainBtn = document.getElementById('btn-train');
   const resetBtn = document.getElementById('btn-reset');
   const saveBtn = document.getElementById('btn-save-voice');
@@ -1666,14 +1687,14 @@
     if (typeof status.show_unfinished === 'boolean') setShowUnfinished(status.show_unfinished);
     if (sourceChanged) renderDeviceLists();  // the input in use: a local device, or none (this browser's mic)
 
-    asrToggleBtn.textContent = (status.active ? '● ' : '○ ') + 'Caption';
-    asrToggleBtn.classList.toggle('is-active', status.active);
-
-    translateToggleBtn.textContent = (status.translation_enabled ? '● ' : '○ ') + 'Translate';
-    translateToggleBtn.classList.toggle('is-active', status.translation_enabled);
-
-    ttsToggleBtn.textContent = (status.voice_enabled ? '● ' : '○ ') + 'Voice';
-    ttsToggleBtn.classList.toggle('is-active', status.voice_enabled);
+    for (const toggle of ENGINE_TOGGLES) {
+      const pending = pendingToggles.get(toggle.key);
+      if (pending && status[toggle.key] === pending.want) {
+        clearTimeout(pending.timer);
+        pendingToggles.delete(toggle.key);
+      }
+      drawEngineToggle(toggle);
+    }
     document.body.classList.toggle('voice-on', !!status.voice_enabled);
     highlightLines();
 
@@ -1721,9 +1742,24 @@
     }
   }
 
-  asrToggleBtn.addEventListener('click', () => send(lastStatus.active ? 'stop' : 'start'));
-  translateToggleBtn.addEventListener('click', () => send(lastStatus.translation_enabled ? 'translate_off' : 'translate_on'));
-  ttsToggleBtn.addEventListener('click', () => send(lastStatus.voice_enabled ? 'voice_off' : 'voice_on'));
+  // Clicking Caption/Translate/Voice shows a spinner in the button's circle
+  // until the server's status confirms the change (or, if it never does,
+  // for PENDING_TOGGLE_MS), so a click never looks like it did nothing.
+  const PENDING_TOGGLE_MS = 15000;
+  for (const toggle of ENGINE_TOGGLES) {
+    toggle.button.addEventListener('click', () => {
+      const pending = pendingToggles.get(toggle.key);
+      const want = pending ? !pending.want : !lastStatus[toggle.key];  // a second click reverses the first
+      if (pending) clearTimeout(pending.timer);
+      pendingToggles.set(toggle.key, {
+        want,
+        timer: setTimeout(() => { pendingToggles.delete(toggle.key); drawEngineToggle(toggle); }, PENDING_TOGGLE_MS),
+      });
+      drawEngineToggle(toggle);
+      if (toggle.key === 'voice_enabled' && !want) stopStreamAudio();  // silence this browser right away
+      send(want ? toggle.on : toggle.off);
+    });
+  }
 
   // -- Dropdowns (hovering the Caption/Translate/Voice buttons or either level
   // meter opens its settings panel) --
@@ -2229,6 +2265,18 @@
     const startAt = Math.max(ctx.currentTime, nextStartTime);
     source.start(startAt);
     nextStartTime = startAt + audioBuffer.duration;
+    streamSources.add(source);
+    source.onended = () => streamSources.delete(source);
+  }
+
+  // Voice off: stop what this browser has already scheduled to play.
+  const streamSources = new Set();
+  function stopStreamAudio() {
+    for (const source of streamSources) {
+      try { source.stop(); } catch {}
+    }
+    streamSources.clear();
+    if (audioCtx) nextStartTime = audioCtx.currentTime;
   }
 
   // -- Start-up percentage next to the stage text: the server's expected

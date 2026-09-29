@@ -250,6 +250,7 @@ class Pipeline:
         self._last_audio_recovery = float("-inf")
         self._last_audio_recovery_ok = True
         self._active_speaker_id: str | None = None
+        self._voice_cloned = False  # a cloned (zero-shot) voice is active - see _broadcast_status
         # Held around every use of self.asr: captions and a voice-training
         # transcription can otherwise run on the one model at the same time.
         self._asr_lock = threading.Lock()
@@ -315,6 +316,7 @@ class Pipeline:
         """
         if not name:
             self.tts.clone_voice(reference_wav_path)
+            self._voice_cloned = True
             return
 
         self._stage(f"Preparing voice '{name}'…")
@@ -510,11 +512,13 @@ class Pipeline:
         self._pending_voice = None
         if not speaker_id:
             self.tts.reset_voice()
+            self._voice_cloned = False
             self._active_speaker_id = None
             return
         entry = self.voice_library.get(speaker_id)
         if entry is not None:
             self.tts.clone_from_entry(entry)
+            self._voice_cloned = entry.kind != "lora"
             self._active_speaker_id = speaker_id
 
     def _delete_voice(self, speaker_id: str) -> None:
@@ -549,6 +553,7 @@ class Pipeline:
         # Activate the clone right away so the operator can listen to it, but
         # don't write it to the library until they choose to (Save Voice).
         self.tts.clone_voice(path, ref_text)
+        self._voice_cloned = True
         self._active_speaker_id = None
         self._pending_voice = (path, ref_text)
         vlog("voice", "trained voice is active but not saved yet")
@@ -574,6 +579,7 @@ class Pipeline:
     def _save_and_activate(self, name: str, wav_source: str, ref_text: str | None) -> None:
         entry = self.voice_library.save(name, wav_source, ref_text)
         self.tts.clone_from_entry(entry)
+        self._voice_cloned = entry.kind != "lora"
         self._active_speaker_id = entry.speaker_id
         self._broadcast_library()
 
@@ -856,7 +862,11 @@ class Pipeline:
                 training=self.control.training.is_set(),
                 training_seconds=self.control.training_seconds,
                 training_target_seconds=self.control.target_seconds,
-                cloned=self.tts.cloned_speaker_wav is not None,
+                # Remembered here, not asked of the voice stage: on mps that runs in a
+                # process of its own, and asking waits until the sentence it's
+                # synthesizing is done - holding up this status (a Voice off
+                # click's confirmation) and the web server's whole event loop.
+                cloned=getattr(self, "_voice_cloned", False),
                 can_save=self._pending_voice is not None,
                 output_volume=round(self.cfg.audio.volume * 100),
                 audio_source=self.cfg.audio.source,

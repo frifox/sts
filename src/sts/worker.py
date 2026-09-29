@@ -188,8 +188,12 @@ class StageProcess:
     def __getattr__(self, name: str):
         if name.startswith("_"):
             raise AttributeError(name)
-        with self._lock:
-            self._ensure_ready()
+        if self._methods is None:
+            # Only until the method list has arrived: after that, looking up a
+            # method (or hasattr) must not wait behind a request in progress -
+            # a whole sentence of synthesis, for the voice stage.
+            with self._lock:
+                self._ensure_ready()
         if name in self._methods:
             return lambda *a, **kw: self._request("call", name, a, kw)
         return self._request("getattr", name)
