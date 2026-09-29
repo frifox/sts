@@ -148,7 +148,7 @@ class TTSConfig:
     # "bridge" references take their American accent from this preset voice
     # ("Aiden" or "Ryan"), or "" (default) for none: the speaker's embedding
     # alone, whose accent is left to chance (it once came out British). The
-    # caption page's Voice dropdown ("Voice for clone accent") sets it too,
+    # caption page's Voice dropdown ("Base voice for cloning") sets it too,
     # remembered across restarts.
     qwen3_accent_donor: str = ""
     qwen3_max_retries: int = 2

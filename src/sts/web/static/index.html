@@ -808,7 +808,7 @@
             <button id="btn-save-voice" disabled title="Save the cloned voice to the library">Save</button>
           </div>
           <div id="accent-row" hidden>
-            <label id="accent-label">Voice for clone accent</label>
+            <label id="accent-label">Base voice for cloning</label>
             <div class="render-mode" id="accent-donors" role="group" aria-labelledby="accent-label"
                  title="A voice cloned from a non-English speaker speaks English by imitating an English clip made in its voice first. That clip can take its American accent from a built-in voice (Aiden or Ryan), or come from the speaker alone (None) - then the accent is left to chance. Changing it re-clones the current voice (a few seconds)."></div>
           </div>
@@ -1689,7 +1689,7 @@
     syncDeleteButton();
   }
 
-  // "Voice for clone accent" in the Voice dropdown (Qwen3 only): which built-in
+  // "Base voice for cloning" in the Voice dropdown (Qwen3 only): which built-in
   // American voice a non-English cloned voice's English reference imitates,
   // or none. Clicked: shown chosen, pulsing, until the server confirms.
   const accentRow = document.getElementById('accent-row');
