@@ -116,19 +116,29 @@ pauses, Qwen3 options).
 
 ## Mac app
 
-`mac/` is a native macOS wrapper: it starts sts on launch, shows the caption
-page in its window, and stops sts on quit.
+`mac/` builds **STS.app**: a native window for sts with its own Python and
+the MLX voice engine (Qwen3-TTS) inside, so it needs no checkout or
+virtualenv to run.
 
 ```bash
-mac/build.sh            # builds mac/build/STS.app
+mac/build.sh            # builds mac/build/STS.app (~1.6 GB)
 ```
 
-- **STS ▸ Launch Configuration… (⌘,)** — working directory, virtualenv
-  (`.venv-mlx` by default), sts arguments, page URL; saving restarts sts.
-- **View ▸ Show/Hide Console (⌘J)** — sts's output in a panel at the bottom.
-- **Server** — start, stop (⌘.), restart (⇧⌘R).
+The first build downloads a standalone Python 3.11
+([python-build-standalone](https://github.com/astral-sh/python-build-standalone))
+and installs `sts[mlx]` into it; later builds reuse it and reinstall sts.
 
-macOS asks for Microphone access for STS itself on first use.
+- The window opens on **Edit Config** / **Start STS**; starting shows the
+  caption page once sts serves it.
+- **Edit Config** (also STS ▸ Configuration…, ⌘,) lists every sts option,
+  one per line, with its default beside it; anything left at Default isn't
+  passed. Saving restarts sts if it's running.
+- **View ▸ Show/Hide Console (⌘J)**: sts's output in a panel at the bottom.
+- **Server**: start, stop (⌘.), restart (⇧⌘R).
+
+The app's sts keeps `sts.db`, `voices/` and `certs/` in
+`~/Library/Application Support/STS`; models still download to
+`~/.cache/huggingface`. macOS asks for Microphone access for STS itself.
 
 ## Tools
 

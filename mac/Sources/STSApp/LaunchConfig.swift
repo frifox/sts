@@ -1,33 +1,55 @@
 import Foundation
 
-/// How sts is started: `<venv>/bin/sts <arguments>`, run by a login shell
-/// (so the user's PATH and profile apply, and quoting works as in Terminal)
-/// from a working directory, and where its caption page is served.
-struct LaunchConfig: Codable, Equatable {
-    var workingDirectory: String
-    /// A virtualenv in the working directory, e.g. ".venv-mlx".
-    var venv: String
-    var arguments: String
-    /// Empty: http://127.0.0.1 on the command's --web-port (default 80).
-    var pageURL: String
-
-    private static let defaultsKey = "launchConfig"
-
-    static var defaultConfig: LaunchConfig {
-        // build.sh records the checkout the app was built from.
-        let repo = Bundle.main.object(forInfoDictionaryKey: "STSRepoDirectory") as? String
-        return LaunchConfig(
-            workingDirectory: repo ?? NSHomeDirectory(),
-            venv: ".venv-mlx",
-            arguments: "",
-            pageURL: ""
-        )
+/// One of sts's command-line options, as build.sh exported it from the
+/// bundled sts (Resources/options.json).
+struct STSOption: Decodable {
+    enum Kind: String, Decodable {
+        case text, choice, flag
+        case optionalBool = "optional-bool"  // --x / --no-x
     }
+
+    let key: String
+    let flag: String
+    let kind: Kind
+    let choices: [String]
+    let type: String  // "int", "float" or "str"
+    let `default`: String
+    let help: String
+
+    static let all: [STSOption] = {
+        guard let url = Bundle.main.url(forResource: "options", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let options = try? JSONDecoder().decode([STSOption].self, from: data)
+        else { return [] }
+        return options
+    }()
+}
+
+/// The bundled Python with sts installed, and where sts keeps what it
+/// remembers (sts.db, voices/, certs/ - paths relative to where it runs).
+enum STSEnvironment {
+    static var python: URL {
+        Bundle.main.resourceURL!.appendingPathComponent("python/bin/python3")
+    }
+
+    static var dataDirectory: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support.appendingPathComponent("STS", isDirectory: true)
+    }
+}
+
+/// The options set in the Configuration form; anything not set is left to
+/// sts's own default. Values are what the form shows: text as typed, a
+/// choice, or "on"/"off" for switches.
+struct LaunchConfig: Codable, Equatable {
+    var values: [String: String] = [:]
+
+    private static let defaultsKey = "stsOptions"
 
     static func load() -> LaunchConfig {
         guard let data = UserDefaults.standard.data(forKey: defaultsKey),
               let config = try? JSONDecoder().decode(LaunchConfig.self, from: data)
-        else { return defaultConfig }
+        else { return LaunchConfig() }
         return config
     }
 
@@ -37,40 +59,27 @@ struct LaunchConfig: Codable, Equatable {
         }
     }
 
-    var command: String {
-        let sts = "\(venv)/bin/sts"
-        let quoted = sts.contains(" ") ? "'\(sts)'" : sts
-        return arguments.isEmpty ? quoted : "\(quoted) \(arguments)"
-    }
-
-    /// The virtualenvs in `directory` that have sts installed.
-    static func venvs(in directory: String) -> [String] {
-        let path = (directory as NSString).expandingTildeInPath
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-        return names
-            .filter { $0.hasPrefix(".venv") || $0.hasPrefix("venv") }
-            .filter { FileManager.default.isExecutableFile(atPath: "\(path)/\($0)/bin/sts") }
-            .sorted()
-    }
-
-    var expandedWorkingDirectory: String {
-        (workingDirectory as NSString).expandingTildeInPath
-    }
-
-    /// The page to show: `pageURL` if set, otherwise localhost on the
-    /// `--web-port` given in the command.
-    var resolvedPageURL: URL? {
-        let explicit = pageURL.trimmingCharacters(in: .whitespaces)
-        if !explicit.isEmpty { return URL(string: explicit) }
-        return URL(string: port == 80 ? "http://127.0.0.1/" : "http://127.0.0.1:\(port)/")
-    }
-
-    private var port: Int {
-        let words = arguments.split(whereSeparator: \.isWhitespace).map(String.init)
-        for (i, word) in words.enumerated() {
-            if word.hasPrefix("--web-port="), let p = Int(word.dropFirst("--web-port=".count)) { return p }
-            if word == "--web-port", i + 1 < words.count, let p = Int(words[i + 1]) { return p }
+    /// sts's arguments for the set options, in the form's order.
+    var arguments: [String] {
+        STSOption.all.flatMap { option -> [String] in
+            guard let value = values[option.key], !value.isEmpty else { return [] }
+            switch option.kind {
+            case .text, .choice: return [option.flag, value]
+            case .flag: return value == "on" ? [option.flag] : []
+            case .optionalBool:
+                return [value == "on" ? option.flag : "--no-" + option.flag.dropFirst(2)]
+            }
         }
-        return 80
+    }
+
+    /// Shown in the console when sts starts.
+    var commandLine: String {
+        (["sts"] + arguments.map { $0.contains(" ") ? "'\($0)'" : $0 }).joined(separator: " ")
+    }
+
+    /// The caption page on this Mac, on the --web-port in use.
+    var pageURL: URL {
+        let port = values["web_port"].flatMap { Int($0) } ?? 80
+        return URL(string: port == 80 ? "http://127.0.0.1/" : "http://127.0.0.1:\(port)/")!
     }
 }

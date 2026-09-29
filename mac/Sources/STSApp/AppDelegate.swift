@@ -7,9 +7,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = buildMenu()
         main = MainWindowController()
+        main.onEditConfig = { [weak self] in self?.editConfiguration(nil) }
         main.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
-        main.startSTS()
     }
 
     /// Stop sts (Ctrl+C, so it shuts its pipeline down) before quitting.
@@ -52,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About STS", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Launch Configuration…", action: #selector(editConfiguration(_:)), keyEquivalent: ",")
+        appMenu.addItem(withTitle: "Configuration…", action: #selector(editConfiguration(_:)), keyEquivalent: ",")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide STS", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthers = appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
@@ -90,7 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         server.addItem(withTitle: "Stop sts", action: #selector(stopSTS(_:)), keyEquivalent: ".")
         server.addItem(withTitle: "Restart sts", action: #selector(restartSTS(_:)), keyEquivalent: "R")
         server.addItem(.separator())
-        server.addItem(withTitle: "Launch Configuration…", action: #selector(editConfiguration(_:)), keyEquivalent: "")
+        server.addItem(withTitle: "Configuration…", action: #selector(editConfiguration(_:)), keyEquivalent: "")
         add(server, titled: "Server", to: menu)
 
         let window = NSMenu(title: "Window")

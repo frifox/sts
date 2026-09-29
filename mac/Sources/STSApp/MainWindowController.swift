@@ -7,6 +7,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     let sts = STSProcess()
     private(set) var config = LaunchConfig.load()
 
+    /// Set by the app delegate: the Edit Config button.
+    var onEditConfig: (() -> Void)?
+
     private let splitController = NSSplitViewController()
     private let pageController = PageViewController()
     private let console = ConsoleView()
@@ -47,6 +50,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.setFrameAutosaveName("STSMainWindow")
         if window.frame.origin == .zero { window.center() }
 
+        pageController.onEditConfig = { [weak self] in self?.onEditConfig?() }
+        pageController.onStart = { [weak self] in self?.startSTS() }
+        pageController.showHome()
+
         sts.onOutput = { [weak self] text in self?.console.append(text) }
         sts.onExit = { [weak self] status in self?.stsExited(status) }
     }
@@ -58,16 +65,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func startSTS() {
         guard !sts.isRunning else { return }
         userStopped = false
-        console.append("\n── \(config.command)  (in \(config.expandedWorkingDirectory)) ──\n")
+        console.append("\n── \(config.commandLine)  (in \(STSEnvironment.dataDirectory.path)) ──\n")
         do {
             try sts.start(config)
         } catch {
             console.append("couldn't start: \(error.localizedDescription)\n")
-            pageController.showStatus("Couldn't start sts", detail: error.localizedDescription)
+            pageController.showHome(status: "Couldn't start sts: \(error.localizedDescription)")
             setConsoleVisible(true)
             return
         }
-        pageController.showStatus("Starting sts…", detail: config.command, busy: true)
+        pageController.showStarting(config.commandLine)
         waitForPage()
     }
 
@@ -81,19 +88,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         stopSTS { [weak self] in self?.startSTS() }
     }
 
+    /// Saves the configuration; a running sts restarts with it.
     func apply(_ newConfig: LaunchConfig) {
         newConfig.save()
         config = newConfig
-        restartSTS()
+        if sts.isRunning { restartSTS() }
     }
 
     private func stsExited(_ status: Int32) {
         pollGeneration += 1
         console.append("── sts exited (\(status)) ──\n")
         if userStopped {
-            pageController.showStatus("sts is stopped", detail: "Server ▸ Start sts (⌘⇧R) to start it.")
+            pageController.showHome(status: "sts stopped.")
         } else {
-            pageController.showStatus("sts exited with code \(status)", detail: "See the console for why.")
+            pageController.showHome(status: "sts exited with code \(status) - the console shows why.")
             setConsoleVisible(true)
         }
     }
@@ -101,10 +109,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// The page is served once sts has its web server up (before the models
     /// finish loading, which the page shows itself): poll until it answers.
     private func waitForPage() {
-        guard let url = config.resolvedPageURL else {
-            pageController.showStatus("Bad page URL", detail: config.pageURL)
-            return
-        }
+        let url = config.pageURL
         pollGeneration += 1
         let generation = pollGeneration
         func poll() {
@@ -151,13 +156,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 }
 
-/// The web view, with a status overlay while there's no page to show.
+/// The web view, and - until sts serves its page - the home screen:
+/// Edit Config / Start STS, or a spinner while sts starts.
 final class PageViewController: NSViewController, WKUIDelegate, WKNavigationDelegate {
+    var onEditConfig: (() -> Void)?
+    var onStart: (() -> Void)?
+
     private var webView: WKWebView!
-    private let overlay = NSStackView()
-    private let titleLabel = NSTextField(labelWithString: "")
-    private let detailLabel = NSTextField(wrappingLabelWithString: "")
+    private let home = NSStackView()
+    private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let spinner = NSProgressIndicator()
+    private let buttons = NSStackView()
 
     override func loadView() {
         let configuration = WKWebViewConfiguration()
@@ -167,23 +176,39 @@ final class PageViewController: NSViewController, WKUIDelegate, WKNavigationDele
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
 
-        titleLabel.font = .systemFont(ofSize: 18, weight: .medium)
-        detailLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        detailLabel.textColor = .secondaryLabelColor
-        detailLabel.alignment = .center
+        let title = NSTextField(labelWithString: "STS")
+        title.font = .systemFont(ofSize: 34, weight: .semibold)
+        let subtitle = NSTextField(labelWithString: "Live Russian → English speech translation")
+        subtitle.textColor = .secondaryLabelColor
+        statusLabel.alignment = .center
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         spinner.style = .spinning
         spinner.controlSize = .small
-        overlay.orientation = .vertical
-        overlay.alignment = .centerX
-        overlay.spacing = 10
-        overlay.addArrangedSubview(spinner)
-        overlay.addArrangedSubview(titleLabel)
-        overlay.addArrangedSubview(detailLabel)
+
+        let edit = NSButton(title: "Edit Config", target: self, action: #selector(editConfig))
+        let start = NSButton(title: "Start STS", target: self, action: #selector(startSTS))
+        start.keyEquivalent = "\r"
+        for button in [edit, start] {
+            button.controlSize = .large
+            button.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
+        }
+        buttons.addArrangedSubview(edit)
+        buttons.addArrangedSubview(start)
+        buttons.spacing = 12
+
+        home.orientation = .vertical
+        home.alignment = .centerX
+        home.spacing = 8
+        for view in [title, subtitle] as [NSView] { home.addArrangedSubview(view) }
+        home.setCustomSpacing(28, after: subtitle)
+        for view in [buttons, spinner, statusLabel] as [NSView] { home.addArrangedSubview(view) }
+        home.setCustomSpacing(16, after: buttons)
 
         let container = NSView()
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        for view in [webView!, overlay] as [NSView] {
+        for view in [webView!, home] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(view)
         }
@@ -192,25 +217,38 @@ final class PageViewController: NSViewController, WKUIDelegate, WKNavigationDele
             webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             webView.topAnchor.constraint(equalTo: container.topAnchor),
             webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            overlay.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            overlay.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            overlay.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -40),
+            home.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            home.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            home.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -40),
         ])
         view = container
     }
 
-    func showStatus(_ title: String, detail: String = "", busy: Bool = false) {
+    /// The home screen, with the buttons; `status` says what happened last.
+    func showHome(status: String = "") {
+        showHomeScreen(status: status, starting: false)
+    }
+
+    /// The home screen while sts starts: no buttons, a spinner.
+    func showStarting(_ commandLine: String) {
+        showHomeScreen(status: "Starting \(commandLine)…", starting: true)
+    }
+
+    private func showHomeScreen(status: String, starting: Bool) {
         _ = view
-        titleLabel.stringValue = title
-        detailLabel.stringValue = detail
-        busy ? spinner.startAnimation(nil) : spinner.stopAnimation(nil)
-        spinner.isHidden = !busy
-        overlay.isHidden = false
+        statusLabel.stringValue = status
+        statusLabel.isHidden = status.isEmpty
+        buttons.isHidden = starting
+        spinner.isHidden = !starting
+        starting ? spinner.startAnimation(nil) : spinner.stopAnimation(nil)
+        home.isHidden = false
         webView.isHidden = true
+        webView.loadHTMLString("", baseURL: nil)  // drop the old page's connection to sts
     }
 
     func load(_ url: URL) {
-        overlay.isHidden = true
+        spinner.stopAnimation(nil)
+        home.isHidden = true
         webView.isHidden = false
         webView.load(URLRequest(url: url))
     }
@@ -218,6 +256,9 @@ final class PageViewController: NSViewController, WKUIDelegate, WKNavigationDele
     func reload() {
         if !webView.isHidden { webView.reload() }
     }
+
+    @objc private func editConfig() { onEditConfig?() }
+    @objc private func startSTS() { onStart?() }
 
     // MARK: WKUIDelegate - the page's alert/confirm/prompt and mic
 
