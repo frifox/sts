@@ -69,7 +69,7 @@ from sts.audioquality import clarity_db, longest_pause_s, match_level, match_ton
 from sts.gpu import gpu_lock
 from sts.log import vlog
 from sts.tts.numbers import spell_numbers
-from sts.tts.accent import ACCENT_DONORS
+from sts.tts.accent import ACCENT_DONORS, BUNDLED_DONOR
 from sts.tts.qwen3_engine import resolve_engine
 from sts.tts.voice_library import VoiceEntry
 
@@ -344,9 +344,9 @@ class Qwen3TTSSynthesizer:
         target = self._speaker_vector(speaker)
         takes = []
         if donor_name:
-            donor_clip = str(self._accent_donor_clip(folder, donor_name))
+            donor_clip, donor_text = self._accent_donor_clip(folder, donor_name)
             with self._lock:
-                donor = self.model.create_voice_clone_prompt(ref_audio=donor_clip, ref_text=DONOR_TEXT)
+                donor = self.model.create_voice_clone_prompt(ref_audio=str(donor_clip), ref_text=donor_text)
             takes = self._bridge_takes(self._with_speaker(donor, speaker), folder, target)
             takes = [take for take in takes if take[0] >= MIN_SPEAKER_SIMILARITY]
             if not takes:
@@ -392,17 +392,25 @@ class Qwen3TTSSynthesizer:
         return takes
 
     def set_accent_donor(self, name: str) -> None:
-        """Which preset voice new English references take their accent from ("": none).
+        """Which voice new English references take their accent from (ACCENT_DONORS; "": none).
         Takes effect on the next clone (the pipeline re-clones the active voice)."""
         self.cfg.qwen3_accent_donor = name if name in ACCENT_DONORS else ""
 
-    def _accent_donor_clip(self, folder: Path, donor_name: str) -> Path:
-        """`donor_name` (a preset voice of the CustomVoice model) saying
-        DONOR_TEXT: the American delivery English references imitate."""
+    def _accent_donor_clip(self, folder: Path, donor_name: str) -> tuple[Path, str]:
+        """The clip (and its text) whose delivery English references imitate:
+        the bundled Default voice's own recording, or a preset voice of the
+        CustomVoice model saying DONOR_TEXT (made once, cached)."""
+        if donor_name == BUNDLED_DONOR:
+            import json
+
+            from sts.tts.voice_library import BUNDLED_VOICES_DIR
+
+            folder = BUNDLED_VOICES_DIR / "default"
+            return folder / "reference.wav", json.loads((folder / "meta.json").read_text())["ref_text"]
         key = hashlib.sha1((donor_name + DONOR_TEXT + self.cfg.qwen3_custom_model_name).encode()).hexdigest()[:16]
         path = folder / f"donor-{key}.wav"
         if path.is_file():
-            return path
+            return path, DONOR_TEXT
         if self._custom_model is None:
             self._custom_model = self._load_custom_model()
         with self._lock:
@@ -413,7 +421,7 @@ class Qwen3TTSSynthesizer:
         import soundfile
 
         soundfile.write(str(path), trim_silence(np.asarray(wavs[0], dtype=np.float32), sample_rate), sample_rate)
-        return path
+        return path, DONOR_TEXT
 
     def _with_speaker(self, prompt, speaker):
         """`prompt` (a clip + its text: how to speak) with `speaker`'s embedding (whose voice)."""

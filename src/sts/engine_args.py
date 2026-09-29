@@ -87,11 +87,11 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--qwen-accent-donor",
-        choices=["none", "Aiden", "Ryan"],
+        choices=["none", "Default", "Aiden", "Ryan"],
         default=None,
-        help="Which American preset voice a non-English cloned voice's English reference takes its accent "
-        "from, or 'none' (the speaker's embedding alone; accent left to chance). Default none, or what the "
-        "caption page last set",
+        help="Which voice a non-English cloned voice's English reference takes its accent from (Default: the "
+        "bundled voice; Aiden/Ryan: American preset voices), or 'none' (the speaker's embedding alone; accent "
+        "left to chance). Default none, or what the caption page last set",
     )
     parser.add_argument(
         "--qwen-clone-mode",

@@ -47,5 +47,14 @@ def test_choosing_a_donor_re_clones_the_active_voice_and_is_remembered(tmp_path)
 
 def test_an_unknown_donor_is_ignored(tmp_path):
     p = _pipeline(tmp_path)
-    p._set_accent_donor("Vivian")
+    p._set_accent_donor("Vivian")  # not a base voice
     assert p.cfg.tts.qwen3_accent_donor == "" and p.tts.cloned == []  # None, the default
+
+
+def test_the_bundled_default_voice_is_a_base_voice_too(tmp_path):
+    from sts.tts.accent import ACCENT_DONORS
+
+    assert ACCENT_DONORS[0] == "Default"
+    p = _pipeline(tmp_path)
+    p._set_accent_donor("Default")
+    assert p.cfg.tts.qwen3_accent_donor == "Default" and p.tts.donor == "Default"
