@@ -36,6 +36,8 @@ app=build/STS.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$(swift build -c release --show-bin-path)/STSApp" "$app/Contents/MacOS/STS"
+swift make_icon.swift build/AppIcon.iconset
+iconutil -c icns -o "$app/Contents/Resources/AppIcon.icns" build/AppIcon.iconset
 # The Configuration form's rows: the bundled sts's own options.
 $py export_options.py > "$app/Contents/Resources/options.json"
 ditto $runtime "$app/Contents/Resources/python"
@@ -50,6 +52,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>com.frifox.sts</string>
     <key>CFBundleExecutable</key><string>STS</string>
     <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
