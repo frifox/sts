@@ -957,7 +957,21 @@ class Pipeline:
             speakers = [
                 {"id": e.speaker_id, "name": e.name, "builtin": e.builtin} for e in self.voice_library.list()
             ]
+            self._last_library = speakers
             self.broadcaster.broadcast_library(speakers)
+
+    def _check_library(self) -> None:
+        """Watchdog pass, at most every 5 s: re-sends the voice list when the
+        library changed behind the app's back - voices added by sts-add-voices
+        (or copied in) while it runs, which otherwise only showed after a
+        restart."""
+        now = time.monotonic()
+        if not self.broadcaster or now - getattr(self, "_last_library_check", 0.0) < 5.0:
+            return
+        self._last_library_check = now
+        speakers = [{"id": e.speaker_id, "name": e.name, "builtin": e.builtin} for e in self.voice_library.list()]
+        if speakers != getattr(self, "_last_library", None):
+            self._broadcast_library()
 
     def _engines_info(self) -> dict:
         """Model, device and memory (bytes of model weights - see
@@ -1544,7 +1558,7 @@ class Pipeline:
 
     def _audio_watchdog_loop(self) -> None:
         while not self._stop.wait(1.0):
-            for check in (self._check_audio_health, self._check_stage_threads, self._check_engines):
+            for check in (self._check_audio_health, self._check_stage_threads, self._check_engines, self._check_library):
                 try:
                     check()
                 except Exception as exc:  # a health check must never take itself down

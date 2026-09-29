@@ -146,7 +146,10 @@ def write_wav(path: Path, audio: np.ndarray) -> None:
 
 
 def voice_name(path: Path) -> str:
-    return " ".join(path.stem.replace("_", " ").split())
+    """The voice's name from its file's: "goldinov-venya.mp3" -> "Goldinov Venya"
+    (a name typed all in lower case is capitalized; otherwise kept as written)."""
+    name = " ".join(path.stem.replace("_", " ").replace("-", " ").split())
+    return name.title() if name == name.lower() else name
 
 
 def main() -> None:

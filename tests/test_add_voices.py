@@ -39,3 +39,5 @@ def test_too_little_speech_gives_nothing():
 def test_the_voice_is_named_after_the_file():
     assert voice_name(Path("Neyman_Konstantin.mp4")) == "Neyman Konstantin"
     assert voice_name(Path("Pastor Ivan  2019.mov")) == "Pastor Ivan 2019"
+    assert voice_name(Path("goldinov-venya.mp3")) == "Goldinov Venya"
+    assert voice_name(Path("McArthur_John.mp4")) == "McArthur John"
