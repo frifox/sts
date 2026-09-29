@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Builds STS.app (mac/build/STS.app): the release binary wrapped in an app
-# bundle, ad-hoc signed. `./build.sh install` also copies it to /Applications.
+# bundle, ad-hoc signed.
 set -euo pipefail
 cd "${0:A:h}"
 repo="${PWD:h}"
@@ -38,8 +38,3 @@ PLIST
 codesign --force --sign - "$app"
 echo "built $PWD/$app"
 
-if [[ "${1:-}" == install ]]; then
-    rm -rf /Applications/STS.app
-    cp -R "$app" /Applications/
-    echo "installed /Applications/STS.app"
-fi

@@ -120,7 +120,7 @@ pauses, Qwen3 options).
 page in its window, and stops sts on quit.
 
 ```bash
-mac/build.sh            # mac/build/STS.app; `mac/build.sh install` copies it to /Applications
+mac/build.sh            # builds mac/build/STS.app
 ```
 
 - **STS ▸ Launch Configuration… (⌘,)** — working directory, virtualenv
