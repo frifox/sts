@@ -23,32 +23,21 @@ func render(_ size: Int) -> Data {
         CGPath(roundedRect: CGRect(x: x, y: y, width: w, height: h), cornerWidth: r, cornerHeight: r, transform: nil)
     }
 
-    // Tile, with the soft drop shadow macOS icons have.
-    let tile = rounded(100, 100, 824, 824, 185)
+    // The bubble is the tile, with the soft drop shadow macOS icons have.
     cg.saveGState()
     // Shadows ignore the transform: device space, y up.
     cg.setShadow(offset: CGSize(width: 0, height: -10 * scale), blur: 24 * scale, color: CGColor(gray: 0, alpha: 0.25))
-    cg.addPath(tile)
-    cg.setFillColor(color(0xFFF7ED))
-    cg.fillPath()
-    cg.restoreGState()
-    cg.addPath(tile)
-    cg.setStrokeColor(color(0xFED7AA))
-    cg.setLineWidth(6)
-    cg.strokePath()
-
-    // The bubble, centered.
-    let bubbleX: CGFloat = 210, bubbleY: CGFloat = 278
-    cg.addPath(rounded(bubbleX, bubbleY, 604, 467, 103))
+    cg.addPath(rounded(100, 100, 824, 824, 185))
     cg.setFillColor(color(0x1F2937))
     cg.fillPath()
+    cg.restoreGState()
 
     // Caption lines: Russian (gray), then English (amber).
     let lines: [(y: CGFloat, width: CGFloat, color: UInt32)] = [
-        (72, 398, 0x9CA3AF), (155, 261, 0x9CA3AF), (264, 440, 0xF59E0B), (347, 302, 0xF59E0B),
+        (292, 543, 0x9CA3AF), (405, 356, 0x9CA3AF), (554, 600, 0xF59E0B), (667, 412, 0xF59E0B),
     ]
     for line in lines {
-        cg.addPath(rounded(bubbleX + 82, bubbleY + line.y, line.width, 48, 24))
+        cg.addPath(rounded(212, line.y, line.width, 65, 32.5))
         cg.setFillColor(color(line.color))
         cg.fillPath()
     }
