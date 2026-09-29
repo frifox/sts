@@ -535,7 +535,7 @@ class Pipeline:
         self.tts.set_accent_donor(donor)
         if self._persistent_config is not None:
             self._persistent_config.set("qwen3_accent_donor", donor)
-        vlog("voice", f"English accent from: {donor or 'the speaker alone'}")
+        vlog("voice", f"voice for clone accent: {donor or 'none'}")
         if self._active_speaker_id:
             self._select_speaker(self._active_speaker_id)
         elif self._pending_voice is not None:

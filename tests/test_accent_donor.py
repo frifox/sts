@@ -48,4 +48,4 @@ def test_choosing_a_donor_re_clones_the_active_voice_and_is_remembered(tmp_path)
 def test_an_unknown_donor_is_ignored(tmp_path):
     p = _pipeline(tmp_path)
     p._set_accent_donor("Vivian")
-    assert p.cfg.tts.qwen3_accent_donor == "Aiden" and p.tts.cloned == []
+    assert p.cfg.tts.qwen3_accent_donor == "" and p.tts.cloned == []  # None, the default
