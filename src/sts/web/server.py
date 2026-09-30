@@ -432,7 +432,7 @@ def create_app(broadcaster: CaptionBroadcaster) -> FastAPI:
 
 def run_server(
     broadcaster: CaptionBroadcaster,
-    host: str = "0.0.0.0",
+    host: str = "127.0.0.1",
     port: int = 80,
     *,
     https_port: int | None = None,

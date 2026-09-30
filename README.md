@@ -103,11 +103,13 @@ sts --default-voice "Craig Gutsy"           # starting built-in voice
 sts --clone speaker.wav --clone-name "Ivan" # clone from a 10-20 s clip and save it
 sts --web-port 8765 --https-port 8443      # other ports (defaults: 80 and 443)
 sts --https-port 0                          # plain HTTP only
+sts --all-interfaces                        # let other devices open the page (default: this computer only)
 sts -v                                      # log timings and device events
 ```
 
-The caption page is served over HTTP (port 80) and HTTPS (443). HTTPS is what
-lets other devices use their browser mic - browsers only allow the mic on a
+The caption page is served over HTTP (port 80) and HTTPS (443), to this
+computer only unless `--all-interfaces` is given. HTTPS is what lets other
+devices use their browser mic - browsers only allow the mic on a
 secure page, which plain HTTP is only on localhost. It uses a self-signed
 certificate, `certs/cert.pem` + `certs/key.pem`, made on first start (with
 `openssl`); each device shows a one-time warning to click through.

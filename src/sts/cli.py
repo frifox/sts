@@ -51,7 +51,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Serve the live captions page and operator controls over HTTP (on by default; --no-web disables)",
     )
-    parser.add_argument("--web-host", default="0.0.0.0", help="Caption web server bind address")
+    parser.add_argument(
+        "--web-host", default=None,
+        help="Caption web server bind address (default 127.0.0.1: this computer only; see --all-interfaces)",
+    )
+    parser.add_argument(
+        "--all-interfaces", action="store_true",
+        help="Serve the caption page to other devices too (phones, tablets, other computers on the network): "
+        "binds to all interfaces (0.0.0.0) instead of only this computer",
+    )
     parser.add_argument(
         "--web-port", type=int, default=DEFAULT_WEB_PORT,
         help=f"Caption page port, plain HTTP (default {DEFAULT_WEB_PORT})",
@@ -61,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_HTTPS_PORT,
         help=f"Also serve the caption page over HTTPS on this port (default {DEFAULT_HTTPS_PORT}; 0 turns it "
-        "off). Needed for the browser-mic input from other devices: browsers only allow the mic on a "
+        "off). Needed for the browser-mic input from other devices (with --all-interfaces): browsers only allow the mic on a "
         "secure page (https, or localhost). Uses a self-signed cert, made on first start if it doesn't "
         "exist (with openssl); browsers show a one-time warning to click through per device.",
     )
@@ -174,6 +182,14 @@ def page_hosts(web_host: str) -> list[str]:
     return sorted(addresses, key=lambda a: (not a.startswith("127."), [int(part) for part in a.split(".")])) or [web_host]
 
 
+def web_host(args) -> str:
+    """Where the caption page listens: --web-host if given, all interfaces with
+    --all-interfaces, and otherwise only this computer (127.0.0.1)."""
+    if args.web_host:
+        return args.web_host
+    return "0.0.0.0" if args.all_interfaces else "127.0.0.1"
+
+
 def saved_device(persistent_config, key: str, check) -> int | None:
     """The audio device index saved under `key`, or None (the system default)
     if nothing is saved - or if what's saved can no longer be used: devices
@@ -207,6 +223,7 @@ def main() -> None:
         return
 
     cfg, (asr_device, translation_device, tts_device) = build_engine_config(args)
+    args.web_host = web_host(args)
 
     persistent_config = PersistentConfig(args.config_db) if args.config_db else None
     startup = StartupProgress(persistent_config)
@@ -287,6 +304,8 @@ def main() -> None:
         http_port = "" if args.web_port == 80 else f":{args.web_port}"
         for host in page_hosts(args.web_host):
             print(f"Captions: http://{host}{http_port}/")
+        if args.web_host in ("127.0.0.1", "localhost", "::1"):
+            print("  (this computer only - --all-interfaces opens it to other devices on the network)")
 
     vlog("init", f"loading models (asr=gigaam on {asr_device}, translation on {translation_device}, "
          f"tts={cfg.tts.backend} on {tts_device})")
