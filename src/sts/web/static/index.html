@@ -174,7 +174,9 @@
     /* A subtle line between the final text and this. */
     border-top: 1px solid rgba(255, 255, 255, 0.12);
     padding-top: 0.25em;
+    min-height: 1.25em;  /* one line, kept even while there's no unfinished text */
   }
+  .recent.empty > .finalize-clock { visibility: hidden; }
   .recent .recent-first, .recent .recent-sentence { opacity: 0.4; transition: opacity 0.3s ease; }
   .recent.pending .recent-first { opacity: 1; }
   #portrait-grid .recent .recent-sentence.pending { opacity: 1; }
@@ -1145,16 +1147,21 @@
     renderRecentOriginal();
   }
 
+  // With unfinished text shown, its place is kept even while there is none
+  // (an empty line, see .recent's min-height): recognition often guesses at
+  // something in quiet moments and drops it again, and adding and removing
+  // the line each time made the whole page jump up and down.
   function renderRecentOriginal() {
     const portrait = renderMode === 'portrait';
     const text = showUnfinished ? recentOriginal : '';
+    const sentences = text ? recentSentences : [];
     // Drop one left over in the other render mode's layout.
     for (const el of document.querySelectorAll(portrait ? '#original-lines .recent' : '#portrait-grid .recent')) {
       el.remove();
     }
     if (!portrait) recentRow = null;
     if (portrait) {
-      if (!text) {
+      if (!showUnfinished) {
         if (recentRow) recentRow.forEach((el) => el.remove());
         recentRow = null;
         return;
@@ -1168,14 +1175,14 @@
           return cell;
         });
       }
-      setRecentContent(recentRow[0], recentSentences);
+      setRecentContent(recentRow[0], sentences);
       prunePortraitRows();
       return;
     }
     // Landscape: a paragraph of its own, below the final sentences' one.
     const container = document.getElementById('original-lines');
     let para = container.querySelector(':scope > .recent');
-    if (!text) {
+    if (!showUnfinished) {
       para?.remove();
       return;
     }
@@ -1185,7 +1192,7 @@
       para.style.margin = '0';
       container.appendChild(para);
     }
-    setRecentContent(para, recentSentences);
+    setRecentContent(para, sentences);
   }
 
   // The live caption's element: the finalize clock, then the first
@@ -1201,6 +1208,7 @@
       el.append(clock, first, rest);
     }
     el.querySelector('.recent-first').textContent = sentences[0] ?? '';
+    el.classList.toggle('empty', !sentences.length);  // the kept empty line: no clock
     // One span per sentence, so portrait can put each on its own line (the
     // leading space separates them in landscape's flowing paragraph).
     // Each has its own finalize clock too - shown in portrait only.
