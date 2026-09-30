@@ -40,6 +40,7 @@ DEFAULTS = {
     "final_force_after": "0 (off)",
     "final_after_silence": "10",
     "caption_interval_ms": "500",
+    "web_host": "127.0.0.1 (this computer only; see --all-interfaces)",
 }
 
 
