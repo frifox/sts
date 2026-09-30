@@ -336,6 +336,8 @@ class CaptionBroadcaster:
         show_unfinished: bool = True,
         accent_donor: str = "",
         accent_donors: list[str] | None = None,
+        preparing_voice: str = "",
+        preparing_speaker_id: str | None = None,
     ) -> None:
         message = {
             "type": "status",
@@ -356,6 +358,8 @@ class CaptionBroadcaster:
             "show_unfinished": show_unfinished,
             "accent_donor": accent_donor,
             "accent_donors": accent_donors or [],
+            "preparing_voice": preparing_voice,
+            "preparing_speaker_id": preparing_speaker_id,
         }
         self._last_status = message
         if self.loop is None:

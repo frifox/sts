@@ -20,7 +20,8 @@ class _TTS:
 
 class _Library:
     def get(self, speaker_id):
-        return type("Entry", (), {"speaker_id": speaker_id, "kind": "zeroshot"})()
+        return type("Entry", (), {"speaker_id": speaker_id, "kind": "zeroshot", "name": speaker_id,
+                                  "wav_path": "reference.wav", "ref_text": "Текст."})()
 
 
 def _pipeline(tmp_path):

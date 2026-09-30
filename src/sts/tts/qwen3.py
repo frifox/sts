@@ -70,45 +70,22 @@ from sts.gpu import gpu_lock
 from sts.log import vlog
 from sts.tts.numbers import spell_numbers
 from sts.tts.accent import ACCENT_DONORS, BUNDLED_DONOR
+from sts.tts.english_reference import (  # noqa: F401 (clone_conditioning, transcript_is_english: used by callers)
+    DONOR_TEXT,
+    ENGLISH_BRIDGE_TEXT,
+    accent_donor,
+    cached_reference_path,
+    clone_conditioning,
+    transcript_is_english,
+)
 from sts.tts.qwen3_engine import resolve_engine
 from sts.tts.voice_library import VoiceEntry
 
 
-def transcript_is_english(text: str | None) -> bool:
-    """True for a Latin-script transcript; False for Cyrillic/other scripts or no transcript."""
-    if not text:
-        return False
-    letters = [c for c in text if c.isalpha()]
-    return bool(letters) and sum(c.isascii() for c in letters) / len(letters) > 0.8
-
-
-def clone_conditioning(mode: str, ref_text: str | None) -> str:
-    """How a reference clip conditions the voice: "icl" (the clip + its
-    transcript), "bridge" (an English clip in the voice + its English text, see
-    `_english_reference`) or "xvector" (the speaker embedding alone)."""
-    if ref_text is None or mode == "xvector":
-        return "xvector"
-    if mode == "icl" or transcript_is_english(ref_text):
-        return "icl"
-    return "bridge"
-
-
-# What a voice cloned from a non-English reference first says in English (in
-# `_english_reference`): about 11 s, plain statements and a list, ending on a period.
-ENGLISH_BRIDGE_TEXT = (
-    "Good morning, brothers and sisters. Today we will read together from the Gospel, "
-    "and we will think about what these words mean for our lives. Let us listen carefully, and let us pray."
-)
 ENGLISH_BRIDGE_TAKES = 3
-# What an accent donor (sts.tts.accent, TTSConfig.qwen3_accent_donor) says for an
-# English reference, and how
-# much like the speaker a take must still sound (cosine similarity of speaker
-# embeddings: takes that kept the speaker's voice measured 0.97-0.99, ones that
-# slid into the donor's 0.91-0.93).
-DONOR_TEXT = (
-    "Welcome, everyone. It's good to see all of you here this morning. "
-    "We're going to open the Bible together, and I want us to listen closely to what it says."
-)
+# How much like the speaker a take with an accent donor must still sound (cosine
+# similarity of speaker embeddings: takes that kept the speaker's voice measured
+# 0.97-0.99, ones that slid into the donor's 0.91-0.93).
 MIN_SPEAKER_SIMILARITY = 0.96
 BRIDGE_SECONDS_PER_CHAR = 0.058  # the passage's usual pace (about 11 s)
 
@@ -327,12 +304,9 @@ class Qwen3TTSSynthesizer:
         embedding alone is used. Cached by the reference clip's contents and
         the donor.
         """
-        donor_name = self.cfg.qwen3_accent_donor if self.cfg.qwen3_accent_donor in ACCENT_DONORS else ""
-        source = Path(reference_wav_path).read_bytes()
-        recipe = ENGLISH_BRIDGE_TEXT + (donor_name + DONOR_TEXT if donor_name else "") + self.cfg.qwen3_model_name
-        key = hashlib.sha1(source + recipe.encode()).hexdigest()[:16]
-        folder = Path(self.cfg.voice_library_dir) / ".english-references"
-        cached = folder / f"{key}-v3.wav"
+        donor_name = accent_donor(self.cfg)
+        cached = cached_reference_path(self.cfg, reference_wav_path)
+        folder = cached.parent
         if cached.is_file():
             return cached
         vlog("tts", "making an English reference for this voice (once; cached)")
@@ -436,6 +410,11 @@ class Qwen3TTSSynthesizer:
         if self.engine == "mlx":
             return self.model.speaker_vector(prompt)
         return prompt[0].ref_spk_embedding.detach().float().cpu().numpy().reshape(-1)
+
+    def make_english_reference(self, reference_wav_path: str) -> str:
+        """Makes (or finds) the clip's English reference without changing the
+        active voice - run in a helper process while the live one speaks."""
+        return str(self._english_reference(reference_wav_path))
 
     def clone_from_entry(self, entry: VoiceEntry) -> None:
         if entry.kind == "lora":

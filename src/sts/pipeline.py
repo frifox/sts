@@ -514,15 +514,81 @@ class Pipeline:
     def _select_speaker(self, speaker_id: str | None) -> None:
         self._pending_voice = None
         if not speaker_id:
+            self._next_voice_request()  # drops a voice still being prepared
             self.tts.reset_voice()
             self._voice_cloned = False
             self._active_speaker_id = None
             return
         entry = self.voice_library.get(speaker_id)
-        if entry is not None:
+        if entry is None:
+            return
+
+        def apply() -> None:
             self.tts.clone_from_entry(entry)
             self._voice_cloned = entry.kind != "lora"
             self._active_speaker_id = speaker_id
+
+        if entry.kind == "lora":
+            self._next_voice_request()
+            apply()
+        else:
+            self._clone_when_ready(str(entry.wav_path), entry.ref_text, apply, entry.name, speaker_id)
+
+    def _next_voice_request(self) -> int:
+        self._voice_request = getattr(self, "_voice_request", 0) + 1
+        self._preparing_voice = None
+        return self._voice_request
+
+    def _clone_when_ready(self, wav_path: str, ref_text: str | None, apply, name: str, speaker_id: str | None) -> None:
+        """Runs `apply` (the clone) on the control thread - straight away,
+        unless the voice first needs its English reference made (Qwen3, a
+        non-English clip, not made before): tens of seconds of synthesis that,
+        done by the voice stage itself, stopped the current voice mid-speech.
+        That's made in a helper process instead (on mps; a thread elsewhere)
+        while the current voice keeps speaking, and the switch happens once
+        it's there - unless another voice was chosen meanwhile. During start-up
+        (before the pipeline runs) it's simply done here, waiting."""
+        request = self._next_voice_request()
+        from sts.tts.english_reference import needs_english_reference
+
+        if not getattr(self, "_started", False) or not needs_english_reference(self.cfg.tts, wav_path, ref_text):
+            apply()
+            return
+        self._preparing_voice = (name, speaker_id)
+        vlog("voice", f"preparing {name!r} alongside the current voice (its English reference)")
+        self._broadcast_status()
+
+        def finish() -> None:
+            if request != getattr(self, "_voice_request", 0):
+                return  # another voice was chosen meanwhile
+            self._preparing_voice = None
+            apply()
+            vlog("voice", f"{name!r} is ready")
+
+        def prepare() -> None:
+            try:
+                self._make_english_reference(wav_path)
+            except Exception as exc:
+                print(f"[voice] couldn't prepare {name!r} alongside ({exc}); preparing it in the voice stage")
+            self._on_control_thread(finish)
+
+        threading.Thread(target=prepare, name="sts-voice-prep", daemon=True).start()
+
+    def _make_english_reference(self, wav_path: str) -> None:
+        """On mps the voice stage is a process serving one request at a time,
+        so a second one (the same model, loaded for the job) makes it; it's
+        closed again after, freeing its memory. Elsewhere the voice stage is in
+        this process and takes turns per generation with live synthesis."""
+        if not isinstance(self.tts, StageProcess):
+            self.tts.make_english_reference(wav_path)
+            return
+        from dataclasses import replace
+
+        helper = StageProcess(create_synthesizer, replace(self.cfg.tts, qwen3_preload_presets=False), name="sts-voice-prep")
+        try:
+            helper.make_english_reference(wav_path)
+        finally:
+            helper.close()
 
     def _set_accent_donor(self, donor: str) -> None:
         """Voice dropdown: which American preset voice English references take
@@ -540,7 +606,7 @@ class Pipeline:
             self._select_speaker(self._active_speaker_id)
         elif self._pending_voice is not None:
             path, ref_text = self._pending_voice
-            self.tts.clone_voice(path, ref_text)
+            self._clone_when_ready(path, ref_text, lambda: self.tts.clone_voice(path, ref_text), "the new voice", None)
 
     def _delete_voice(self, speaker_id: str) -> None:
         entry = self.voice_library.get(speaker_id)
@@ -571,13 +637,16 @@ class Pipeline:
     def _activate_trained_voice(self, audio: np.ndarray) -> None:
         path = self._write_training_wav(audio)
         ref_text = self._transcribe_or_none(audio)
-        # Activate the clone right away so the operator can listen to it, but
-        # don't write it to the library until they choose to (Save Voice).
-        self.tts.clone_voice(path, ref_text)
-        self._voice_cloned = True
-        self._active_speaker_id = None
-        self._pending_voice = (path, ref_text)
-        vlog("voice", "trained voice is active but not saved yet")
+        # Activate the clone as soon as it's ready so the operator can listen to
+        # it, but don't write it to the library until they choose to (Save Voice).
+        def apply() -> None:
+            self.tts.clone_voice(path, ref_text)
+            self._voice_cloned = True
+            self._active_speaker_id = None
+            self._pending_voice = (path, ref_text)
+            vlog("voice", "trained voice is active but not saved yet")
+
+        self._clone_when_ready(path, ref_text, apply, "the new voice", None)
 
     def _save_pending_voice(self, name: str) -> None:
         name = name.strip()
@@ -897,6 +966,8 @@ class Pipeline:
                 active_speaker_id=self._active_speaker_id,
                 show_unfinished=getattr(self, "_show_unfinished", True),
                 accent_donor=self.cfg.tts.qwen3_accent_donor,
+                preparing_voice=(getattr(self, "_preparing_voice", None) or ("", None))[0],
+                preparing_speaker_id=(getattr(self, "_preparing_voice", None) or ("", None))[1],
                 accent_donors=list(ACCENT_DONORS) if self.cfg.tts.backend == "qwen3" else [],
             )
 
@@ -1571,6 +1642,7 @@ class Pipeline:
 
     def start(self) -> None:
         self._commands = queue.Queue()
+        self._started = True  # voices are prepared alongside from now on (see _clone_when_ready)
         self.capture.start()
         self._stage("Listening", ready=True)
         for name, target in (
