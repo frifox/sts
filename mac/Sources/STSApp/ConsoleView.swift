@@ -12,6 +12,14 @@ final class ConsoleView: NSView {
     ]
     // ESC [ ... letter (colors, cursor moves): shown as plain text.
     private let ansi = try! NSRegularExpression(pattern: "\u{1B}\\[[0-9;?]*[A-Za-z]")
+    /// Whether new output scrolls into view. Changed only by the user
+    /// scrolling (up: stop, back to the bottom: follow again) and by the
+    /// console being shown (follow) - not worked out from the scroll position
+    /// when output arrives: while the panel is collapsed it has no height, and
+    /// that position said "not at the bottom", so it popped up at the top.
+    private var followsTail = true
+    private var scrollingItself = false
+    private var lastClipSize = NSSize.zero
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -28,6 +36,38 @@ final class ConsoleView: NSView {
         scrollView.autoresizingMask = [.width, .height]
         scrollView.frame = bounds
         addSubview(scrollView)
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(clipViewMoved),
+            name: NSView.boundsDidChangeNotification, object: scrollView.contentView
+        )
+    }
+
+    /// Shown (or just started): the latest output, following from here on.
+    func showTail() {
+        followsTail = true
+        needsLayout = true
+        scrollToEnd()
+    }
+
+    override func layout() {
+        super.layout()
+        if followsTail { scrollToEnd() }  // resized, or the panel opening: keep the tail in view
+    }
+
+    private func scrollToEnd() {
+        scrollingItself = true
+        textView.scrollToEndOfDocument(nil)
+        scrollingItself = false
+    }
+
+    /// The visible part moved: a scroll by the user decides whether to follow.
+    /// Moves that come with a size change are the panel opening or resizing.
+    @objc private func clipViewMoved() {
+        let size = scrollView.contentView.bounds.size
+        defer { lastClipSize = size }
+        guard !scrollingItself, size == lastClipSize, size.height > 1 else { return }
+        followsTail = isScrolledToBottom
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -38,7 +78,6 @@ final class ConsoleView: NSView {
 
     func append(_ chunk: String) {
         guard let storage = textView.textStorage else { return }
-        let followTail = isScrolledToBottom
         var text = chunk.replacingOccurrences(of: "\r\n", with: "\n")
         text = ansi.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
 
@@ -55,7 +94,7 @@ final class ConsoleView: NSView {
             storage.deleteCharacters(in: NSRange(location: 0, length: storage.length - maxCharacters))
         }
         storage.endEditing()
-        if followTail { textView.scrollToEndOfDocument(nil) }
+        if followsTail { scrollToEnd() }
     }
 
     private var isScrolledToBottom: Bool {

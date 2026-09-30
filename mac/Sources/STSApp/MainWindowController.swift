@@ -140,6 +140,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     func setConsoleVisible(_ visible: Bool) {
         guard visible != isConsoleVisible else { return }
+        if visible { console.showTail() }
         consoleItem.animator().isCollapsed = !visible
         UserDefaults.standard.set(visible, forKey: Self.consoleVisibleKey)
     }
