@@ -430,6 +430,41 @@ def create_app(broadcaster: CaptionBroadcaster) -> FastAPI:
     return app
 
 
+def is_loopback(host: str | None) -> bool:
+    """Whether a client address is this computer (127.x, ::1, ::ffff:127.x)."""
+    import ipaddress
+
+    try:
+        address = ipaddress.ip_address((host or "").split("%")[0])
+    except ValueError:
+        return host == "localhost"
+    mapped = getattr(address, "ipv4_mapped", None)
+    return (mapped or address).is_loopback
+
+
+class LoopbackOnly:
+    """ASGI wrapper that turns away every connection not from this computer:
+    HTTP gets 403, a websocket is closed. For when the page must stay local
+    but the socket listens on all interfaces - macOS lets an unprivileged
+    process take a port below 1024 (80, 443) only on all interfaces, not on
+    127.0.0.1 alone."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket") and not is_loopback((scope.get("client") or (None,))[0]):
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1008})
+            else:
+                await send({"type": "http.response.start", "status": 403,
+                            "headers": [(b"content-type", b"text/plain")]})
+                await send({"type": "http.response.body",
+                            "body": b"The caption page is only open on this computer (start sts with --all-interfaces).\n"})
+            return
+        await self.app(scope, receive, send)
+
+
 def run_server(
     broadcaster: CaptionBroadcaster,
     host: str = "127.0.0.1",
@@ -438,6 +473,7 @@ def run_server(
     https_port: int | None = None,
     ssl_certfile: str | None = None,
     ssl_keyfile: str | None = None,
+    local_only: bool = False,
 ) -> None:
     """Serves the caption page over HTTP, and - when an HTTPS port and cert
     are given - also over HTTPS on the same app, concurrently. Both listeners
@@ -447,6 +483,8 @@ def run_server(
     through. HTTPS matters because browsers only allow microphone capture
     (`getUserMedia`) from a secure context - plain LAN HTTP doesn't qualify."""
     app = create_app(broadcaster)
+    if local_only:
+        app = LoopbackOnly(app)
     configs = [uvicorn.Config(app, host=host, port=port, log_level="warning")]
     if https_port is not None:
         configs.append(

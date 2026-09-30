@@ -190,6 +190,20 @@ def web_host(args) -> str:
     return "0.0.0.0" if args.all_interfaces else "127.0.0.1"
 
 
+def local_bind(ports: list[int]) -> tuple[str, bool]:
+    """(address to listen on, whether to turn away other computers) for a
+    page meant for this computer only. 127.0.0.1 - unless one of `ports` can't
+    be taken there only for lack of permission: macOS lets an unprivileged
+    process have a port below 1024 (the default 80 and 443) on all
+    interfaces but not on 127.0.0.1 alone. Then it listens on all interfaces
+    and the server turns away any connection not from this computer."""
+    for port in ports:
+        problem = port_unavailable("127.0.0.1", port)
+        if problem and "permission" in problem.lower() and not port_unavailable("0.0.0.0", port):
+            return "0.0.0.0", True
+    return "127.0.0.1", False
+
+
 def saved_device(persistent_config, key: str, check) -> int | None:
     """The audio device index saved under `key`, or None (the system default)
     if nothing is saved - or if what's saved can no longer be used: devices
@@ -276,13 +290,18 @@ def main() -> None:
         https_port = args.https_port or None  # 0: off
         if https_port and not ensure_tls_cert(args.tls_cert, args.tls_key):
             https_port = None
-        port_error = port_unavailable(args.web_host, args.web_port)
+        local_only = False
+        if args.web_host == "127.0.0.1" and not args.all_interfaces:
+            bind_host, local_only = local_bind([args.web_port] + ([https_port] if https_port else []))
+        else:
+            bind_host = args.web_host
+        port_error = port_unavailable(bind_host, args.web_port)
         if port_error:
             print(f"error: can't serve the caption page on port {args.web_port} ({port_error}). "
                   f"Pick another with --web-port, e.g. --web-port 8765.")
             sys.exit(1)
         if https_port:
-            port_error = port_unavailable(args.web_host, https_port)
+            port_error = port_unavailable(bind_host, https_port)
             if port_error:
                 print(f"[web] can't serve HTTPS on port {https_port} ({port_error}); continuing without it "
                       f"(pick another with --https-port, or 0 to turn it off)")
@@ -293,8 +312,9 @@ def main() -> None:
         broadcaster.https_port = args.https_port
         threading.Thread(
             target=run_server,
-            args=(broadcaster, args.web_host, args.web_port),
+            args=(broadcaster, bind_host, args.web_port),
             kwargs={
+                "local_only": local_only,
                 "https_port": args.https_port,
                 "ssl_certfile": args.tls_cert if args.https_port else None,
                 "ssl_keyfile": args.tls_key if args.https_port else None,
