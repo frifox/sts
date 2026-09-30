@@ -168,6 +168,8 @@ final class PageViewController: NSViewController, WKUIDelegate, WKNavigationDele
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let spinner = NSProgressIndicator()
     private let buttons = NSStackView()
+    /// The caption page being shown, while it's meant to be (nil: the home screen).
+    private var pageURL: URL?
 
     override func loadView() {
         let configuration = WKWebViewConfiguration()
@@ -242,16 +244,49 @@ final class PageViewController: NSViewController, WKUIDelegate, WKNavigationDele
         buttons.isHidden = starting
         spinner.isHidden = !starting
         starting ? spinner.startAnimation(nil) : spinner.stopAnimation(nil)
+        pageURL = nil
         home.isHidden = false
         webView.isHidden = true
         webView.loadHTMLString("", baseURL: nil)  // drop the old page's connection to sts
     }
 
+    /// Loads the caption page. The starting screen stays up until it has
+    /// actually loaded: shown straight away, a load that failed (sts still
+    /// busy, or restarting) left a blank gray window, with nothing retrying.
     func load(_ url: URL) {
+        pageURL = url
+        webView.load(URLRequest(url: url))
+    }
+
+    private func retryPage() {
+        guard let url = pageURL else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, self.pageURL == url else { return }
+            self.webView.load(URLRequest(url: url))
+        }
+    }
+
+    // MARK: WKNavigationDelegate - show the page once it's there; retry if not
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let url = pageURL, webView.url?.host == url.host else { return }
         spinner.stopAnimation(nil)
         home.isHidden = true
         webView.isHidden = false
-        webView.load(URLRequest(url: url))
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        retryPage()
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        retryPage()
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        webView.isHidden = true
+        home.isHidden = false
+        retryPage()
     }
 
     func reload() {
