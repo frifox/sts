@@ -1812,7 +1812,7 @@
     const preparing = document.getElementById('voice-preparing');
     preparing.hidden = !status.preparing_voice;
     preparing.querySelector('span').textContent = status.preparing_voice
-      ? `Preparing ${status.preparing_voice}… the current voice keeps speaking until it's ready`
+      ? `Preparing ${status.preparing_voice}… until it's ready, speech continues as before`
       : '';
     if (!status.can_save) closeSaveDialog();
 
@@ -1895,6 +1895,9 @@
     wireHoverDropdown(meter, meter.querySelector('.engine-dropdown'), meter, { refreshDevices: true });
   });
   document.addEventListener('click', (event) => {
+    // A click on something the click itself re-rendered away (e.g. a "Base
+    // voice for cloning" button) is no longer inside anything: not "outside".
+    if (!event.target.isConnected) return;
     if (!event.target.closest('.engine-dropdown') && !event.target.closest('.engine-toggle')
         && !event.target.closest('#volume-meter') && !event.target.closest('#output-meter')) {
       closeDropdowns();

@@ -515,7 +515,7 @@ class Pipeline:
             if self.voice_library.get(speaker_id):
                 self._select_speaker(speaker_id)
 
-    def _select_speaker(self, speaker_id: str | None) -> None:
+    def _select_speaker(self, speaker_id: str | None, preparing_label: str | None = None) -> None:
         self._pending_voice = None
         if not speaker_id:
             self._next_voice_request()  # drops a voice still being prepared
@@ -536,7 +536,7 @@ class Pipeline:
             self._next_voice_request()
             apply()
         else:
-            self._clone_when_ready(str(entry.wav_path), entry.ref_text, apply, entry.name, speaker_id)
+            self._clone_when_ready(str(entry.wav_path), entry.ref_text, apply, preparing_label or entry.name, speaker_id)
 
     def _next_voice_request(self) -> int:
         self._voice_request = getattr(self, "_voice_request", 0) + 1
@@ -618,11 +618,16 @@ class Pipeline:
         if self._persistent_config is not None:
             self._persistent_config.set("qwen3_accent_donor", donor)
         vlog("voice", f"base voice for cloning: {donor or 'none'}")
+        # The note while it's prepared says what's happening: the same voice, re-made.
+        base = f"base voice {donor}" if donor else "no base voice"
         if self._active_speaker_id:
-            self._select_speaker(self._active_speaker_id)
+            entry = self.voice_library.get(self._active_speaker_id)
+            label = f"{entry.name if entry else 'the voice'} with {base}"
+            self._select_speaker(self._active_speaker_id, preparing_label=label)
         elif self._pending_voice is not None:
             path, ref_text = self._pending_voice
-            self._clone_when_ready(path, ref_text, lambda: self.tts.clone_voice(path, ref_text), "the new voice", None)
+            self._clone_when_ready(path, ref_text, lambda: self.tts.clone_voice(path, ref_text),
+                                   f"the cloned voice with {base}", None)
 
     def _delete_voice(self, speaker_id: str) -> None:
         entry = self.voice_library.get(speaker_id)
@@ -703,7 +708,7 @@ class Pipeline:
             vlog("voice", "trained voice is active but not saved yet")
             self._clone_step("activate", "done")
 
-        self._clone_when_ready(path, ref_text, apply, "the new voice", None, progress=True)
+        self._clone_when_ready(path, ref_text, apply, "the cloned voice", None, progress=True)
 
     def _save_pending_voice(self, name: str) -> None:
         name = name.strip()
