@@ -106,6 +106,8 @@ SPEECH_PAUSE_S = 1.0
 # that repeats on every item (a broken model, a device gone) logs at a
 # readable rate instead of spinning a CPU core.
 STAGE_ERROR_BACKOFF_S = 0.5
+# How long Clone's finished step list stays in the Voice dropdown.
+CLONE_PROGRESS_LINGER_S = 5.0
 
 
 def _is_cuda_oom(exc: BaseException) -> bool:
@@ -402,6 +404,7 @@ class Pipeline:
             self._queue_test_output()
         elif action == "train_start":
             self.control.start_training()
+            self._begin_clone_progress()
         elif action == "train_stop":
             self._finish_training()
         elif action in ("design_generate", "design_play", "design_save", "design_close"):
@@ -456,6 +459,7 @@ class Pipeline:
         whatever's currently playing."""
         if self.control.training.is_set():
             self.control.stop_training(discard=True)
+        self._clone_progress = None
         # After anything already queued - a voice being trained or picked
         # just before Reset must not become active again after it.
         self._on_control_thread(self._reset_voice)
@@ -539,7 +543,8 @@ class Pipeline:
         self._preparing_voice = None
         return self._voice_request
 
-    def _clone_when_ready(self, wav_path: str, ref_text: str | None, apply, name: str, speaker_id: str | None) -> None:
+    def _clone_when_ready(self, wav_path: str, ref_text: str | None, apply, name: str, speaker_id: str | None,
+                          progress: bool = False) -> None:
         """Runs `apply` (the clone) on the control thread - straight away,
         unless the voice first needs its English reference made (Qwen3, a
         non-English clip, not made before): tens of seconds of synthesis that,
@@ -552,15 +557,22 @@ class Pipeline:
         from sts.tts.english_reference import needs_english_reference
 
         if not getattr(self, "_started", False) or not needs_english_reference(self.cfg.tts, wav_path, ref_text):
+            if progress:
+                self._clone_step("english", "skipped")  # an English voice, or its reference is already made
             apply()
             return
+        if progress:
+            self._clone_step("english", "running")
         self._preparing_voice = (name, speaker_id)
         vlog("voice", f"preparing {name!r} alongside the current voice (its English reference)")
         self._broadcast_status()
 
         def finish() -> None:
             if request != getattr(self, "_voice_request", 0):
-                return  # another voice was chosen meanwhile
+                if progress:
+                    self._clone_progress = None  # another voice was chosen meanwhile
+                    self._broadcast_status()
+                return
             self._preparing_voice = None
             apply()
             vlog("voice", f"{name!r} is ready")
@@ -568,8 +580,12 @@ class Pipeline:
         def prepare() -> None:
             try:
                 self._make_english_reference(wav_path)
+                if progress:
+                    self._clone_step("english", "done")
             except Exception as exc:
                 print(f"[voice] couldn't prepare {name!r} alongside ({exc}); preparing it in the voice stage")
+                if progress:
+                    self._clone_step("english", "failed")
             self._on_control_thread(finish)
 
         threading.Thread(target=prepare, name="sts-voice-prep", daemon=True).start()
@@ -632,21 +648,62 @@ class Pipeline:
         it), and transcribes/clones what was captured on the control thread."""
         audio = self.control.stop_training(discard=discard)
         if audio is not None:
+            self._clone_step("record", "done")
             self._on_control_thread(self._activate_trained_voice, audio)
+        else:
+            self._clone_progress = None  # cancelled (Reset), or nothing was heard
+            self._broadcast_status()
+
+    # -- Clone's progress, shown step by step in the Voice dropdown ---------
+
+    CLONE_STEPS = (
+        ("record", "Recording the speaker"),
+        ("transcribe", "Transcribing what they said"),
+        ("english", "Preparing the voice's English"),
+        ("activate", "Switching to the new voice"),
+    )
+
+    def _begin_clone_progress(self) -> None:
+        self._clone_progress = [{"key": key, "label": label, "state": "pending"} for key, label in self.CLONE_STEPS]
+        self._clone_step("record", "running")
+
+    def _clone_step(self, key: str, state: str) -> None:
+        """Sets one step's state: pending, running, done, skipped or failed.
+        Once every step is over, the list stays up a few seconds, then goes."""
+        progress = getattr(self, "_clone_progress", None)
+        if not progress:
+            return
+        for step in progress:
+            if step["key"] == key:
+                step["state"] = state
+        self._broadcast_status()
+        if all(step["state"] in ("done", "skipped", "failed") for step in progress):
+            def clear() -> None:
+                if self._clone_progress is progress:
+                    self._clone_progress = None
+                    self._broadcast_status()
+
+            timer = threading.Timer(CLONE_PROGRESS_LINGER_S, clear)
+            timer.daemon = True
+            timer.start()
 
     def _activate_trained_voice(self, audio: np.ndarray) -> None:
         path = self._write_training_wav(audio)
+        self._clone_step("transcribe", "running")
         ref_text = self._transcribe_or_none(audio)
+        self._clone_step("transcribe", "done" if ref_text else "failed")
         # Activate the clone as soon as it's ready so the operator can listen to
         # it, but don't write it to the library until they choose to (Save Voice).
         def apply() -> None:
+            self._clone_step("activate", "running")
             self.tts.clone_voice(path, ref_text)
             self._voice_cloned = True
             self._active_speaker_id = None
             self._pending_voice = (path, ref_text)
             vlog("voice", "trained voice is active but not saved yet")
+            self._clone_step("activate", "done")
 
-        self._clone_when_ready(path, ref_text, apply, "the new voice", None)
+        self._clone_when_ready(path, ref_text, apply, "the new voice", None, progress=True)
 
     def _save_pending_voice(self, name: str) -> None:
         name = name.strip()
@@ -966,6 +1023,7 @@ class Pipeline:
                 active_speaker_id=self._active_speaker_id,
                 show_unfinished=getattr(self, "_show_unfinished", True),
                 accent_donor=self.cfg.tts.qwen3_accent_donor,
+                clone_steps=getattr(self, "_clone_progress", None),
                 preparing_voice=(getattr(self, "_preparing_voice", None) or ("", None))[0],
                 preparing_speaker_id=(getattr(self, "_preparing_voice", None) or ("", None))[1],
                 accent_donors=list(ACCENT_DONORS) if self.cfg.tts.backend == "qwen3" else [],

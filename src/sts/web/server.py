@@ -336,6 +336,7 @@ class CaptionBroadcaster:
         show_unfinished: bool = True,
         accent_donor: str = "",
         accent_donors: list[str] | None = None,
+        clone_steps: list[dict] | None = None,
         preparing_voice: str = "",
         preparing_speaker_id: str | None = None,
     ) -> None:
@@ -358,6 +359,7 @@ class CaptionBroadcaster:
             "show_unfinished": show_unfinished,
             "accent_donor": accent_donor,
             "accent_donors": accent_donors or [],
+            "clone_steps": clone_steps,
             "preparing_voice": preparing_voice,
             "preparing_speaker_id": preparing_speaker_id,
         }

@@ -632,6 +632,15 @@
   .engine-dropdown .render-mode { display: flex; }
   #accent-row { margin-top: 0.6rem; }
   #voice-preparing { margin-top: 0.4rem; font-size: 0.85em; color: #e0864c; }
+  #clone-progress { margin-top: 0.6rem; }
+  #clone-progress label { display: block; margin-bottom: 0.3rem; }
+  #clone-steps { list-style: none; margin: 0; padding: 0; }
+  #clone-steps li { display: flex; align-items: center; gap: 0.5em; padding: 0.15em 0; }
+  #clone-steps li svg { width: 1.1em; height: 1.1em; flex: none; }
+  #clone-steps li.step-pending, #clone-steps li.step-skipped { color: #777; }
+  #clone-steps li.step-running { color: #f0f0f0; }
+  #clone-steps li.step-done { color: #bbb; }
+  #clone-steps li.step-failed { color: #e08a8a; }
   #accent-row label { display: block; margin-bottom: 0.3rem; }
   #controls .render-mode button.is-pending { animation: pulse 1s ease-in-out infinite; }
   .engine-dropdown .render-mode button { flex: 1 1 0; }
@@ -810,6 +819,10 @@
             <button id="btn-create-voice" hidden title="Design a new voice from a text description (Qwen3 backend)">Design</button>
             <button id="btn-train" title="Clone the speaker's voice from what the input hears next">Clone</button>
             <button id="btn-save-voice" disabled title="Save the cloned voice to the library">Save</button>
+          </div>
+          <div id="clone-progress" hidden>
+            <label>Cloning progress</label>
+            <ul id="clone-steps"></ul>
           </div>
           <div id="accent-row" hidden>
             <label id="accent-label">Base voice for cloning</label>
@@ -1708,7 +1721,7 @@
   let pendingAccent = null;
   function renderAccentDonors(status) {
     const donors = status.accent_donors || [];
-    accentRow.hidden = !donors.length;
+    accentRow.hidden = !donors.length || !!status.clone_steps;  // Clone's progress shows in its place
     if (!donors.length) return;
     if (pendingAccent !== null && status.accent_donor === pendingAccent) pendingAccent = null;
     const chosen = pendingAccent !== null ? pendingAccent : (status.accent_donor || '');
@@ -1729,6 +1742,39 @@
     }));
   }
 
+  // Clone's steps in the Voice dropdown, in place of "Base voice for cloning"
+  // while it runs (and a few seconds after): an icon for each step's state.
+  const CLONE_STEP_ICONS = {
+    pending: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/>',
+    running: `<circle cx="12" cy="12" r="8.5" fill="none" stroke="${ORANGE}" stroke-width="2"/>`
+      + `<path class="voice-spin" d="M12 6.5a5.5 5.5 0 0 1 5.5 5.5" fill="none" stroke="${ORANGE}" stroke-width="2.4" stroke-linecap="round"/>`,
+    done: `<circle cx="12" cy="12" r="9.5" fill="${GREEN}"/><path d="M7.5 12.3l3 3 6-6.3" fill="none" stroke="${DARK}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`,
+    skipped: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12h8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
+    failed: `<circle cx="12" cy="12" r="9.5" fill="#d9534f"/><path d="M8.8 8.8l6.4 6.4M15.2 8.8l-6.4 6.4" stroke="${DARK}" stroke-width="2.2" stroke-linecap="round"/>`,
+  };
+  const CLONE_STEP_STATES = {
+    pending: 'waiting', running: 'in progress', done: 'done',
+    skipped: 'not needed (an English voice, or already prepared)', failed: 'failed - carried on without it',
+  };
+  function renderCloneProgress(status, steps) {
+    const section = document.getElementById('clone-progress');
+    section.hidden = !steps;
+    if (steps) accentRow.hidden = true;
+    if (!steps) return;
+    document.getElementById('clone-steps').replaceChildren(...steps.map((step) => {
+      const item = document.createElement('li');
+      item.className = `step-${step.state}`;
+      item.title = CLONE_STEP_STATES[step.state] || step.state;
+      let label = step.label;
+      if (step.key === 'record' && step.state === 'running') {
+        label += ` - ${Math.floor(status.training_seconds || 0)} s of ${status.training_target_seconds} s`;
+      }
+      item.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${CLONE_STEP_ICONS[step.state] || ''}</svg><span></span>`;
+      item.querySelector('span').textContent = label;
+      return item;
+    }));
+  }
+
   function applyStatus(status) {
     const sourceChanged = status.audio_source !== lastStatus.audio_source;
     lastStatus = status;
@@ -1746,12 +1792,19 @@
     document.body.classList.toggle('voice-on', !!status.voice_enabled);
     highlightLines();
 
-    if (status.training) {
-      trainBtn.textContent = `Stop (${status.training_seconds}s / ${status.training_target_seconds}s)`;
+    const cloneSteps = status.clone_steps || null;
+    const cloning = status.training || (cloneSteps && cloneSteps.some((step) => step.state === 'pending' || step.state === 'running'));
+    if (cloning) {
+      trainBtn.textContent = 'Cloning';
+      // While it's recording, a click stops the recording early (it clones what it has).
+      trainBtn.title = status.training ? 'Cloning - click to stop recording now and clone what was heard' : 'Cloning…';
     } else {
       trainBtn.textContent = status.cloned ? 'Clone ✓' : 'Clone';
+      trainBtn.title = "Clone the speaker's voice from what the input hears next";
     }
-    trainBtn.classList.toggle('is-active', status.training);
+    trainBtn.disabled = !!cloning && !status.training;
+    trainBtn.classList.toggle('is-active', !!cloning);
+    renderCloneProgress(status, cloneSteps);
     saveBtn.disabled = !status.can_save || status.training;
     createBtn.hidden = !status.can_design;
     renderAccentDonors(status);
