@@ -525,9 +525,8 @@
 
   .engine { position: relative; display: flex; }
   #controls .engine-toggle.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; }
-  /* Disabled: starting up, mid ASR-engine switch, disconnected, or (for
-     Translate/Voice) an upstream stage they'd have nothing to work with is
-     off - toggling wouldn't do anything, so don't invite the click. */
+  /* Disabled: starting up, mid ASR-engine switch, or disconnected - toggling
+     wouldn't do anything, so don't invite the click. */
   #controls .engine-toggle:disabled { opacity: 0.4; cursor: default; }
   /* The on/off circle in Caption/Translate/Voice: filled = on, ring = off,
      ring with a spinner = clicked, waiting for the server to confirm. */
@@ -1597,8 +1596,11 @@
     const connected = ws && ws.readyState === WebSocket.OPEN;
     const ready = systemReady && connected;
     asrToggleBtn.disabled = !ready;
-    translateToggleBtn.disabled = !ready || !lastStatus.active;
-    ttsToggleBtn.disabled = !ready || !lastStatus.active || !lastStatus.translation_enabled;
+    // Each independently: Caption off stops new captions while Translate and
+    // Voice finish what they have (what was still open is finalized and sent
+    // on); Caption on again, and they pick up the new sentences by themselves.
+    translateToggleBtn.disabled = !ready;
+    ttsToggleBtn.disabled = !ready;
   }
 
   function resetEngineInfo() {
