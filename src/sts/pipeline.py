@@ -375,25 +375,15 @@ class Pipeline:
             self._publish_captions(self.transcript.flush(), [])
             self._publish_finalize_timer()
         elif action == "voice_on":
+            self._voice_stopping_seq = None  # clicked again while stopping: carry on
             self.control.enable_voice()
         elif action == "voice_off":
-            self.control.disable_voice()
-            self._clear_voice_states()
-            # Drop anything already synthesized and queued but not yet handed
-            # to the sound card (already covered by _playback_loop's own
-            # voice_enabled check too, but no reason to let it sit there).
-            # The clip playing *right now* is cut short by _playback_loop's
-            # own should_continue polling instead of aborting the output
-            # stream from this thread - a different thread calling
-            # stream.abort()/close() while _playback_loop's thread is
-            # mid-write() has been observed to segfault PortAudio's ALSA
-            # backend.
-            self._drain(self._audio)
-            # No more on_chunk calls will happen until something plays again,
-            # so the output meter would otherwise be stuck showing whatever
-            # level happened to be last, forever - explicitly zero it.
-            if self.broadcaster:
-                self.broadcaster.broadcast_output_level(0.0)
+            with self._voice_lock():
+                playing = self._voice_now_playing
+            if playing is not None and self.control.voice_enabled.is_set():
+                self._stop_voice_after(playing)
+            else:
+                self._voice_off_now()
         elif action == "translate_on":
             self.control.enable_translation()
         elif action == "translate_off":
@@ -453,12 +443,72 @@ class Pipeline:
             return
         self._broadcast_status()
 
+    # -- Voice off: the sentence being spoken finishes first ----------------
+
+    _voice_stopping_seq: int | None = None
+    VOICE_STOP_TIMEOUT_S = 60.0
+
+    def _stop_voice_after(self, seq: int) -> None:
+        """Voice off while sentence `seq` is being spoken: it's spoken to the
+        end - including any of it still being synthesized - and then Voice
+        goes off; nothing after it is synthesized or played. (Cut off mid-
+        word, it sounded broken.)"""
+        self._voice_stopping_seq = seq
+        self._voice_stopping_since = time.monotonic()
+        with self._audio.mutex:  # what's queued of later sentences won't be spoken
+            kept = [clip for clip in self._audio.queue if clip.seq == seq or clip.force]
+            self._audio.queue.clear()
+            self._audio.queue.extend(kept)
+        with self._voice_lock():
+            others = [s for s in self._voice_states if s != seq]
+        for other in others:
+            self._set_voice_state(other, None)
+        vlog("control", "voice off after the sentence being spoken")
+
+    def _voice_stopping(self) -> bool:
+        return self._voice_stopping_seq is not None
+
+    def _voice_off_now(self) -> None:
+        self._voice_stopping_seq = None
+        self.control.disable_voice()
+        self._clear_voice_states()
+        # Drop anything already synthesized and queued but not yet handed
+        # to the sound card (already covered by _playback_loop's own
+        # voice_enabled check too, but no reason to let it sit there).
+        # The clip playing *right now* is cut short by _playback_loop's
+        # own should_continue polling instead of aborting the output
+        # stream from this thread - a different thread calling
+        # stream.abort()/close() while _playback_loop's thread is
+        # mid-write() has been observed to segfault PortAudio's ALSA
+        # backend.
+        self._drain(self._audio)
+        # No more on_chunk calls will happen until something plays again,
+        # so the output meter would otherwise be stuck showing whatever
+        # level happened to be last, forever - explicitly zero it.
+        if self.broadcaster:
+            self.broadcaster.broadcast_output_level(0.0)
+
+    def _sentence_spoken(self, seq: int | None) -> None:
+        """`seq` has been spoken to the end: if Voice is waiting on it to go off, now it does."""
+        if seq is not None and seq == self._voice_stopping_seq:
+            self._voice_off_now()
+            self._broadcast_status()
+
+    def _check_voice_stopping(self) -> None:
+        """Watchdog: a sentence that never reports finishing (playback failed)
+        doesn't keep Voice from going off."""
+        if self._voice_stopping() and time.monotonic() - self._voice_stopping_since > self.VOICE_STOP_TIMEOUT_S:
+            self._voice_off_now()
+            self._broadcast_status()
+
     def _reset(self) -> None:
         """New speaker / performance: clear captions, drop stale in-flight
         text from the previous one, forget any cloned voice, and stop
         whatever's currently playing."""
         if self.control.training.is_set():
             self.control.stop_training(discard=True)
+        if self._voice_stopping():
+            self._voice_off_now()  # Reset cuts the sentence it was waiting for anyway
         self._clone_progress = None
         # After anything already queued - a voice being trained or picked
         # just before Reset must not become active again after it.
@@ -1027,6 +1077,7 @@ class Pipeline:
                 voice_groups=self.cfg.tts.voice_groups,
                 active_speaker_id=self._active_speaker_id,
                 show_unfinished=getattr(self, "_show_unfinished", True),
+                voice_stopping=self._voice_stopping(),
                 accent_donor=self.cfg.tts.qwen3_accent_donor,
                 clone_steps=getattr(self, "_clone_progress", None),
                 preparing_voice=(getattr(self, "_preparing_voice", None) or ("", None))[0],
@@ -1321,7 +1372,7 @@ class Pipeline:
 
     def _tts_step(self) -> None:
         text, continues, finalized_at, seq = self._translations.get(timeout=QUEUE_POLL_S)
-        if not self.control.voice_enabled.is_set():
+        if not self.control.voice_enabled.is_set() or self._voice_stopping():
             vlog("tts", "voice is off, skipping synthesis")
             return
         self._set_voice_state(seq, "generating")
@@ -1333,7 +1384,8 @@ class Pipeline:
         # this sentence.
         first_piece = True
         for audio, sample_rate, seamless in self._synthesize_pieces(text):
-            if generation != self._reset_generation or not self.control.voice_enabled.is_set():
+            if (generation != self._reset_generation or not self.control.voice_enabled.is_set()
+                    or self._voice_stopping_seq not in (None, seq)):
                 vlog("tts", "Reset or Voice off mid-sentence; not synthesizing the rest")
                 return
             if not audio.size:
@@ -1385,6 +1437,8 @@ class Pipeline:
                 self._voice_states[seq] = state
         if self.broadcaster and hasattr(self.broadcaster, "broadcast_voice_state"):
             self.broadcaster.broadcast_voice_state(seq, state)
+        if state == "played":
+            self._sentence_spoken(seq)
 
     def _voice_generation_done(self, seq: int | None) -> None:
         """All of `seq`'s speech is synthesized: "generated" if it isn't
@@ -1479,7 +1533,8 @@ class Pipeline:
                 return
         else:
             clip = self._audio.get(timeout=QUEUE_POLL_S)
-        if not clip.force and not self.control.voice_enabled.is_set():
+        if not clip.force and (not self.control.voice_enabled.is_set()
+                               or self._voice_stopping_seq not in (None, clip.seq)):
             return  # voice was switched off while this was queued
         clip = self._catch_up(clip)
         # Broadcast before playing locally, not after: play() blocks for
@@ -1692,7 +1747,8 @@ class Pipeline:
 
     def _audio_watchdog_loop(self) -> None:
         while not self._stop.wait(1.0):
-            for check in (self._check_audio_health, self._check_stage_threads, self._check_engines, self._check_library):
+            for check in (self._check_audio_health, self._check_stage_threads, self._check_engines, self._check_library,
+                          self._check_voice_stopping):
                 try:
                     check()
                 except Exception as exc:  # a health check must never take itself down

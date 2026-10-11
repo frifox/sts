@@ -1533,7 +1533,8 @@
   const pendingToggles = new Map();  // status key -> {want, timer}
   function drawEngineToggle(toggle) {
     const on = !!lastStatus[toggle.key];
-    const pending = pendingToggles.has(toggle.key);
+    // Voice off waits for the sentence being spoken to finish: spinning until then.
+    const pending = pendingToggles.has(toggle.key) || (toggle.key === 'voice_enabled' && !!lastStatus.voice_stopping);
     const dot = pending
       ? '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.4"/>'
         + '<path class="voice-spin" d="M12 6.5a5.5 5.5 0 0 1 5.5 5.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>'
@@ -1783,7 +1784,9 @@
 
     for (const toggle of ENGINE_TOGGLES) {
       const pending = pendingToggles.get(toggle.key);
-      if (pending && status[toggle.key] === pending.want) {
+      const settled = status[toggle.key] === pending?.want
+        && !(toggle.key === 'voice_enabled' && pending?.want === true && status.voice_stopping);
+      if (pending && settled) {
         clearTimeout(pending.timer);
         pendingToggles.delete(toggle.key);
       }
@@ -1857,14 +1860,16 @@
   for (const toggle of ENGINE_TOGGLES) {
     toggle.button.addEventListener('click', () => {
       const pending = pendingToggles.get(toggle.key);
-      const want = pending ? !pending.want : !lastStatus[toggle.key];  // a second click reverses the first
+      // A second click reverses the first - including a Voice off still
+      // waiting for its sentence to finish (that click turns it back on).
+      const stopping = toggle.key === 'voice_enabled' && lastStatus.voice_stopping;
+      const want = pending ? !pending.want : stopping ? true : !lastStatus[toggle.key];
       if (pending) clearTimeout(pending.timer);
       pendingToggles.set(toggle.key, {
         want,
         timer: setTimeout(() => { pendingToggles.delete(toggle.key); drawEngineToggle(toggle); }, PENDING_TOGGLE_MS),
       });
       drawEngineToggle(toggle);
-      if (toggle.key === 'voice_enabled' && !want) stopStreamAudio();  // silence this browser right away
       send(want ? toggle.on : toggle.off);
     });
   }
@@ -2470,7 +2475,7 @@
         for (const [seq, state] of Object.entries(msg.states || {})) setVoiceState(Number(seq), state);
       }
       else if (msg.type === 'verse') showVerse(msg);
-      else if (msg.type === 'reset') clearCaptions();
+      else if (msg.type === 'reset') { clearCaptions(); stopStreamAudio(); }
       else if (msg.type === 'stage') {
         setStage(msg.text, msg.ready, msg.progress);
         systemReady = !!msg.ready;
