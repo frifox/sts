@@ -13,6 +13,7 @@ Not supported here: trained LoRA voices (a PyTorch/peft adapter); zero-shot
 cloned voices, the preset voices and voice design are.
 """
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -45,6 +46,7 @@ class MLXQwen3TTSModel:
     def from_pretrained(cls, name: str, **_torch_options) -> "MLXQwen3TTSModel":
         from mlx_audio.tts.utils import load_model
 
+        _quiet_config_type_warning()
         return cls(load_model(mlx_model_name(name)))
 
     @property
@@ -117,6 +119,22 @@ def _mlx_sampling(sampling: dict) -> dict:
     if "max_new_tokens" in sampling:
         out["max_tokens"] = sampling["max_new_tokens"]
     return out
+
+
+class _DropConfigTypeWarning(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "to instantiate a model of type" not in record.getMessage()
+
+
+def _quiet_config_type_warning() -> None:
+    """mlx-audio reads each model's config through transformers' generic config
+    class, which warns "You are using a model of type `qwen3_tts` to
+    instantiate a model of type ``..." on every load - harmless (the model
+    loads and speaks fine), but it looked like an error in the console. Only
+    that message is dropped; transformers' other warnings still show."""
+    target = logging.getLogger("transformers.configuration_utils")
+    if not any(isinstance(f, _DropConfigTypeWarning) for f in target.filters):
+        target.addFilter(_DropConfigTypeWarning())
 
 
 def clear_cache() -> None:
