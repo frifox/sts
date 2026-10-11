@@ -133,6 +133,8 @@ class VoiceLibrary:
         if not meta_path.exists():
             return None
         meta = json.loads(meta_path.read_text())
+        if meta.get("deleted"):
+            return None  # a shipped voice the user deleted (see delete)
         kind = meta.get("kind", "zeroshot")
 
         if kind == "lora":
@@ -169,7 +171,7 @@ class VoiceLibrary:
             entry = self._load_entry(entry_dir)
             if entry is not None:
                 mine.append(entry)
-        taken = {e.speaker_id for e in mine}
+        taken = {e.speaker_id for e in mine} | self._deleted_shipped()
         shipped = [e for e in self._bundled().values() if e.speaker_id not in taken]
         return shipped + sorted(mine, key=lambda e: e.created_at)
 
@@ -190,12 +192,38 @@ class VoiceLibrary:
             entry = self._load_entry(entry_dir)
             if entry is not None:
                 return entry
+        if speaker_id in self._deleted_shipped():
+            return None
         return self._bundled().get(speaker_id)  # a plain dict lookup: the id never becomes a path
 
     def delete(self, speaker_id: str) -> bool:
-        """Removes a voice from disk. Returns False if there was no such voice."""
+        """Removes a voice from disk. Returns False if there was no such voice.
+
+        A shipped voice can't be removed from the app itself, so deleting one
+        leaves a marker in the library instead (`<id>/meta.json` with
+        "deleted": true) that hides it; removing that folder brings it back.
+        Deleting the user's own copy of a shipped voice removes just the copy
+        (the shipped one shows again)."""
         entry_dir = self._entry_dir(speaker_id)
-        if entry_dir is None:
+        if entry_dir is not None and speaker_id not in self._deleted_shipped():
+            shutil.rmtree(entry_dir)
+            return True
+        shipped = self._bundled().get(speaker_id)
+        if shipped is None or speaker_id in self._deleted_shipped():
             return False
-        shutil.rmtree(entry_dir)
+        marker = self.root / shipped.speaker_id
+        marker.mkdir(parents=True, exist_ok=True)
+        (marker / "meta.json").write_text(json.dumps({"deleted": True, "name": shipped.name}, ensure_ascii=False, indent=2))
         return True
+
+    def _deleted_shipped(self) -> set[str]:
+        """Ids of shipped voices the user deleted (see delete)."""
+        deleted = set()
+        for entry_dir in (p for p in self.root.iterdir() if p.is_dir()):
+            meta = entry_dir / "meta.json"
+            try:
+                if meta.is_file() and json.loads(meta.read_text()).get("deleted"):
+                    deleted.add(entry_dir.name)
+            except ValueError:
+                pass
+        return deleted

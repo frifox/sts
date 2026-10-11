@@ -169,13 +169,23 @@ def test_bundled_voices_are_listed_first_and_flagged(tmp_path):
     assert library.get("default").wav_path.name == "reference.wav"
 
 
-def test_bundled_voices_cannot_be_deleted_but_can_be_overridden(tmp_path):
+def test_a_bundled_voice_can_be_deleted_and_brought_back(tmp_path):
+    import shutil
+
     from sts.tts.voice_library import VoiceLibrary
 
     library = VoiceLibrary(tmp_path / "voices", bundled_dir=make_bundle(tmp_path))
-    assert library.delete("default") is False                      # shipped: nothing of the user's to delete
-    assert library.get("default") is not None
+    assert library.delete("default") is True                       # hidden by a marker in the library
+    assert library.get("default") is None and library.list() == []
+    assert library.delete("default") is False                      # already gone
+    shutil.rmtree(tmp_path / "voices" / "default")                 # removing the marker brings it back
+    assert library.get("default").builtin
 
+
+def test_bundled_voices_can_be_overridden(tmp_path):
+    from sts.tts.voice_library import VoiceLibrary
+
+    library = VoiceLibrary(tmp_path / "voices", bundled_dir=make_bundle(tmp_path))
     wav = tmp_path / "mine.wav"
     wav.write_bytes(b"RIFF")
     library.save("Default", wav, "My own words.")                   # same id: the user's copy wins

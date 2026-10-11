@@ -485,12 +485,9 @@ def test_startup_voice_can_be_disabled(tmp_path):
     assert p._active_speaker_id is None and p.tts.cloned_speaker_wav is None   # plain built-in voice
 
 
-def test_shipped_voice_is_undeletable_and_deleting_the_active_custom_voice_returns_to_default(tmp_path):
+def test_deleting_the_active_custom_voice_returns_to_default(tmp_path):
     p, mine = _startup_voice_pipeline(tmp_path)
     p._use_startup_voice()
-    p.handle_control({"action": "delete_voice", "speaker_id": "default"})
-    assert p.voice_library.get("default") is not None and p._active_speaker_id == "default"
-
     p.handle_control({"action": "select_speaker", "speaker_id": mine.speaker_id})
     p.handle_control({"action": "delete_voice", "speaker_id": mine.speaker_id})
     assert p.voice_library.get(mine.speaker_id) is None
@@ -502,3 +499,11 @@ def test_shipped_voice_is_undeletable_and_deleting_the_active_custom_voice_retur
     assert p._active_speaker_id is None
     p.handle_control({"action": "delete_voice", "speaker_id": other.speaker_id})
     assert p._active_speaker_id is None
+
+
+def test_deleting_the_shipped_default_voice_falls_back_to_the_built_in_voice(tmp_path):
+    p, _ = _startup_voice_pipeline(tmp_path)
+    p._use_startup_voice()
+    p.handle_control({"action": "delete_voice", "speaker_id": "default"})
+    assert p.voice_library.get("default") is None
+    assert p._active_speaker_id is None  # the plain built-in voice

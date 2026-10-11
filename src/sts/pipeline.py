@@ -683,8 +683,6 @@ class Pipeline:
         entry = self.voice_library.get(speaker_id)
         if entry is None:
             return
-        if entry.builtin:
-            return  # shipped with the app; only a saved copy the user made of it can be deleted
         was_active = self._active_speaker_id == speaker_id
         if was_active:
             self._select_speaker(None)  # step off the voice before its files go away

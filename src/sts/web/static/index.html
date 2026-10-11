@@ -2289,7 +2289,7 @@
   function syncDeleteButton() {
     // Only offered while one of the user's own saved voices (cloned or designed) is selected.
     const saved = savedVoices.find((voice) => `saved:${voice.id}` === voiceSelect.value);
-    deleteBtn.hidden = !saved || saved.builtin;  // shipped voices can't be deleted
+    deleteBtn.hidden = !saved;  // a shipped one too: it's hidden (see VoiceLibrary.delete)
   }
   deleteBtn.addEventListener('click', () => {
     if (!voiceSelect.value.startsWith('saved:')) return;
