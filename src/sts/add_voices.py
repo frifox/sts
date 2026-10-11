@@ -34,7 +34,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sts.paths import default_voice_library_dir
+from sts.paths import default_config_db, default_voice_library_dir
 
 SAMPLE_RATE = 16_000
 MEDIA_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma",
@@ -166,7 +166,8 @@ def main() -> None:
     parser.add_argument("--replace", action="store_true", help="Redo voices already in the library")
     parser.add_argument("--no-english-reference", action="store_true",
                         help="Don't make Qwen3's English references now (they're made on first use)")
-    parser.add_argument("--config-db", default="sts.db", help="The app's settings (the base voice for cloning)")
+    parser.add_argument("--config-db", default=default_config_db(),
+                        help=f"The app's settings, for the base voice for cloning (default: {default_config_db()})")
     parser.add_argument("--device", default=None, help="Device for speech recognition and TTS (default: auto)")
     args = parser.parse_args()
 

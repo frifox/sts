@@ -8,6 +8,7 @@ preferences.
 
 import sqlite3
 import threading
+from pathlib import Path
 
 
 class PersistentConfig:
@@ -18,6 +19,8 @@ class PersistentConfig:
         # switch) - serialized by our own lock rather than sqlite3's default
         # same-thread restriction.
         self._lock = threading.Lock()
+        if db_path != ":memory:":
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)  # e.g. ~/Library/Application Support/STS
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self._conn.commit()

@@ -143,8 +143,14 @@ _BACKEND_MODULES = {"xtts": ("TTS",), "qwen3": ("qwen_tts", "mlx_audio")}  # qwe
 
 
 def installed_backends() -> list[str]:
-    return [name for name, modules in _BACKEND_MODULES.items()
-            if any(importlib.util.find_spec(module) is not None for module in modules)]
+    return [name for name, modules in _BACKEND_MODULES.items() if any(map(_installed, modules))]
+
+
+def _installed(module: str) -> bool:
+    try:
+        return importlib.util.find_spec(module) is not None
+    except ValueError:  # already imported, without import metadata (a stand-in module): it's there
+        return True
 
 
 def default_tts_backend(prefer: str = "xtts") -> str:

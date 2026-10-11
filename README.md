@@ -144,7 +144,8 @@ and installs `sts[mlx]` into it; later builds reuse it and reinstall sts.
 - **Server**: start, stop (⌘.), restart (⇧⌘R).
 
 The app's sts keeps `sts.db`, `voices/` and `certs/` in
-`~/Library/Application Support/STS`; models still download to
+`~/Library/Application Support/STS` - and on macOS sts run from the terminal
+uses the same `sts.db` and `voices/`, so settings and voices are shared; models still download to
 `~/.cache/huggingface`. macOS asks for Microphone access for STS itself.
 
 ## Tools

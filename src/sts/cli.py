@@ -12,6 +12,7 @@ from sts.audio.capture import list_devices
 from sts.audio.devices import check_input, check_output
 from sts.engine_args import add_engine_arguments, build_engine_config
 from sts.log import vlog
+from sts.paths import default_config_db
 from sts.persistent_config import PersistentConfig
 from sts.startup_progress import StartupProgress
 from sts.pipeline import Pipeline
@@ -119,9 +120,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config-db",
-        default="sts.db",
+        default=default_config_db(),
         help="SQLite file that remembers the operator's input/output device, output volume, and active voice "
-        "across restarts (default: sts.db in the working directory). An explicit --input-device/--output-device/ "
+        "across restarts (default: STS.app's, ~/Library/Application Support/STS/sts.db on macOS; elsewhere sts.db in "
+        "the working directory). An explicit --input-device/--output-device/ "
         "--default-voice/--clone still wins over what's saved. Pass '' to disable persistence.",
     )
     return parser

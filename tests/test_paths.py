@@ -24,3 +24,18 @@ def test_the_flag_still_wins():
     add_engine_arguments(parser)
     cfg, _ = build_engine_config(parser.parse_args(["--device", "cpu", "--voice-library-dir", "/tmp/elsewhere"]))
     assert cfg.tts.voice_library_dir == "/tmp/elsewhere"
+
+
+def test_settings_are_the_app_s_on_macos_too(monkeypatch):
+    monkeypatch.setattr(paths.sys, "platform", "darwin")
+    assert paths.default_config_db() == str(Path.home() / "Library/Application Support/STS/sts.db")
+    monkeypatch.setattr(paths.sys, "platform", "linux")
+    assert paths.default_config_db() == "sts.db"
+
+
+def test_the_settings_folder_is_made_if_missing(tmp_path):
+    from sts.persistent_config import PersistentConfig
+
+    settings = PersistentConfig(str(tmp_path / "new" / "STS" / "sts.db"))
+    settings.set("k", "v")
+    assert settings.get("k") == "v"

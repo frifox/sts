@@ -12,7 +12,14 @@ _MODULES = {"torch": "qwen_tts", "mlx": "mlx_audio"}
 
 
 def available_engines() -> list[str]:
-    return [engine for engine in ENGINES if importlib.util.find_spec(_MODULES[engine]) is not None]
+    return [engine for engine in ENGINES if _installed(_MODULES[engine])]
+
+
+def _installed(module: str) -> bool:
+    try:
+        return importlib.util.find_spec(module) is not None
+    except ValueError:  # already imported, without import metadata (a stand-in module): it's there
+        return True
 
 
 def resolve_engine(requested: str = "auto") -> str:
