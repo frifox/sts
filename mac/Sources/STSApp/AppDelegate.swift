@@ -10,6 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         main.onEditConfig = { [weak self] in self?.editConfiguration(nil) }
         main.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // Start sts straight away: the home screen shows its progress, and
+        // Edit Config / Start STS come back if it stops or fails to start.
+        main.startSTS()
     }
 
     /// Stop sts (Ctrl+C, so it shuts its pipeline down) before quitting.

@@ -135,8 +135,9 @@ The first build downloads a standalone Python 3.11
 ([python-build-standalone](https://github.com/astral-sh/python-build-standalone))
 and installs `sts[mlx]` into it; later builds reuse it and reinstall sts.
 
-- The window opens on **Edit Config** / **Start STS**; starting shows the
-  caption page once sts serves it.
+- sts starts as soon as the app opens; the window shows the caption page
+  once sts serves it. **Edit Config** / **Start STS** come back if it's
+  stopped or fails to start.
 - **Edit Config** (also STS ▸ Configuration…, ⌘,) lists every sts option,
   one per line, with its default beside it; anything left at Default isn't
   passed. Saving restarts sts if it's running.
