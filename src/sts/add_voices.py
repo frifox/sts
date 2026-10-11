@@ -1,5 +1,5 @@
 """`sts-add-voices`: turns video/audio files dropped into the voice library's
-`new/` folder (on macOS ~/Library/Application Support/Translate Live/voices/new/,
+`new/` folder (on macOS ~/Library/Application Support/Live Translate/voices/new/,
 the library the app uses too - see sts.paths) into voices in the library - the batch equivalent of pressing Clone in the caption
 page, with no training (zero-shot cloning, like Clone).
 

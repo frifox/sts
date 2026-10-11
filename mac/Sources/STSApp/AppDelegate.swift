@@ -53,17 +53,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let menu = NSMenu()
 
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About Translate Live", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "About Live Translate", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Configuration…", action: #selector(editConfiguration(_:)), keyEquivalent: ",")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Hide Translate Live", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Hide Live Translate", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthers = appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
         hideOthers.keyEquivalentModifierMask = [.command, .option]
         appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Quit Translate Live", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        add(appMenu, titled: "Translate Live", to: menu)
+        appMenu.addItem(withTitle: "Quit Live Translate", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        add(appMenu, titled: "Live Translate", to: menu)
 
         // Copy/paste in the page's text fields and the configuration sheet go through these.
         let edit = NSMenu(title: "Edit")

@@ -128,7 +128,7 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "--voice-library-dir",
         default=None,
         help="Directory where trained/selectable speaker voices are saved "
-        "(default: the one the Translate Live app uses on macOS, ~/Library/Application Support/Translate Live/voices; "
+        "(default: the one the Live Translate app uses on macOS, ~/Library/Application Support/Live Translate/voices; "
         "elsewhere ./voices)",
     )
     parser.add_argument(

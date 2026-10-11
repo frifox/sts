@@ -34,7 +34,7 @@ enum STSEnvironment {
 
     static var dataDirectory: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("Translate Live", isDirectory: true)
+        return support.appendingPathComponent("Live Translate", isDirectory: true)
     }
 }
 

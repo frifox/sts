@@ -1,13 +1,13 @@
-# Translate Live.app: `make` builds it fresh and installs it in /Applications.
+# Live Translate.app: `make` builds it fresh and installs it in /Applications.
 #
 #   make           build + install (the same as `make deploy`)
-#   make build     build mac/build/Translate Live.app only
+#   make build     build mac/build/Live Translate.app only
 #   make install   install the last build in /Applications (the app must be quit)
 #   make test      run the tests (in .venv-mlx)
 
-APP        := Translate Live.app
-# The app's name before the rename (STS): removed on install.
-OLD_APP    := /Applications/STS.app
+APP        := Live Translate.app
+# The app's earlier names (STS, then Translate Live): removed on install.
+OLD_APPS   := "/Applications/STS.app" "/Applications/Translate Live.app"
 BUILT      := mac/build/$(APP)
 INSTALLED  := /Applications/$(APP)
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
@@ -23,14 +23,14 @@ build: check-not-running
 # in /Applications: a copy running from either would lose its
 # files mid-run (its Python lives inside the app).
 check-not-running:
-	@if pgrep -f "$(APP)/Contents/|STS.app/Contents/" >/dev/null; then \
-		echo "Translate Live is running - quit it first (Translate Live > Quit), then run make again."; \
+	@if pgrep -f "$(APP)/Contents/|STS.app/Contents/|Translate Live.app/Contents/" >/dev/null; then \
+		echo "Live Translate is running - quit it first (Live Translate > Quit), then run make again."; \
 		exit 1; \
 	fi
 
 install: check-not-running
 	@test -d "$(BUILT)" || { echo "No build yet: run make build"; exit 1; }
-	rm -rf "$(INSTALLED)" "$(OLD_APP)"
+	rm -rf "$(INSTALLED)" $(OLD_APPS)
 	ditto "$(BUILT)" "$(INSTALLED)"
 	$(LSREGISTER) -f "$(INSTALLED)"
 	codesign --verify --deep "$(INSTALLED)"

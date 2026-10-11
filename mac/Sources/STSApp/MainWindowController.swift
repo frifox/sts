@@ -25,7 +25,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false
         )
-        window.title = "Translate Live"
+        window.title = "Live Translate"
         window.minSize = NSSize(width: 480, height: 320)
         super.init(window: window)
         window.delegate = self
@@ -179,7 +179,7 @@ final class PageViewController: NSViewController, WKUIDelegate, WKNavigationDele
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
 
-        let title = NSTextField(labelWithString: "Translate Live")
+        let title = NSTextField(labelWithString: "Live Translate")
         title.font = .systemFont(ofSize: 34, weight: .semibold)
         let subtitle = NSTextField(labelWithString: "Live Russian → English speech translation")
         subtitle.textColor = .secondaryLabelColor

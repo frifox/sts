@@ -1,4 +1,4 @@
-"""Runs `make` (build Translate Live.app and install it) and shows its output
+"""Runs `make` (build Live Translate.app and install it) and shows its output
 live on a web page - what the Claude app's "make" server entry starts
 (.claude/launch.json), so the tab it opens shows the build instead of
 nothing. Standard library only.
@@ -73,7 +73,7 @@ run = Run()
 run_lock = threading.Lock()
 
 PAGE = """<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><title>make - Translate Live</title>
+<html lang="en"><head><meta charset="utf-8"><title>make - Live Translate</title>
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; background: #0b0b0f; color: #ddd; font: 14px -apple-system, system-ui, sans-serif;
@@ -93,7 +93,7 @@ PAGE = """<!DOCTYPE html>
         white-space: pre-wrap; word-break: break-word; }
 </style></head>
 <body>
-<header><h1>make: build and install Translate Live.app</h1><span id="status">running</span>
+<header><h1>make: build and install Live Translate.app</h1><span id="status">running</span>
 <span id="elapsed"></span><button id="again" disabled>Run again</button></header>
 <pre id="out"></pre>
 <script>
@@ -114,7 +114,7 @@ PAGE = """<!DOCTYPE html>
       statusEl.textContent = LABEL[r.status] + (r.status === 'failed' ? ` (exit ${r.code})` : '');
       elapsed.textContent = r.seconds + ' s';
       again.disabled = r.status === 'running';
-      document.title = (r.status === 'running' ? '… ' : r.status === 'ok' ? '✓ ' : '✗ ') + 'make - Translate Live';
+      document.title = (r.status === 'running' ? '… ' : r.status === 'ok' ? '✓ ' : '✗ ') + 'make - Live Translate';
     } catch (e) { statusEl.textContent = 'not running'; statusEl.className = 'failed'; }
     setTimeout(poll, 500);
   }
