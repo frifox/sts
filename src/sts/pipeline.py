@@ -778,8 +778,8 @@ class Pipeline:
             print(f"[voice] couldn't transcribe reference clip, falling back to embedding-only clone: {exc}")
             return None
 
-    def _save_and_activate(self, name: str, wav_source: str, ref_text: str | None) -> None:
-        entry = self.voice_library.save(name, wav_source, ref_text)
+    def _save_and_activate(self, name: str, wav_source: str, ref_text: str | None, designed: bool = False) -> None:
+        entry = self.voice_library.save(name, wav_source, ref_text, designed=designed)
         self.tts.clone_from_entry(entry)
         self._voice_cloned = entry.kind != "lora"
         self._active_speaker_id = entry.speaker_id
@@ -1040,7 +1040,7 @@ class Pipeline:
         if self._design is None or not name:
             return
         path, ref_text = self._design
-        self._save_and_activate(name, path, ref_text)
+        self._save_and_activate(name, path, ref_text, designed=True)
         self._pending_voice = None
         self._design = None
         self.tts.unload_designer()
@@ -1139,11 +1139,19 @@ class Pipeline:
 
     def _broadcast_library(self) -> None:
         if self.broadcaster:
-            speakers = [
-                {"id": e.speaker_id, "name": e.name, "builtin": e.builtin} for e in self.voice_library.list()
-            ]
+            speakers = self._library_speakers()
             self._last_library = speakers
             self.broadcaster.broadcast_library(speakers)
+
+    def _library_speakers(self) -> list[dict]:
+        """The voice list for the page. `designed`: made by the Design dialog -
+        marked so when saved; older ones are recognized by the sentence the
+        dialog has every voice read."""
+        return [
+            {"id": e.speaker_id, "name": e.name, "builtin": e.builtin,
+             "designed": e.designed or (e.ref_text or "").strip() == DESIGN_REFERENCE_TEXT}
+            for e in self.voice_library.list()
+        ]
 
     def _check_library(self) -> None:
         """Watchdog pass, at most every 5 s: re-sends the voice list when the
@@ -1154,7 +1162,7 @@ class Pipeline:
         if not self.broadcaster or now - getattr(self, "_last_library_check", 0.0) < 5.0:
             return
         self._last_library_check = now
-        speakers = [{"id": e.speaker_id, "name": e.name, "builtin": e.builtin} for e in self.voice_library.list()]
+        speakers = self._library_speakers()
         if speakers != getattr(self, "_last_library", None):
             self._broadcast_library()
 

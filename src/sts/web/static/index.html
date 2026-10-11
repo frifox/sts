@@ -1569,7 +1569,7 @@
   const voiceSelect = document.getElementById('voice-select');
   const deleteBtn = document.getElementById('btn-delete-voice');
   let defaultVoices = [];   // built-in voice names (the "Default" group)
-  let savedVoices = [];     // [{id, name}] from the voice library (the "Custom" group)
+  let savedVoices = [];     // [{id, name, builtin, designed}] from the voice library
   let lastStatus = {
     active: true, translation_enabled: true, voice_enabled: false, training: false,
     training_seconds: 0, training_target_seconds: 0, cloned: false, active_speaker_id: null,
@@ -1701,10 +1701,12 @@
         }
         voiceSelect.appendChild(group);
       };
-      // Voices shipped with the app (the bundled "Default") lead the Default group; the user's saved ones are Custom.
-      const shipped = savedVoices.filter((voice) => voice.builtin).map((voice) => ({ value: `saved:${voice.id}`, text: voice.name }));
+      // Voices shipped with the app (the bundled "Default") and ones made with
+      // Design lead the Default group; voices cloned from a speaker are Custom.
+      const inDefault = (voice) => voice.builtin || voice.designed;
+      const shipped = savedVoices.filter(inDefault).map((voice) => ({ value: `saved:${voice.id}`, text: voice.name }));
       addGroup('Default', [...shipped, ...defaultVoices.map((name) => ({ value: `default:${name}`, text: name }))]);
-      const custom = savedVoices.filter((voice) => !voice.builtin).map((voice) => ({ value: `saved:${voice.id}`, text: voice.name }));
+      const custom = savedVoices.filter((voice) => !inDefault(voice)).map((voice) => ({ value: `saved:${voice.id}`, text: voice.name }));
       if (unsaved) {
         custom.unshift({ value: 'unsaved', text: lastStatus.can_save ? 'New voice (unsaved)' : 'Cloned voice (this session)' });
       }
@@ -2285,7 +2287,7 @@
   window.addEventListener('beforeunload', () => stopBrowserMic(false));  // release the mic indicator promptly
 
   function syncDeleteButton() {
-    // Only offered while one of the user's own saved (Custom) voices is selected.
+    // Only offered while one of the user's own saved voices (cloned or designed) is selected.
     const saved = savedVoices.find((voice) => `saved:${voice.id}` === voiceSelect.value);
     deleteBtn.hidden = !saved || saved.builtin;  // shipped voices can't be deleted
   }

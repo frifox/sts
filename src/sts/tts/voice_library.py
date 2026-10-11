@@ -48,6 +48,8 @@ class VoiceEntry:
     lora_scale: float = 0.3
     # Shipped with the app (read-only, can't be deleted); a voice of the same id saved by the user wins.
     builtin: bool = False
+    # Made by the caption page's Design dialog (invented, not cloned from a speaker).
+    designed: bool = False
 
 
 # Voices that ship with the package (src/sts/bundled_voices/<id>/{reference.wav,meta.json}).
@@ -70,8 +72,9 @@ class VoiceLibrary:
                     entries[entry.speaker_id] = replace(entry, builtin=True)
         return entries
 
-    def save(self, name: str, wav_path: str | Path, ref_text: str | None = None) -> VoiceEntry:
-        """Registers a zero-shot clone entry from a captured reference clip."""
+    def save(self, name: str, wav_path: str | Path, ref_text: str | None = None, designed: bool = False) -> VoiceEntry:
+        """Registers a zero-shot clone entry from a captured reference clip
+        (or, `designed`, one the Design dialog invented)."""
         speaker_id = _slugify(name)
         entry_dir = self.root / speaker_id
         entry_dir.mkdir(parents=True, exist_ok=True)
@@ -81,11 +84,13 @@ class VoiceLibrary:
 
         created_at = time.time()
         meta = {"kind": "zeroshot", "name": name, "ref_text": ref_text, "created_at": created_at}
+        if designed:
+            meta["designed"] = True
         (entry_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
         return VoiceEntry(
             speaker_id=speaker_id, name=name, created_at=created_at, kind="zeroshot",
-            ref_text=ref_text, wav_path=dest_wav,
+            ref_text=ref_text, wav_path=dest_wav, designed=designed,
         )
 
     def save_lora_adapter(
@@ -154,6 +159,7 @@ class VoiceLibrary:
             kind="zeroshot",
             ref_text=meta.get("ref_text"),
             wav_path=wav_path,
+            designed=bool(meta.get("designed")),
         )
 
     def list(self) -> list[VoiceEntry]:
