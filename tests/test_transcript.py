@@ -38,7 +38,7 @@ def test_silence_does_not_pile_up_in_the_buffer():
     """During a long musical number nothing is said, so nothing locks - the
     audio behind it must still be let go, or every step re-transcribes it all."""
     asr = _Asr()
-    t = Transcript(asr)
+    t = Transcript(asr, after_unchanged=5.0, after_silence=10.0)
     for second in range(120):
         t.add(_samples(second, second + 1))
         t.step()
@@ -49,7 +49,7 @@ def test_silence_does_not_pile_up_in_the_buffer():
 
 def test_open_speech_is_kept_from_its_first_word():
     asr = _Asr([("Братья", 30.0, 30.5), ("и", 30.6, 30.7)])
-    t = Transcript(asr)
+    t = Transcript(asr, after_unchanged=5.0, after_silence=10.0)
     t.add(_samples(0, 31))
     assert t.step()[1] == ["Братья и"]
     t.add(_samples(31, 32))
@@ -58,7 +58,7 @@ def test_open_speech_is_kept_from_its_first_word():
 
 
 def test_audio_arriving_during_a_step_is_kept_for_the_next():
-    t = Transcript(None)
+    t = Transcript(None, after_unchanged=5.0, after_silence=10.0)
     t.asr = _Asr(during=lambda: t.add(_samples(2, 3)))  # capture keeps going while this transcribes
     t.add(_samples(0, 2))
     t.step()
@@ -70,7 +70,7 @@ def test_audio_arriving_during_a_step_is_kept_for_the_next():
 
 
 def test_a_step_across_clear_returns_nothing_of_the_old_speaker():
-    t = Transcript(None)
+    t = Transcript(None, after_unchanged=5.0, after_silence=10.0)
     t.asr = _Asr([("Старое.", 0.1, 0.9)], during=t.clear)
     t.add(_samples(0, 1))
     assert t.step() == ([], [])
@@ -79,7 +79,7 @@ def test_a_step_across_clear_returns_nothing_of_the_old_speaker():
 
 def test_flush_returns_what_is_still_open_as_final_and_empties_the_buffer():
     asr = _Asr([("Первое.", 0.1, 0.9), ("Второе", 1.0, 1.5)])
-    t = Transcript(asr)
+    t = Transcript(asr, after_unchanged=5.0, after_silence=10.0)
     t.add(_samples(0, 2))
     t.step()
     flushed = t.flush()
@@ -99,7 +99,7 @@ def test_time_rules_can_be_turned_off():
 
 
 def test_add_and_step_from_two_threads():
-    t = Transcript(_Asr())
+    t = Transcript(_Asr(), after_unchanged=5.0, after_silence=10.0)
     stop = threading.Event()
 
     def capture():
@@ -123,7 +123,7 @@ def test_add_and_step_from_two_threads():
 
 def test_finalize_in_counts_down_to_the_first_open_sentence_being_final():
     asr = _Asr([("Второе.", 1.0, 2.0)])
-    t = Transcript(asr)
+    t = Transcript(asr, after_unchanged=5.0, after_silence=10.0)
     assert t.finalize_in_s is None
     t.add(_samples(0, 3))
     t.step()  # "Второе" first seen at 3 s
@@ -138,7 +138,7 @@ def test_finalize_in_counts_down_to_the_first_open_sentence_being_final():
 
 def test_finalize_timer_shows_only_what_is_pending():
     asr = _Asr([("Братья", 1.0, 1.5), ("и", 2.6, 2.8)])
-    t = Transcript(asr)
+    t = Transcript(asr, after_unchanged=5.0, after_silence=10.0)
     # Speaking, no end mark yet: nothing pending.
     t.add(_samples(0, 3))
     t.step()
@@ -160,7 +160,7 @@ def test_finalize_timer_shows_only_what_is_pending():
 
 def test_finalize_timer_shows_the_last_5_seconds_of_silence_without_an_end_mark():
     asr = _Asr([("Аминь", 1.0, 2.0)])
-    t = Transcript(asr)
+    t = Transcript(asr, after_unchanged=5.0, after_silence=10.0)
     t.add(_samples(0, 6.9))
     t.step()
     assert t.finalize_timer is None  # 4.9 s of silence
@@ -174,7 +174,7 @@ def test_finalize_timer_shows_the_last_5_seconds_of_silence_without_an_end_mark(
 
 def test_every_open_sentence_has_its_own_finalize_timer():
     asr = _Asr([("Первое.", 1.0, 1.5), ("Второе.", 2.0, 2.5), ("Третье", 3.0, 3.5)])
-    t = Transcript(asr)
+    t = Transcript(asr, after_unchanged=5.0, after_silence=10.0)
     t.add(_samples(0, 4))
     assert t.step() == ([], ["Первое.", "Второе.", "Третье"])  # all first seen at 4.0
     assert t.finalize_timers == [pytest.approx((5.0, 5.0)), pytest.approx((5.0, 5.0)), None]  # "Третье": no end mark

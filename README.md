@@ -16,8 +16,8 @@ sound card / browser mic -> GigaAM captions (ru) -> MADLAD-400 (en) -> XTTS / Qw
 - **Captions** — [GigaAM-v3](https://huggingface.co/ai-sage/GigaAM-v3)
   re-transcribes the unsettled audio every 500 ms, so text appears as it's
   spoken and can still be corrected. A sentence becomes final once it has
-  its end punctuation and hasn't changed (text or punctuation) for 5 s, or
-  once nothing new has been heard for 10 s, end punctuation or not
+  its end punctuation and hasn't changed (text or punctuation) for 3 s, or
+  once nothing new has been heard for 7 s, end punctuation or not
   (`--final-after-unchanged`, `--final-after-silence`).
   `--final-force-after 30` also finalizes a sentence 30 s after its first
   word however much it's still changing (off by default).

@@ -36,9 +36,9 @@ DEFAULTS = {
     "clone": "none",
     "clone_name": "none",
     "pause_s": "1.0",
-    "final_after_unchanged": "5",
+    "final_after_unchanged": "3",
     "final_force_after": "0 (off)",
-    "final_after_silence": "10",
+    "final_after_silence": "7",
     "caption_interval_ms": "500",
     "web_host": "127.0.0.1 (this computer only; see --all-interfaces)",
 }

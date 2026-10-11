@@ -280,7 +280,7 @@ def test_text_after_a_sentence_does_not_finalize_it_but_5_unchanged_seconds_do()
 
     script = _words(("Первое.", 0.5, 1.5), ("Второе", 2.0, 2.5), ("предложение.", 2.6, 3.5))
     asr = _ScriptedAsr(script)
-    t = Transcript(asr, after_unchanged=5, force_after=30)
+    t = Transcript(asr, after_unchanged=5, force_after=30, after_silence=10)
     fed = [0]
     _feed(t, 1.6, fed)
     assert _texts(t.step()) == ([], ["Первое."])  # finished at 1.6: its 5 s start
@@ -307,7 +307,7 @@ def test_the_5_seconds_start_over_whenever_the_sentence_changes():
     script = _words(("Мы", 0.5, 0.8), ("пришли.", 0.9, 1.5))
     revised = _words(("Мы", 0.5, 0.8), ("сюда", 0.9, 1.2), ("пришли.", 1.3, 1.5))
     asr = _ScriptedAsr(script)
-    t = Transcript(asr, after_unchanged=5, force_after=30)
+    t = Transcript(asr, after_unchanged=5, force_after=30, after_silence=10)
     fed = [0]
     _feed(t, 2.0, fed)
     assert _texts(t.step()) == ([], ["Мы пришли."])
@@ -363,7 +363,7 @@ def test_a_changing_sentence_is_forced_final_30_seconds_after_its_first_word():
 
     # One run-on sentence, a new word every second, never ending.
     script = _words(*[(f"слово{i}", 1.0 + i, 1.5 + i) for i in range(40)])
-    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30)
+    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30, after_silence=10)
     fed = [0]
     for second in range(2, 31):
         _feed(t, second, fed)
@@ -399,7 +399,7 @@ def test_a_continuation_heard_before_the_5_seconds_are_up_is_final_with_it():
         ("какие", 0.5, 0.8), ("здесь", 0.9, 1.2), ("плоды.", 1.3, 1.8),
         ("и", 3.0, 3.1), ("будете", 3.2, 3.6), ("думать.", 3.7, 4.2),
     )
-    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30)
+    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30, after_silence=10)
     fed = [0]
     _feed(t, 2.0, fed)
     assert _texts(t.step()) == ([], ["какие здесь плоды."])
@@ -415,7 +415,7 @@ def test_a_final_sentence_is_never_changed_by_a_later_lowercase_one():
     from sts.transcript import Transcript
 
     script = _words(("Первое.", 0.5, 1.5), ("и", 8.0, 8.2), ("потом.", 8.3, 8.8))
-    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30)
+    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30, after_silence=10)
     fed = [0]
     _feed(t, 2.0, fed)
     t.step()

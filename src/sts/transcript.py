@@ -20,7 +20,7 @@ as soon as any of these holds (see count_final):
 A "sentence" the model starts with a lowercase letter isn't one: it's the
 rest of the previous sentence, split by a pause, and is joined back onto it
 (its end mark dropped) while both are still open - which changes the
-previous one, so its 5 s start over. A sentence that's already final is
+previous one, so its wait starts over. A sentence that's already final is
 never changed.
 """
 
@@ -129,15 +129,15 @@ class Transcript:
     # reported (finalize_timers), as a wait of this length.
     WARN_S = 5.0
 
-    def __init__(self, asr, after_unchanged: float = 5.0, force_after: float = 30.0, sample_rate: int = 16_000,
-                 after_silence: float = 10.0):
+    def __init__(self, asr, after_unchanged: float = 3.0, force_after: float = 30.0, sample_rate: int = 16_000,
+                 after_silence: float = 7.0):
         self.asr = asr
         self.after_unchanged = after_unchanged  # 0 turns it off
         self.force_after = force_after  # 0 turns it off
         self.after_silence = after_silence  # 0 turns it off
         # Per still-open sentence (the same ones, in the same order, as the
         # texts step() returns): (seconds left, the whole wait) before it's
-        # finalized - by the 5 s rule once it has its end mark, or in the last
+        # finalized - by the unchanged rule once it has its end mark, or in the last
         # WARN_S before the silence or force rule, whichever is soonest - or
         # None. A later sentence's can run out while an earlier one is still
         # open: it then waits for that one (sentences are final in order).

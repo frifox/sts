@@ -15,8 +15,8 @@ rewritten in place.
 
 A sentence is final once it ends with a sentence-ending mark and hasn't
 changed (text or punctuation) for --final-after-unchanged seconds (default
-5), --final-force-after seconds after its first word (off by default), or once
-nothing new has been heard for --final-after-silence seconds (default 10,
+3), --final-force-after seconds after its first word (off by default), or once
+nothing new has been heard for --final-after-silence seconds (default 7,
 end mark or not): its audio is
 dropped, so it's never re-transcribed or reworded again, and it's printed
 once, above a blank line. Piped to a file, only final sentences are printed
@@ -58,9 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-device", type=int, default=None, help="ALSA input device index")
     parser.add_argument("--asr-device", default="cuda", help="cuda | cpu | mps (default: cuda)")
     parser.add_argument(
-        "--final-after-unchanged", type=float, default=5.0, metavar="S",
+        "--final-after-unchanged", type=float, default=3.0, metavar="S",
         help="Finalize a sentence once it ends with a sentence-ending mark and hasn't changed (text or "
-        "punctuation) for S seconds (default: 5; 0 turns this rule off)",
+        "punctuation) for S seconds (default: 3; 0 turns this rule off)",
     )
     parser.add_argument(
         "--final-force-after", type=float, default=0.0, metavar="S",
@@ -68,9 +68,9 @@ def build_parser() -> argparse.ArgumentParser:
         "(default: 0, off; e.g. 30)",
     )
     parser.add_argument(
-        "--final-after-silence", type=float, default=10.0, metavar="S",
+        "--final-after-silence", type=float, default=7.0, metavar="S",
         help="Finalize everything still open, end mark or not, once nothing new has been heard for S "
-        "seconds (default: 10; 0 turns this rule off)",
+        "seconds (default: 7; 0 turns this rule off)",
     )
     parser.add_argument(
         "--interval-ms", type=int, default=500, help="How often to re-transcribe the whole buffer (default: 500)"
