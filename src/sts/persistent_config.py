@@ -20,7 +20,7 @@ class PersistentConfig:
         # same-thread restriction.
         self._lock = threading.Lock()
         if db_path != ":memory:":
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)  # e.g. ~/Library/Application Support/STS
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)  # e.g. ~/Library/Application Support/Translate Live
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self._conn.commit()

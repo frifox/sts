@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Builds STS.app (mac/build/STS.app): the app, plus a standalone Python 3.11
+# Builds Translate Live.app (mac/build/Translate Live.app): the app, plus a standalone Python 3.11
 # with sts and its MLX voice engine installed, ad-hoc signed. The Python is
 # kept in mac/build/python between builds, so later builds only reinstall
 # sts itself (and anything new in its dependencies).
@@ -32,10 +32,10 @@ $py -m pip install --disable-pip-version-check -q --no-deps --force-reinstall "$
 rm -rf "$repo/build"
 
 swift build -c release
-app=build/STS.app
+app="build/Translate Live.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$(swift build -c release --show-bin-path)/STSApp" "$app/Contents/MacOS/STS"
+cp "$(swift build -c release --show-bin-path)/STSApp" "$app/Contents/MacOS/TranslateLive"
 swift make_icon.swift build/AppIcon.iconset
 iconutil -c icns -o "$app/Contents/Resources/AppIcon.icns" build/AppIcon.iconset
 # The Configuration form's rows: the bundled sts's own options.
@@ -47,10 +47,10 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>STS</string>
-    <key>CFBundleDisplayName</key><string>STS</string>
+    <key>CFBundleName</key><string>Translate Live</string>
+    <key>CFBundleDisplayName</key><string>Translate Live</string>
     <key>CFBundleIdentifier</key><string>com.frifox.sts</string>
-    <key>CFBundleExecutable</key><string>STS</string>
+    <key>CFBundleExecutable</key><string>TranslateLive</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>

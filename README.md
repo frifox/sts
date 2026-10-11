@@ -118,17 +118,17 @@ pauses, Qwen3 options).
 
 ## Mac app
 
-`mac/` builds **STS.app**: a native window for sts with its own Python and
+`mac/` builds **Translate Live.app**: a native window for sts with its own Python and
 the MLX voice engine (Qwen3-TTS) inside, so it needs no checkout or
 virtualenv to run.
 
 ```bash
-make                    # builds STS.app fresh and installs it in /Applications
-make build              # only builds mac/build/STS.app (~1.6 GB)
+make                    # builds Translate Live.app fresh and installs it in /Applications
+make build              # only builds it, in mac/build/ (~1.6 GB)
 make install            # installs the last build
 ```
 
-Quit STS first: both steps replace an app that may be running (`make` stops
+Quit the app first: both steps replace an app that may be running (`make` stops
 and says so if it is).
 
 The first build downloads a standalone Python 3.11
@@ -136,26 +136,26 @@ The first build downloads a standalone Python 3.11
 and installs `sts[mlx]` into it; later builds reuse it and reinstall sts.
 
 - sts starts as soon as the app opens; the window shows the caption page
-  once sts serves it. **Edit Config** / **Start STS** come back if it's
+  once sts serves it. **Edit Config** / **Start** come back if it's
   stopped or fails to start.
-- **Edit Config** (also STS ▸ Configuration…, ⌘,) lists every sts option,
+- **Edit Config** (also Translate Live ▸ Configuration…, ⌘,) lists every sts option,
   one per line, with its default beside it; anything left at Default isn't
   passed. Saving restarts sts if it's running.
 - **View ▸ Show/Hide Console (⌘J)**: sts's output in a panel at the bottom.
 - **Server**: start, stop (⌘.), restart (⇧⌘R).
 
 The app's sts keeps `sts.db`, `voices/` and `certs/` in
-`~/Library/Application Support/STS` - and on macOS sts run from the terminal
+`~/Library/Application Support/Translate Live` - and on macOS sts run from the terminal
 uses the same `sts.db` and `voices/`, so settings and voices are shared; models still download to
-`~/.cache/huggingface`. macOS asks for Microphone access for STS itself.
+`~/.cache/huggingface`. macOS asks for Microphone access for the app itself.
 
 ## Tools
 
 - **`sts-caption`** — captions only, in the terminal; for checking recognition.
 - **`sts-add-voices`** — adds a batch of voices: put video or audio files
   (one speaker each, named after them) in the voice library's `new/` folder
-  (on macOS `~/Library/Application Support/STS/voices/new/`, the library
-  STS.app uses too; elsewhere `voices/new/`) and run it. It picks
+  (on macOS `~/Library/Application Support/Translate Live/voices/new/`, the
+  library the app uses too; elsewhere `voices/new/`) and run it. It picks
   the best ~18 s of speech from each, transcribes it, saves it as a voice
   (like Clone) and moves the file to `new/done/`. `--start/--end`
   limit it to part of a file; `--replace` redoes an existing voice.

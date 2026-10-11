@@ -1,6 +1,6 @@
 """`sts-add-voices`: turns video/audio files dropped into the voice library's
-`new/` folder (on macOS ~/Library/Application Support/STS/voices/new/, the
-library STS.app uses too - see sts.paths) into voices in the library - the batch equivalent of pressing Clone in the caption
+`new/` folder (on macOS ~/Library/Application Support/Translate Live/voices/new/,
+the library the app uses too - see sts.paths) into voices in the library - the batch equivalent of pressing Clone in the caption
 page, with no training (zero-shot cloning, like Clone).
 
 For each file (any format ffmpeg reads: mp4, mov, mkv, mp3, m4a, wav, ...):

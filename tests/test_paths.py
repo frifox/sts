@@ -1,4 +1,4 @@
-"""Voices made from the terminal and in STS.app are the same library on macOS."""
+"""Voices and settings made from the terminal and in the Translate Live app are the same ones on macOS."""
 
 from pathlib import Path
 
@@ -7,7 +7,7 @@ from sts import paths
 
 def test_on_macos_the_voice_library_is_the_app_s(monkeypatch):
     monkeypatch.setattr(paths.sys, "platform", "darwin")
-    assert paths.default_voice_library_dir() == str(Path.home() / "Library/Application Support/STS/voices")
+    assert paths.default_voice_library_dir() == str(Path.home() / "Library/Application Support/Translate Live/voices")
 
 
 def test_elsewhere_it_is_voices_in_the_working_directory(monkeypatch):
@@ -28,7 +28,7 @@ def test_the_flag_still_wins():
 
 def test_settings_are_the_app_s_on_macos_too(monkeypatch):
     monkeypatch.setattr(paths.sys, "platform", "darwin")
-    assert paths.default_config_db() == str(Path.home() / "Library/Application Support/STS/sts.db")
+    assert paths.default_config_db() == str(Path.home() / "Library/Application Support/Translate Live/sts.db")
     monkeypatch.setattr(paths.sys, "platform", "linux")
     assert paths.default_config_db() == "sts.db"
 

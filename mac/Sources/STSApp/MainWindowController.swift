@@ -25,7 +25,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false
         )
-        window.title = "STS"
+        window.title = "Translate Live"
         window.minSize = NSSize(width: 480, height: 320)
         super.init(window: window)
         window.delegate = self
@@ -158,7 +158,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 }
 
 /// The web view, and - until sts serves its page - the home screen:
-/// Edit Config / Start STS, or a spinner while sts starts.
+/// Edit Config / Start, or a spinner while sts starts.
 final class PageViewController: NSViewController, WKUIDelegate, WKNavigationDelegate {
     var onEditConfig: (() -> Void)?
     var onStart: (() -> Void)?
@@ -179,7 +179,7 @@ final class PageViewController: NSViewController, WKUIDelegate, WKNavigationDele
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
 
-        let title = NSTextField(labelWithString: "STS")
+        let title = NSTextField(labelWithString: "Translate Live")
         title.font = .systemFont(ofSize: 34, weight: .semibold)
         let subtitle = NSTextField(labelWithString: "Live Russian → English speech translation")
         subtitle.textColor = .secondaryLabelColor
@@ -190,7 +190,7 @@ final class PageViewController: NSViewController, WKUIDelegate, WKNavigationDele
         spinner.controlSize = .small
 
         let edit = NSButton(title: "Edit Config", target: self, action: #selector(editConfig))
-        let start = NSButton(title: "Start STS", target: self, action: #selector(startSTS))
+        let start = NSButton(title: "Start", target: self, action: #selector(startSTS))
         start.keyEquivalent = "\r"
         for button in [edit, start] {
             button.controlSize = .large

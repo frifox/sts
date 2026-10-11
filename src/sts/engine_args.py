@@ -128,7 +128,8 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "--voice-library-dir",
         default=None,
         help="Directory where trained/selectable speaker voices are saved "
-        "(default: the one STS.app uses on macOS, ~/Library/Application Support/STS/voices; elsewhere ./voices)",
+        "(default: the one the Translate Live app uses on macOS, ~/Library/Application Support/Translate Live/voices; "
+        "elsewhere ./voices)",
     )
     parser.add_argument(
         "-v",
