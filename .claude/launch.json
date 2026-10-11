@@ -3,8 +3,9 @@
   "configurations": [
     {
       "name": "make",
-      "runtimeExecutable": "make",
-      "runtimeArgs": []
+      "runtimeExecutable": "/usr/bin/python3",
+      "runtimeArgs": ["mac/make_page.py", "8765"],
+      "port": 8765
     }
   ]
 }
