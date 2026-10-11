@@ -510,6 +510,21 @@
 
   #controls button:hover { border-color: #777; }
 
+  /* Voice shortcuts, mid-header: joined buttons, the voice in use lit. */
+  #voice-shortcuts { display: flex; flex: 0 1 auto; }
+  #voice-shortcuts[hidden] { display: none; }
+  #voice-shortcuts button {
+    font: inherit; font-size: 0.9rem; padding: 0.5em 1em; white-space: nowrap;
+    border: 1px solid #444; background: #1a1a1e; color: #ccc; cursor: pointer;
+    border-radius: 0; position: relative;
+  }
+  #voice-shortcuts button + button { margin-left: -1px; }
+  #voice-shortcuts button:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+  #voice-shortcuts button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+  #voice-shortcuts button:hover { border-color: #777; z-index: 1; }
+  #voice-shortcuts button.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; z-index: 1; }
+  #voice-shortcuts button.is-pending { animation: pulse 1s ease-in-out infinite; }
+
   #controls input, #controls select {
     font: inherit;
     font-size: 0.9rem;
@@ -730,6 +745,7 @@
     }
     #controls { gap: 0.4em; }
     #controls button { padding: 0.45em 0.7em; }
+    #voice-shortcuts button { padding: 0.45em 0.7em; }
     #indicators { justify-content: space-between; flex-wrap: wrap; gap: 0.4em 1em; }
 
     /* Dropdowns anchor to the whole controls row instead of their own
@@ -873,6 +889,7 @@
       </div>
       <button id="btn-reset">Reset</button>
     </div>
+    <div id="voice-shortcuts" role="group" aria-label="Voice shortcuts" title="Switch the voice in one click"></div>
     <div id="indicators">
       <div id="rtf-indicators" title="Real-time factor per stage: processing time / audio duration. Below 1.0x keeps up with the speaker; at or above 1.0x, it's falling behind.">
         <span class="rtf-item unknown" id="rtf-asr">Caption <b>–</b></span>
@@ -1853,6 +1870,7 @@
     }
     if (status.voice_groups) defaultVoices = Object.values(status.voice_groups).flat();
     renderVoiceSelect();
+    renderVoiceShortcuts();
 
     updatePanelVisibility();
 
@@ -1872,6 +1890,28 @@
     libraryNames = msg.speakers.map((speaker) => speaker.name);
     savedVoices = msg.speakers;
     renderVoiceSelect();
+    renderVoiceShortcuts();
+  }
+
+  // Mid-header shortcuts to these voices (by library id), each shown while
+  // it's in the library; the one in use is lit, one being prepared pulses.
+  const VOICE_SHORTCUTS = ['default', 'default-1-25'];
+  const voiceShortcuts = document.getElementById('voice-shortcuts');
+  function renderVoiceShortcuts() {
+    const voices = VOICE_SHORTCUTS.map((id) => savedVoices.find((voice) => voice.id === id)).filter(Boolean);
+    voiceShortcuts.hidden = !voices.length;
+    voiceShortcuts.replaceChildren(...voices.map((voice) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = voice.name;
+      button.classList.toggle('is-active', lastStatus.active_speaker_id === voice.id && !lastStatus.preparing_speaker_id);
+      button.classList.toggle('is-pending', lastStatus.preparing_speaker_id === voice.id);
+      button.addEventListener('click', () => {
+        if (lastStatus.active_speaker_id === voice.id && !lastStatus.preparing_speaker_id) return;
+        send('select_speaker', { speaker_id: voice.id });
+      });
+      return button;
+    }));
   }
 
   let ws = null;
