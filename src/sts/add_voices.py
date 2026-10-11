@@ -1,5 +1,6 @@
-"""`sts-add-voices`: turns video/audio files dropped into `voices/new/` into
-voices in the library - the batch equivalent of pressing Clone in the caption
+"""`sts-add-voices`: turns video/audio files dropped into the voice library's
+`new/` folder (on macOS ~/Library/Application Support/STS/voices/new/, the
+library STS.app uses too - see sts.paths) into voices in the library - the batch equivalent of pressing Clone in the caption
 page, with no training (zero-shot cloning, like Clone).
 
 For each file (any format ffmpeg reads: mp4, mov, mkv, mp3, m4a, wav, ...):
@@ -13,7 +14,7 @@ For each file (any format ffmpeg reads: mp4, mov, mkv, mp3, m4a, wav, ...):
    "Neyman Konstantin"), where it shows in the caption page's Voice list;
 5. for Qwen3-TTS, make the voice's English reference now - otherwise done on
    its first use (seconds) - with the base voice set in the caption page;
-6. move the file to `voices/new/done/`.
+6. move the file to `new/done/`.
 
 A file whose voice is already in the library is skipped (--replace redoes
 it). One speaker per file: a second voice in the picked stretch (an
@@ -32,6 +33,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from sts.paths import default_voice_library_dir
 
 SAMPLE_RATE = 16_000
 MEDIA_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma",
@@ -154,7 +157,8 @@ def voice_name(path: Path) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--voice-library-dir", default="voices", help="Voice library directory (default: voices)")
+    parser.add_argument("--voice-library-dir", default=default_voice_library_dir(),
+                        help=f"Voice library directory (default: {default_voice_library_dir()})")
     parser.add_argument("--input-dir", default=None, help="Where the files are (default: <voice library>/new)")
     parser.add_argument("--seconds", type=float, default=18.0, help="How much speech to clone from (default 18, as Clone)")
     parser.add_argument("--start", type=float, default=None, help="Only use the file from this many seconds in")

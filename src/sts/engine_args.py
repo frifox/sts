@@ -126,8 +126,9 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--voice-library-dir",
-        default="voices",
-        help="Directory where trained/selectable speaker voices are saved",
+        default=None,
+        help="Directory where trained/selectable speaker voices are saved "
+        "(default: the one STS.app uses on macOS, ~/Library/Application Support/STS/voices; elsewhere ./voices)",
     )
     parser.add_argument(
         "-v",
@@ -187,7 +188,8 @@ def build_engine_config(args: argparse.Namespace) -> tuple[PipelineConfig, tuple
     if not args.tts_backend:
         print(f"[tts] using the {cfg.tts.backend} backend (the one installed in this environment)", flush=True)
     cfg.tts.use_backend_voices()
-    cfg.tts.voice_library_dir = args.voice_library_dir
+    if args.voice_library_dir:
+        cfg.tts.voice_library_dir = args.voice_library_dir
     if args.qwen_engine is not None:
         cfg.tts.qwen3_engine = args.qwen_engine
     if args.qwen_accent_donor is not None:

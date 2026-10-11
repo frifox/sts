@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 
+from sts.paths import default_voice_library_dir
+
 
 @dataclass
 class AudioConfig:
@@ -224,7 +226,7 @@ class TTSConfig:
         """Expands the "male"/"female" shorthands; anything else is returned as-is."""
         return self.voice_aliases.get(name.strip().lower(), name)
     # Where per-speaker reference clips are saved for reuse across sessions.
-    voice_library_dir: str = "voices"
+    voice_library_dir: str = field(default_factory=default_voice_library_dir)
 
 
 @dataclass

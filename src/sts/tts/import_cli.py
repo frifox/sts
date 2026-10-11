@@ -5,6 +5,7 @@ shows up in the caption page's speaker dropdown without retraining.
 
 import argparse
 
+from sts.paths import default_voice_library_dir
 from sts.tts.voice_library import VoiceLibrary
 
 
@@ -14,7 +15,8 @@ def main() -> None:
     parser.add_argument("speaker_name", help="Internal speaker name used at training time (--speaker_name)")
     parser.add_argument("adapter_dir", help="Path to the checkpoint-epoch-N directory to import")
     parser.add_argument("--lora-scale", type=float, default=0.3, help="LoRA scale to apply at inference")
-    parser.add_argument("--voice-library-dir", default="voices", help="Voice library directory")
+    parser.add_argument("--voice-library-dir", default=default_voice_library_dir(),
+                        help=f"Voice library directory (default: {default_voice_library_dir()})")
     args = parser.parse_args()
 
     library = VoiceLibrary(args.voice_library_dir)
