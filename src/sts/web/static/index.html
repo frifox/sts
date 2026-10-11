@@ -632,6 +632,11 @@
   .engine-dropdown .render-mode { display: flex; }
   #accent-row { margin-top: 0.6rem; }
   #voice-preparing { margin-top: 0.4rem; font-size: 0.85em; color: #e0864c; }
+  .engine-dropdown .pause-row { display: flex; align-items: center; gap: 0.5em; margin-top: 0.6rem; }
+  .engine-dropdown .pause-row input {
+    width: 4.5em; padding: 0.3rem 0.4rem; font: inherit; text-align: right;
+    background: #111; color: #eee; border: 1px solid #444; border-radius: 6px;
+  }
   #clone-progress { margin-top: 0.6rem; }
   #clone-progress label { display: block; margin-bottom: 0.3rem; }
   #clone-steps { list-style: none; margin: 0; padding: 0; }
@@ -814,6 +819,11 @@
             <select id="voice-select" title="Voice: built-in (Default) or a saved trained voice (Custom)"></select>
             <button id="btn-delete-voice" hidden title="Delete the selected saved voice">Delete</button>
           </div>
+          <label class="pause-row" title="Silence between one spoken sentence and the next (at least: if the next isn't ready yet, the gap is longer)">
+            Pause between sentences
+            <input id="sentence-pause" type="number" min="0" max="5" step="0.1" value="1.0" />
+            <span>s</span>
+          </label>
           <div id="voice-preparing" hidden><svg class="toggle-dot" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.4"/><path class="voice-spin" d="M12 6.5a5.5 5.5 0 0 1 5.5 5.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg><span></span></div>
           <div class="dropdown-actions voice-actions">
             <button id="btn-create-voice" hidden title="Design a new voice from a text description (Qwen3 backend)">Design</button>
@@ -1778,6 +1788,17 @@
     }));
   }
 
+  // "Pause between sentences" (Voice dropdown): sent as it's changed - each
+  // step of the arrows, or typed and then left/Enter - and shown as the
+  // server has it (every screen) except while being edited here.
+  const sentencePauseInput = document.getElementById('sentence-pause');
+  function sendSentencePause() {
+    const seconds = Number(sentencePauseInput.value);
+    if (!Number.isFinite(seconds)) return;
+    send('set_sentence_pause', { seconds: Math.max(0, Math.min(5, seconds)) });
+  }
+  sentencePauseInput.addEventListener('change', sendSentencePause);
+
   function applyStatus(status) {
     const sourceChanged = status.audio_source !== lastStatus.audio_source;
     lastStatus = status;
@@ -1812,6 +1833,9 @@
     renderCloneProgress(status, cloneSteps);
     saveBtn.disabled = !status.can_save || status.training;
     createBtn.hidden = !status.can_design;
+    if (status.pause_between_s != null && document.activeElement !== sentencePauseInput) {
+      sentencePauseInput.value = Number(status.pause_between_s).toFixed(1);
+    }
     renderAccentDonors(status);
     // A voice being prepared alongside the current one (its English reference).
     const preparing = document.getElementById('voice-preparing');

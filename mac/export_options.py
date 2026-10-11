@@ -35,7 +35,7 @@ DEFAULTS = {
     "output_device": "last used, or system default",
     "clone": "none",
     "clone_name": "none",
-    "pause_s": "1.0",
+    "pause_s": "1.0, or last set on the page",
     "final_after_unchanged": "3",
     "final_force_after": "0 (off)",
     "final_after_silence": "7",

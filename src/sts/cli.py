@@ -83,7 +83,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--pause-s",
         type=float,
         default=None,
-        help="Minimum silence between consecutive spoken translations (seconds, default 1.0; 0 disables)",
+        help="Minimum silence between spoken sentences (seconds; default 1.0, or what the caption page last "
+        "set; 0 disables)",
     )
     parser.add_argument(
         "--final-after-unchanged",
@@ -276,6 +277,11 @@ def main() -> None:
     )
     if args.pause_s is not None:
         cfg.audio.pause_between_s = args.pause_s
+    elif persistent_config is not None and persistent_config.get("pause_between_s"):
+        try:  # set on the caption page last time
+            cfg.audio.pause_between_s = max(0.0, float(persistent_config.get("pause_between_s")))
+        except ValueError:
+            pass
     if args.final_after_unchanged is not None:
         cfg.asr.final_after_unchanged_seconds = max(0.0, args.final_after_unchanged)
     if args.final_force_after is not None:

@@ -507,3 +507,17 @@ def test_deleting_the_shipped_default_voice_falls_back_to_the_built_in_voice(tmp
     p.handle_control({"action": "delete_voice", "speaker_id": "default"})
     assert p.voice_library.get("default") is None
     assert p._active_speaker_id is None  # the plain built-in voice
+
+
+def test_the_pause_between_sentences_is_set_from_the_page_and_remembered(tmp_path):
+    from sts.persistent_config import PersistentConfig
+
+    p, _ = _startup_voice_pipeline(tmp_path)
+    p._persistent_config = PersistentConfig(str(tmp_path / "sts.db"))
+    p.handle_control({"action": "set_sentence_pause", "seconds": 0.6})
+    assert p.cfg.audio.pause_between_s == 0.6
+    assert p._persistent_config.get("pause_between_s") == "0.6"
+    p.handle_control({"action": "set_sentence_pause", "seconds": 99})
+    assert p.cfg.audio.pause_between_s == 5.0  # capped
+    p.handle_control({"action": "set_sentence_pause", "seconds": "x"})
+    assert p.cfg.audio.pause_between_s == 5.0  # ignored

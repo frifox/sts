@@ -121,7 +121,8 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "--sentence-pause-s",
         type=float,
         default=None,
-        help="Silence between the sentences of one spoken translation (seconds, default 0.35)",
+        help="Silence between the pieces of one sentence, for a TTS backend that voices a long sentence in "
+        "pieces (XTTS) (seconds, default 0.35)",
     )
     parser.add_argument(
         "--voice-library-dir",

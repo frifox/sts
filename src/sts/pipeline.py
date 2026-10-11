@@ -106,6 +106,8 @@ SPEECH_PAUSE_S = 1.0
 # that repeats on every item (a broken model, a device gone) logs at a
 # readable rate instead of spinning a CPU core.
 STAGE_ERROR_BACKOFF_S = 0.5
+# The most the caption page's "Pause between sentences" can be set to.
+MAX_SENTENCE_PAUSE_S = 5.0
 # How long Clone's finished step list stays in the Voice dropdown.
 CLONE_PROGRESS_LINGER_S = 5.0
 
@@ -338,7 +340,7 @@ class Pipeline:
     # pressed meanwhile wait behind it.
     _INSTANT_ACTIONS = frozenset({
         "start", "stop", "voice_on", "voice_off", "translate_on", "translate_off", "reset",
-        "test_output", "train_start", "train_stop", "set_output_volume", "show_unfinished",
+        "test_output", "train_start", "train_stop", "set_output_volume", "show_unfinished", "set_sentence_pause",
         "refresh_devices", "rescan_devices", "set_audio_devices", "mic_start", "mic_stop",
         "design_generate", "design_play",
     })
@@ -413,6 +415,16 @@ class Pipeline:
         elif action in ("refresh_devices", "rescan_devices", "set_audio_devices", "mic_start", "mic_stop"):
             threading.Thread(target=self._handle_device_action, args=(action, data), daemon=True).start()
             return
+        elif action == "set_sentence_pause":
+            try:
+                seconds = round(max(0.0, min(MAX_SENTENCE_PAUSE_S, float(data.get("seconds")))), 2)
+            except (TypeError, ValueError):
+                return
+            # Read for each sentence as it's queued for playback: applies from the next one.
+            self.cfg.audio.pause_between_s = seconds
+            vlog("audio", f"pause between sentences set to {seconds}s")
+            if self._persistent_config is not None:
+                self._persistent_config.set("pause_between_s", str(seconds))
         elif action == "set_output_volume":
             try:
                 percent = int(data.get("percent"))
@@ -1076,6 +1088,7 @@ class Pipeline:
                 active_speaker_id=self._active_speaker_id,
                 show_unfinished=getattr(self, "_show_unfinished", True),
                 voice_stopping=self._voice_stopping(),
+                pause_between_s=self.cfg.audio.pause_between_s,
                 accent_donor=self.cfg.tts.qwen3_accent_donor,
                 clone_steps=getattr(self, "_clone_progress", None),
                 preparing_voice=(getattr(self, "_preparing_voice", None) or ("", None))[0],
@@ -1401,15 +1414,14 @@ class Pipeline:
             vlog("tts", f"synthesized {audio_s:.1f}s of speech in {processing_s:.2f}s "
                         f"({self._translations.qsize()} sentences waiting)")
             self._broadcast_rtf("voice", processing_s, audio_s)
-            # A longer pause before a sentence the speaker started after a
-            # real pause, a shorter one before one they ran straight on to
-            # (`continues` - see _publish_captions) and between the pieces
-            # of one sentence. A streamed chunk that continues the same
-            # piece mid-word gets no pause at all.
+            # The pause between sentences (the caption page's setting) before
+            # each sentence, a short one between the pieces of one sentence,
+            # and none before a streamed chunk that continues the same piece
+            # mid-word.
             if seamless:
                 pause = 0.0
             elif first_piece:
-                pause = self.cfg.audio.pause_within_s if continues else self.cfg.audio.pause_between_s
+                pause = self.cfg.audio.pause_between_s
             else:
                 pause = self.cfg.audio.pause_within_s
             self._audio.put(_Clip(

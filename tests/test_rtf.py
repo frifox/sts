@@ -179,11 +179,9 @@ def test_tts_loop_broadcasts_voice_rtf_from_its_own_output_duration():
     assert p._audio.get_nowait().audio.size == 24_000
 
 
-def test_tts_loop_paces_a_continuation_like_the_same_spoken_thought():
-    """The reported bug: a VAD split lands mid-sentence, so the continuation
-    was still spoken with the long between-sentences pause and no lead-in -
-    audibly introducing it as a fresh, unrelated utterance rather than
-    picking up where the (already-spoken) previous sentence left off."""
+def test_every_sentence_gets_the_pause_between_sentences():
+    """The caption page's "Pause between sentences" goes before each
+    sentence - one the speaker ran straight on to as well."""
     p = _rtf_pipeline()
     p.cfg = PipelineConfig()
     p.control = RecognitionControl(16000)
@@ -207,4 +205,4 @@ def test_tts_loop_paces_a_continuation_like_the_same_spoken_thought():
     pauses = []
     while not p._audio.empty():
         pauses.append(p._audio.get_nowait().pause_before)
-    assert pauses == [p.cfg.audio.pause_within_s, p.cfg.audio.pause_between_s]
+    assert pauses == [p.cfg.audio.pause_between_s, p.cfg.audio.pause_between_s]

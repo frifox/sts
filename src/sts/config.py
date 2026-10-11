@@ -22,11 +22,11 @@ class AudioConfig:
     output_enabled: bool = True
     sample_rate: int = 16_000
     channels: int = 1
-    # Minimum silence between one translated text and the next when they play
-    # back to back (e.g. while playback is catching up).
+    # Minimum silence between one spoken sentence and the next (the caption
+    # page's "Pause between sentences", remembered; --pause-s).
     pause_between_s: float = 1.0
-    # Silence between the sentences of one spoken text (each sentence is
-    # synthesized separately so it gets its own natural intonation).
+    # Silence between the pieces of one sentence, for a backend that voices a
+    # long sentence in pieces (XTTS).
     pause_within_s: float = 0.35
     # Catch-up: when a sentence starts being spoken `catchup_start_s` or more
     # after its caption became final, playback is sped up - pitch preserved -
