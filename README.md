@@ -123,8 +123,13 @@ the MLX voice engine (Qwen3-TTS) inside, so it needs no checkout or
 virtualenv to run.
 
 ```bash
-mac/build.sh            # builds mac/build/STS.app (~1.6 GB)
+make                    # builds STS.app fresh and installs it in /Applications
+make build              # only builds mac/build/STS.app (~1.6 GB)
+make install            # installs the last build
 ```
+
+Quit STS first: both steps replace an app that may be running (`make` stops
+and says so if it is).
 
 The first build downloads a standalone Python 3.11
 ([python-build-standalone](https://github.com/astral-sh/python-build-standalone))
