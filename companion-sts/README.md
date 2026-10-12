@@ -17,13 +17,16 @@ Built on `@companion-module/base` 1.10: runs on Companion 3.4 and later.
 
 ## Install
 
+A ready-made package is kept in [`build/`](build/): `build/sts-live-translate-<version>.tgz`.
+To rebuild it after a change:
+
 ```bash
 cd companion-sts
 npm install
-npm run package          # makes pkg.tgz
+npm run package          # makes build/sts-live-translate-<version>.tgz
 ```
 
-In Companion: **Modules ▸ Import module package**, pick `pkg.tgz`, then add a
+In Companion: **Modules ▸ Import module package**, pick that `.tgz`, then add a
 **Live Translate** connection and set its host and port (the sts caption
 page's: `127.0.0.1`, `80` on the same computer, or the sts computer's
 address from another one - unless sts was started with `--local-only`).

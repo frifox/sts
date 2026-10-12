@@ -12,7 +12,7 @@
   "main": "main.js",
   "type": "commonjs",
   "scripts": {
-    "package": "companion-module-build",
+    "package": "companion-module-build && mkdir -p build && cp pkg.tgz build/sts-live-translate-$npm_package_version.tgz && echo \"build/sts-live-translate-$npm_package_version.tgz\"",
     "check": "node --check main.js && node --check src/*.js"
   },
   "license": "MIT",
