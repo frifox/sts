@@ -120,7 +120,8 @@ pauses, Qwen3 options).
 
 `src-mac/` builds **Live Translate.app**: a native window for sts with its own Python and
 the MLX voice engine (Qwen3-TTS) inside, so it needs no checkout or
-virtualenv to run.
+virtualenv to run. See [src-mac/README.md](src-mac/README.md) for how it's
+built and what's inside.
 
 ```bash
 make                    # builds Live Translate.app fresh and installs it in /Applications
