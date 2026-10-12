@@ -2,9 +2,26 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "sts",
+      "runtimeExecutable": ".venv-mlx/bin/sts",
+      "runtimeArgs": [
+        "--web-port",
+        "8780",
+        "--https-port",
+        "0"
+      ],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      },
+      "port": 8780
+    },
+    {
       "name": "make",
       "runtimeExecutable": "/usr/bin/python3",
-      "runtimeArgs": ["mac/make_page.py", "8765"],
+      "runtimeArgs": [
+        "mac/make_page.py",
+        "8765"
+      ],
       "port": 8765
     }
   ]
