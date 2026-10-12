@@ -4,6 +4,8 @@
 #   make build     build mac/build/Live Translate.app only
 #   make install   install the last build in /Applications (the app must be quit)
 #   make test      run the tests (in .venv-mlx)
+#   make run       run sts from .venv-mlx in this terminal, its page on
+#                  http://localhost:8780/ (beside the app's 80/443)
 
 APP        := Live Translate.app
 # The app's earlier names (STS, then Translate Live): removed on install.
@@ -12,7 +14,7 @@ BUILT      := mac/build/$(APP)
 INSTALLED  := /Applications/$(APP)
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
-.PHONY: deploy build install test check-not-running
+.PHONY: deploy build install test run check-not-running
 
 deploy: build install
 
@@ -38,3 +40,6 @@ install: check-not-running
 
 test:
 	.venv-mlx/bin/python -m pytest -q tests
+
+run:
+	.venv-mlx/bin/sts --web-port 8780 --https-port 0
