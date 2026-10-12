@@ -36,10 +36,17 @@ _STATIC_DIR = Path(__file__).parent / "static"
 CAPTION_HISTORY_LINES = 4
 
 
+# The /control websocket - for remote controls (the Bitfocus Companion module
+# in companion-sts/) - gets only these messages, and may send only these actions.
+CONTROL_MESSAGE_TYPES = frozenset({"status", "stage"})
+CONTROL_ACTIONS = frozenset({"start", "stop", "translate_on", "translate_off", "voice_on", "voice_off"})
+
+
 class CaptionBroadcaster:
     def __init__(self) -> None:
         self.loop: asyncio.AbstractEventLoop | None = None
         self._clients: set[WebSocket] = set()
+        self._control_clients: set[WebSocket] = set()  # /control (see CONTROL_MESSAGE_TYPES)
         self.on_control: Callable[[dict], None] | None = None
         self.on_mic_frame: Callable[[bytes], None] | None = None
         # The one connection currently allowed to feed browser-mic audio, so
@@ -125,6 +132,46 @@ class CaptionBroadcaster:
                 dead.append(client)
         for client in dead:
             self._clients.discard(client)
+        if message.get("type") in CONTROL_MESSAGE_TYPES:
+            await self._send_to_control(payload)
+
+    async def _send_to_control(self, payload: str) -> None:
+        for client in list(self._control_clients):
+            try:
+                await client.send_text(payload)
+            except Exception:
+                self._control_clients.discard(client)
+
+    async def register_control(self, websocket: WebSocket) -> None:
+        """A remote control (/control): it gets the current stage and on/off
+        status now, and every change to them from here on - nothing else."""
+        self._control_clients.add(websocket)
+        await websocket.send_text(json.dumps(self._stage_message()))
+        if self._last_status is not None:
+            await websocket.send_text(json.dumps(self._last_status))
+        vlog("web", f"remote control connected ({len(self._control_clients)})")
+
+    def unregister_control(self, websocket: WebSocket) -> None:
+        self._control_clients.discard(websocket)
+        vlog("web", f"remote control disconnected ({len(self._control_clients)})")
+
+    async def handle_control_message(self, websocket: WebSocket, raw: str) -> None:
+        """One message from a remote control: a CONTROL_ACTIONS action (run as
+        if clicked on the page), or {"action": "get_status"} (sent the current
+        status again). Anything else is answered with an error and ignored."""
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            data = None
+        action = data.get("action") if isinstance(data, dict) else None
+        if action == "get_status":
+            if self._last_status is not None:
+                await websocket.send_text(json.dumps(self._last_status))
+        elif action in CONTROL_ACTIONS:
+            if self.on_control:
+                self.on_control({"action": action})
+        else:
+            await websocket.send_text(json.dumps({"type": "error", "message": f"unknown action: {action!r}"}))
 
     async def _send_bytes_to_all(self, payload: bytes) -> None:
         dead = []
@@ -436,6 +483,21 @@ def create_app(broadcaster: CaptionBroadcaster) -> FastAPI:
             pass
         finally:
             await broadcaster.unregister(websocket)
+
+    @app.websocket("/control")
+    async def control_endpoint(websocket: WebSocket) -> None:
+        """For remote controls (companion-sts/): JSON in both directions -
+        {"type": "status" | "stage", ...} out, {"action": ...} in (see
+        CaptionBroadcaster.handle_control_message)."""
+        await websocket.accept()
+        await broadcaster.register_control(websocket)
+        try:
+            while True:
+                await broadcaster.handle_control_message(websocket, await websocket.receive_text())
+        except WebSocketDisconnect:
+            pass
+        finally:
+            broadcaster.unregister_control(websocket)
 
     return app
 

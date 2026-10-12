@@ -1,0 +1,26 @@
+{
+  "name": "companion-module-sts-live-translate",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@companion-module/base": "1.10.0",
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "@companion-module/tools": "2.0.4"
+  },
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "package": "companion-module-build",
+    "check": "node --check main.js && node --check src/*.js"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": "^18.12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/frifox/sts.git"
+  }
+}

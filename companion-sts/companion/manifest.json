@@ -1,0 +1,26 @@
+{
+	"$schema": "../node_modules/@companion-module/base/assets/manifest.schema.json",
+	"id": "sts-live-translate",
+	"name": "sts-live-translate",
+	"shortname": "Live Translate",
+	"description": "Remote control for sts / Live Translate: toggle Caption, Translate and Voice, with their on/off state shown on the buttons",
+	"version": "0.0.0",
+	"license": "MIT",
+	"repository": "git+https://github.com/frifox/sts.git",
+	"bugs": "https://github.com/frifox/sts/issues",
+	"maintainers": [
+		{
+			"name": "Denis G"
+		}
+	],
+	"legacyIds": [],
+	"runtime": {
+		"type": "node18",
+		"api": "nodejs-ipc",
+		"apiVersion": "0.0.0",
+		"entrypoint": "../main.js"
+	},
+	"manufacturer": "sts",
+	"products": ["Live Translate"],
+	"keywords": ["translation", "captions", "speech"]
+}
