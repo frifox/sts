@@ -16,8 +16,8 @@ Presets ▸ **Toggles**: Caption, Translate, Voice — press to toggle.
 
 | Color | Meaning |
 |---|---|
-| grey | off |
-| green | on |
+| black | off |
+| green (#468259) | on |
 | amber | Voice off was pressed: it finishes the sentence being spoken, then goes off (press again to keep it on) |
 | dark red | not connected to sts |
 

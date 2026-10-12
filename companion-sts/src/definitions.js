@@ -4,9 +4,9 @@
 const { combineRgb } = require('@companion-module/base')
 
 const COLORS = {
-	offBg: combineRgb(40, 40, 46),
+	offBg: combineRgb(0, 0, 0), // black
 	offText: combineRgb(200, 200, 200),
-	onBg: combineRgb(31, 140, 60),
+	onBg: combineRgb(0x46, 0x82, 0x59), // #468259
 	onText: combineRgb(255, 255, 255),
 	stoppingBg: combineRgb(200, 120, 20), // Voice: finishing the sentence being spoken, then off
 	disconnectedBg: combineRgb(70, 20, 20),
