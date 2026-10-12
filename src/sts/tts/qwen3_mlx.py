@@ -93,6 +93,43 @@ class MLXQwen3TTSModel:
         finally:
             model.__dict__.pop("extract_speaker_embedding", None)
 
+    def stream_voice_clone(self, text, voice_clone_prompt, interval_s, language="English", **sampling):
+        """generate_voice_clone, streamed: the audio (np.float32) in pieces as
+        it's generated, one about every `interval_s` of audio. Closing the
+        generator stops generating."""
+        prompt = voice_clone_prompt
+        model = self._model
+        if prompt.speaker_audio is not None:
+            embedding = self._extract_speaker_embedding(prompt.speaker_audio)
+            model.extract_speaker_embedding = lambda _audio: embedding
+        try:
+            yield from self._pieces(model.generate(
+                text=text, ref_audio=prompt.ref_audio, ref_text=prompt.ref_text,
+                lang_code=language.lower(), split_pattern="", stream=True, streaming_interval=interval_s,
+                **_mlx_sampling(sampling),
+            ))
+        finally:
+            model.__dict__.pop("extract_speaker_embedding", None)
+
+    def stream_custom_voice(self, text, speaker, interval_s, language="English", instruct=None, **sampling):
+        """generate_custom_voice, streamed (see stream_voice_clone)."""
+        yield from self._pieces(self._model.generate_custom_voice(
+            text=text, speaker=speaker, language=language, instruct=instruct,
+            stream=True, streaming_interval=interval_s, **_mlx_sampling(sampling),
+        ))
+
+    @staticmethod
+    def _pieces(results):
+        try:
+            for result in results:
+                audio = np.asarray(result.audio, dtype=np.float32).reshape(-1)
+                if audio.size:
+                    yield audio
+        finally:
+            close = getattr(results, "close", None)
+            if close:
+                close()
+
     def generate_custom_voice(self, text, speaker, language="English", instruct=None, **sampling):
         return self._collect(self._model.generate_custom_voice(
             text=text, speaker=speaker, language=language, instruct=instruct, **_mlx_sampling(sampling),

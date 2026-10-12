@@ -168,6 +168,13 @@ class TTSConfig:
     # (sts.audioquality.match_tone): evens out takes that sound closer to or further
     # from the mic than the one before.
     qwen3_tone_match: bool = True
+    # Play a sentence while it's still being generated (MLX engine): speech starts
+    # about `qwen3_stream_hold_s` after generating starts instead of once the whole
+    # sentence is done. Nothing plays during the hold: a short sentence is usually
+    # whole by then and checked as before; a longer one streams, and is cut off with
+    # a fade if it starts rambling (see sts.tts.qwen3 STREAM_HOLD_S).
+    qwen3_stream: bool = True
+    qwen3_stream_hold_s: float = 1.0
     qwen3_style_instruct: str = (
         "Speak in a calm, warm, measured tone, like a gentle preacher delivering a sermon. "
         "American English accent."

@@ -53,6 +53,7 @@ import hashlib
 import re
 import statistics
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -65,7 +66,17 @@ except ImportError:  # .venv-mlx: Qwen3-TTS runs on MLX instead (sts.tts.qwen3_m
 
 from sts.config import TTSConfig
 from sts.devices import supports_bf16_and_flash_attention
-from sts.audioquality import clarity_db, longest_pause_s, match_level, match_tone, tone_profile, trim_silence
+from sts.audioquality import (
+    clarity_db,
+    level_gain,
+    longest_pause_s,
+    match_level,
+    match_tone,
+    tone_filter,
+    tone_gains,
+    tone_profile,
+    trim_silence,
+)
 from sts.gpu import gpu_lock
 from sts.log import vlog
 from sts.tts.numbers import spell_numbers
@@ -89,6 +100,21 @@ ENGLISH_BRIDGE_TAKES = 3
 MIN_SPEAKER_SIMILARITY = 0.96
 BRIDGE_SECONDS_PER_CHAR = 0.058  # the passage's usual pace (about 11 s)
 
+
+# Streaming (MLX engine, TTSConfig.qwen3_stream): a sentence is played while
+# it's still being generated, rather than once it's whole. Nothing plays for
+# the first STREAM_HOLD_S: a short sentence is often whole by then (generating
+# runs ~3x faster than speech), and is checked and, if bad, regenerated before
+# anyone hears it; a longer one starts playing then and streams the rest.
+STREAM_HOLD_S = 1.0
+STREAM_PIECE_S = 0.32  # how much audio each streamed piece holds (4 codec frames)
+# A take that runs past RAMBLE_FACTOR x (+ RAMBLE_MARGIN_S) the length its text
+# should take is rambling - babbling on past the end of the text. Caught while
+# still held back it's regenerated; once playing, it's cut off with a short fade.
+RAMBLE_FACTOR = 1.6
+RAMBLE_MARGIN_S = 0.8
+STREAM_FADE_S = 0.1  # kept back from each piece so a cut-off can fade out
+TYPICAL_SECONDS_PER_CHAR = 0.062  # until the voice has a pace of its own (see _pace_history)
 
 CODEC_FRAMES_PER_SECOND = 12  # the 12 Hz codec: 12 generated tokens per second of audio
 MIN_CAP_SECONDS = 8.0  # the length cap for very short texts ("Amen.")
@@ -478,7 +504,144 @@ class Qwen3TTSSynthesizer:
             audio = match_level(audio, sample_rate, self.cfg.target_level)
         yield audio, sample_rate
 
-    def _even_out_tone(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    # -- streaming ------------------------------------------------------------
+
+    def stream_chunks(self, text: str):
+        """Yields (audio, sample_rate, seamless) for `text` - one translated
+        sentence - streamed as it's generated (see STREAM_HOLD_S): the first
+        piece not seamless (a pause may go before it), the rest seamless.
+        Without streaming (the PyTorch engine, a trained LoRA voice, or
+        TTSConfig.qwen3_stream off) the whole sentence, as synthesize_stream."""
+        if not self._can_stream():
+            for audio, sample_rate in self.synthesize_stream(text):
+                yield audio, sample_rate, False
+            return
+        text = spell_numbers(text.strip())
+        if text:
+            yield from self._stream_sentence(text)
+
+    def _can_stream(self) -> bool:
+        return (self.cfg.qwen3_stream and self.engine == "mlx" and not self._active_lora_speaker_id
+                and hasattr(self.model, "stream_voice_clone"))
+
+    def _expected_seconds(self, text: str) -> float:
+        pace = statistics.median(self._pace_history) if len(self._pace_history) >= 5 else TYPICAL_SECONDS_PER_CHAR
+        return max(0.8, len(text) * pace)
+
+    def _stream_sentence(self, text: str):
+        expected = self._expected_seconds(text)
+        ramble_s = expected * RAMBLE_FACTOR + RAMBLE_MARGIN_S
+        hold_s = self.cfg.qwen3_stream_hold_s
+        attempts = self.cfg.qwen3_max_retries + 1
+        for attempt in range(attempts):
+            last = attempt == attempts - 1
+            raw: list[np.ndarray] = []  # the whole take as generated, for the checks and the voice's history
+            held: list[np.ndarray] = []
+            generated_s = 0.0
+            post = None  # _StreamPost once playing
+            rambled = False
+            sample_rate = getattr(self.model, "sample_rate", 24_000)
+            started = time.monotonic()
+            with self._lock:
+                pieces = self._stream_generate(text)
+                try:
+                    for piece in pieces:
+                        raw.append(piece)
+                        generated_s += len(piece) / sample_rate
+                        if generated_s > ramble_s:
+                            rambled = True
+                            break
+                        if post is None:
+                            held.append(piece)
+                            if time.monotonic() - started >= hold_s:
+                                post = self._stream_post(np.concatenate(held), sample_rate)
+                                out = post.process(np.concatenate(held))
+                                held = []
+                                vlog("tts", f"streaming: {generated_s:.1f}s generated in the first {hold_s:.1f}s")
+                                yield out, sample_rate, False
+                        else:
+                            out = post.process(piece)
+                            if out.size:
+                                yield out, sample_rate, True
+                finally:
+                    pieces.close()
+            if rambled:
+                if post is None and not last:
+                    vlog("tts", f"rambling ({generated_s:.1f}s for {len(text)} characters, expected about "
+                                f"{expected:.1f}s); caught before playing, regenerating: {text[:60]!r}")
+                    continue
+                if post is not None:
+                    vlog("tts", f"rambling ({generated_s:.1f}s for {len(text)} characters, expected about "
+                                f"{expected:.1f}s); cut off: {text[:60]!r}")
+                    yield post.fade_out(), sample_rate, True
+                    return
+                # Rambled on every try before playing: what it said in the expected time, faded out.
+                audio = np.concatenate(raw)[: int(ramble_s * sample_rate)]
+                fade = min(len(audio), int(STREAM_FADE_S * sample_rate))
+                audio[len(audio) - fade:] *= np.linspace(1, 0, fade, dtype=np.float32)
+                yield self._finish_whole(audio, sample_rate), sample_rate, False
+                return
+            if post is not None:  # streamed to the end
+                tail = post.finish()
+                if tail.size:
+                    yield tail, sample_rate, True
+                self._remember_take(np.concatenate(raw), sample_rate, text)
+                return
+            # Whole within the hold: checked like an unstreamed take, regenerated if bad.
+            audio = np.concatenate(raw) if raw else np.zeros(0, dtype=np.float32)
+            min_spc = min_plausible_seconds_per_char(self._pace_history, self.cfg.qwen3_min_seconds_per_char)
+            plausible = speech_length_plausible(text, len(audio) / sample_rate, min_spc, self.cfg.qwen3_max_seconds_per_char)
+            if not plausible and not last:
+                vlog("tts", f"suspicious speech length ({len(audio) / sample_rate:.1f}s for {len(text)} characters), "
+                            f"caught before playing, regenerating: {text[:60]!r}")
+                continue
+            self._remember_take(audio, sample_rate, text)
+            yield self._finish_whole(audio, sample_rate), sample_rate, False
+            return
+
+    def _stream_generate(self, text: str):
+        """The model's pieces of `text` (np.float32), as they're generated."""
+        if self._prompt is not None:
+            return self.model.stream_voice_clone(
+                text, self._prompt, STREAM_PIECE_S, language="English", **self._sampling(text)
+            )
+        if self._custom_model is None:
+            self._custom_model = self._load_custom_model()
+        return self._custom_model.stream_custom_voice(
+            text, self.default_voice.lower(), STREAM_PIECE_S, language="English",
+            instruct=self.cfg.qwen3_style_instruct or None, **self._sampling(text),
+        )
+
+    def _stream_post(self, start: np.ndarray, sample_rate: int) -> "_StreamPost":
+        """Level and tone for a streamed take, worked out from its start (what
+        was generated while held back - usually a few seconds), then applied
+        unchanged to the rest, so the pieces join without a seam."""
+        gain = level_gain(start, sample_rate, self.cfg.target_level) if self.cfg.target_level else 1.0
+        fir = None
+        profile = tone_profile(start, sample_rate) if self.cfg.qwen3_tone_match else None
+        if profile is not None and len(self._tone_history) >= 3:
+            fir = tone_filter(tone_gains(profile, np.mean(self._tone_history, axis=0)), sample_rate)
+        return _StreamPost(sample_rate, gain, fir)
+
+    def _finish_whole(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Tone and level for a whole take (as synthesize_stream)."""
+        if self.cfg.qwen3_tone_match:
+            audio = self._even_out_tone(audio, sample_rate, remember=False)
+        if self.cfg.target_level:
+            audio = match_level(audio, sample_rate, self.cfg.target_level)
+        return audio
+
+    def _remember_take(self, audio: np.ndarray, sample_rate: int, text: str) -> None:
+        """A finished take counts toward the voice's pace, clarity and tone history."""
+        chars = len(text.strip())
+        if chars >= MIN_CHARS_TO_JUDGE and len(audio):
+            self._pace_history.append(len(audio) / sample_rate / chars)
+            self._clarity_history.append(clarity_db(audio, sample_rate))
+        profile = tone_profile(audio, sample_rate)
+        if profile is not None:
+            self._tone_history.append(profile)
+
+    def _even_out_tone(self, audio: np.ndarray, sample_rate: int, remember: bool = True) -> np.ndarray:
         """Equalizes the take toward this voice's recent average tone (see
         sts.audioquality.match_tone), once there are a few takes to average."""
         profile = tone_profile(audio, sample_rate)
@@ -486,7 +649,8 @@ class Qwen3TTSSynthesizer:
             return audio
         if len(self._tone_history) >= 3:
             audio = match_tone(audio, sample_rate, profile, np.mean(self._tone_history, axis=0))
-        self._tone_history.append(profile)  # the take as generated, so the average is the voice's own
+        if remember:
+            self._tone_history.append(profile)  # the take as generated, so the average is the voice's own
         return audio
 
     def synthesize(self, text: str, pause_s: float = 0.35) -> tuple[np.ndarray, int]:
@@ -569,6 +733,44 @@ class Qwen3TTSSynthesizer:
                     **self._sampling(text),
                 )
         return np.asarray(wavs[0], dtype=np.float32), sample_rate
+
+
+class _StreamPost:
+    """Level and tone for a streamed take's pieces: a fixed gain and an FIR
+    equalizer whose state carries from piece to piece, so the pieces join
+    seamlessly. The last STREAM_FADE_S is kept back each time, so the take can
+    be faded out if it's cut off (rambling)."""
+
+    def __init__(self, sample_rate: int, gain: float, fir: np.ndarray | None):
+        self.gain = gain
+        self.fir = fir
+        self.state = np.zeros(len(fir) - 1) if fir is not None else None
+        self.keep = int(STREAM_FADE_S * sample_rate)
+        self.tail = np.zeros(0, dtype=np.float32)
+
+    def _filter(self, audio: np.ndarray) -> np.ndarray:
+        if self.fir is not None:
+            from scipy.signal import lfilter
+
+            audio, self.state = lfilter(self.fir, [1.0], audio, zi=self.state)
+        return np.clip(audio * self.gain, -0.99, 0.99).astype(np.float32)
+
+    def process(self, audio: np.ndarray) -> np.ndarray:
+        out = np.concatenate([self.tail, self._filter(audio)])
+        self.tail = out[-self.keep:] if len(out) > self.keep else out
+        return out[: len(out) - len(self.tail)]
+
+    def finish(self) -> np.ndarray:
+        """The rest: the kept-back tail, and what the filter still holds."""
+        rest = self._filter(np.zeros(len(self.fir) - 1)) if self.fir is not None else np.zeros(0, np.float32)
+        out, self.tail = np.concatenate([self.tail, rest]), np.zeros(0, dtype=np.float32)
+        return out
+
+    def fade_out(self) -> np.ndarray:
+        """Cut off: the kept-back tail, faded to silence."""
+        out, self.tail = self.tail.copy(), np.zeros(0, dtype=np.float32)
+        out *= np.linspace(1, 0, len(out), dtype=np.float32)
+        return out
 
 
 def _load_lora_model(cfg: TTSConfig, entry: VoiceEntry) -> tuple[Qwen3TTSModel, str]:

@@ -100,14 +100,35 @@ def match_tone(audio: np.ndarray, sample_rate: int, profile: np.ndarray, referen
                strength: float = 0.75, max_db: float = 6.0) -> np.ndarray:
     """`audio` (whose tone_profile is `profile`) equalized `strength` of the way toward `reference`,
     no band moved more than `max_db`. The overall level is then off by a little; match_level after."""
-    gains = np.clip(strength * (np.asarray(reference) - np.asarray(profile)), -max_db, max_db)
-    gains = np.convolve(np.pad(gains, 1, mode="edge"), [0.25, 0.5, 0.25], mode="valid")  # no sharp steps
+    gains = tone_gains(profile, reference, strength, max_db)
     freqs, _, spectrum = stft(audio, fs=sample_rate, nperseg=_TONE_FFT, noverlap=_TONE_FFT * 3 // 4)
-    centers = np.sqrt(_TONE_EDGES[:-1] * _TONE_EDGES[1:])
-    per_bin = np.interp(np.log(np.maximum(freqs, 1.0)), np.log(centers), gains)  # flat beyond the end bands
+    per_bin = _per_frequency(freqs, gains)
     _, out = istft(spectrum * (10 ** (per_bin / 20))[:, None], fs=sample_rate, nperseg=_TONE_FFT, noverlap=_TONE_FFT * 3 // 4)
     return out[: len(audio)].astype(np.float32)
 
+
+
+def tone_gains(profile: np.ndarray, reference: np.ndarray, strength: float = 0.75, max_db: float = 6.0) -> np.ndarray:
+    """Per band (dB): what match_tone moves a take whose tone_profile is `profile` by."""
+    gains = np.clip(strength * (np.asarray(reference) - np.asarray(profile)), -max_db, max_db)
+    return np.convolve(np.pad(gains, 1, mode="edge"), [0.25, 0.5, 0.25], mode="valid")  # no sharp steps
+
+
+def _per_frequency(freqs: np.ndarray, gains_db: np.ndarray) -> np.ndarray:
+    centers = np.sqrt(_TONE_EDGES[:-1] * _TONE_EDGES[1:])
+    return np.interp(np.log(np.maximum(freqs, 1.0)), np.log(centers), gains_db)  # flat beyond the end bands
+
+
+def tone_filter(gains_db: np.ndarray, sample_rate: int, taps: int = 257) -> np.ndarray:
+    """match_tone's equalization as a linear-phase FIR filter, for audio that
+    arrives in pieces (streamed speech): filtered piece by piece with its
+    state carried over, it has no seams. It delays everything by
+    (taps - 1) / 2 samples (about 5 ms at 24 kHz)."""
+    from scipy.signal import firwin2
+
+    freqs = np.linspace(0, sample_rate / 2, 129)
+    gains = 10 ** (_per_frequency(freqs, gains_db) / 20)
+    return firwin2(taps, freqs, gains, fs=sample_rate).astype(np.float64)
 
 
 def trim_silence(audio: np.ndarray, sample_rate: int, keep_s: float = 0.15, floor: float = 0.03) -> np.ndarray:

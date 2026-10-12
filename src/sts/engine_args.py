@@ -86,6 +86,20 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "faster on Apple Silicon) or 'auto' (default: whichever this environment has)",
     )
     parser.add_argument(
+        "--qwen-stream",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Play each sentence while it's still being generated (MLX engine; on by default): speech starts "
+        "about --qwen-stream-hold-s after generating starts, not once the whole sentence is done",
+    )
+    parser.add_argument(
+        "--qwen-stream-hold-s",
+        type=float,
+        default=None,
+        help="How long a streamed sentence is held back before it starts playing (default 1.0): a short "
+        "sentence is usually whole by then, and is checked - and regenerated if bad - before anyone hears it",
+    )
+    parser.add_argument(
         "--qwen-accent-donor",
         choices=["none", "Default", "Aiden", "Ryan"],
         default=None,
@@ -199,6 +213,10 @@ def build_engine_config(args: argparse.Namespace) -> tuple[PipelineConfig, tuple
         cfg.tts.voice_library_dir = args.voice_library_dir
     if args.qwen_engine is not None:
         cfg.tts.qwen3_engine = args.qwen_engine
+    if args.qwen_stream is not None:
+        cfg.tts.qwen3_stream = args.qwen_stream
+    if args.qwen_stream_hold_s is not None:
+        cfg.tts.qwen3_stream_hold_s = max(0.0, args.qwen_stream_hold_s)
     if args.qwen_accent_donor is not None:
         cfg.tts.qwen3_accent_donor = "" if args.qwen_accent_donor == "none" else args.qwen_accent_donor
     if args.qwen_clone_mode is not None:
