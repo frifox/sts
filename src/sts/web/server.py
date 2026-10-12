@@ -37,7 +37,7 @@ CAPTION_HISTORY_LINES = 4
 
 
 # The /control websocket - for remote controls (the Bitfocus Companion module
-# in companion-sts/) - gets only these messages, and may send only these actions
+# in src-companion/) - gets only these messages, and may send only these actions
 # (plus select_speaker, with a voice's id: switching voices).
 CONTROL_MESSAGE_TYPES = frozenset({"status", "stage"})
 CONTROL_ACTIONS = frozenset({"start", "stop", "translate_on", "translate_off", "voice_on", "voice_off"})
@@ -492,7 +492,7 @@ def create_app(broadcaster: CaptionBroadcaster) -> FastAPI:
 
     @app.websocket("/control")
     async def control_endpoint(websocket: WebSocket) -> None:
-        """For remote controls (companion-sts/): JSON in both directions -
+        """For remote controls (src-companion/): JSON in both directions -
         {"type": "status" | "stage", ...} out, {"action": ...} in (see
         CaptionBroadcaster.handle_control_message)."""
         await websocket.accept()

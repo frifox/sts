@@ -1,7 +1,7 @@
 #!/bin/zsh
-# Builds Live Translate.app (mac/build/Live Translate.app): the app, plus a standalone Python 3.11
+# Builds Live Translate.app (src-mac/build/Live Translate.app): the app, plus a standalone Python 3.11
 # with sts and its MLX voice engine installed, ad-hoc signed. The Python is
-# kept in mac/build/python between builds, so later builds only reinstall
+# kept in src-mac/build/python between builds, so later builds only reinstall
 # sts itself (and anything new in its dependencies).
 set -euo pipefail
 cd "${0:A:h}"

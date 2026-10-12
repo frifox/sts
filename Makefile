@@ -1,7 +1,7 @@
 # Live Translate.app: `make` builds it fresh and installs it in /Applications.
 #
 #   make           build + install (the same as `make deploy`)
-#   make build     build mac/build/Live Translate.app only
+#   make build     build src-mac/build/Live Translate.app only
 #   make install   install the last build in /Applications (the app must be quit)
 #   make test      run the tests (in .venv-mlx)
 #   make run       run sts from .venv-mlx in this terminal, its page on
@@ -10,7 +10,7 @@
 APP        := Live Translate.app
 # The app's earlier names (STS, then Translate Live): removed on install.
 OLD_APPS   := "/Applications/STS.app" "/Applications/Translate Live.app"
-BUILT      := mac/build/$(APP)
+BUILT      := src-mac/build/$(APP)
 INSTALLED  := /Applications/$(APP)
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
@@ -19,9 +19,9 @@ LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/Launc
 deploy: build install
 
 build: check-not-running
-	zsh mac/build.sh
+	zsh src-mac/build.sh
 
-# The build rewrites the app in mac/build and the install replaces the one
+# The build rewrites the app in src-mac/build and the install replaces the one
 # in /Applications: a copy running from either would lose its
 # files mid-run (its Python lives inside the app).
 check-not-running:

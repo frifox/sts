@@ -3,7 +3,7 @@ live on a web page - what the Claude app's "make" server entry starts
 (.claude/launch.json), so the tab it opens shows the build instead of
 nothing. Standard library only.
 
-    python3 mac/make_page.py [port]     (default 8765, or $PORT)
+    python3 src-mac/make_page.py [port]     (default 8765, or $PORT)
 
 The page follows the output as it comes, says whether it succeeded, and has
 a "Run again" button; the server keeps running until it's stopped.

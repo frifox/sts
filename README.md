@@ -1,4 +1,4 @@
-# STS: Speech To Speech
+# STS: Live Translate
 
 Live Russian → English speech translation: listens to a speaker, shows live
 captions in both languages, and speaks the translation in a natural voice.
@@ -118,13 +118,13 @@ pauses, Qwen3 options).
 
 ## Mac app
 
-`mac/` builds **Live Translate.app**: a native window for sts with its own Python and
+`src-mac/` builds **Live Translate.app**: a native window for sts with its own Python and
 the MLX voice engine (Qwen3-TTS) inside, so it needs no checkout or
 virtualenv to run.
 
 ```bash
 make                    # builds Live Translate.app fresh and installs it in /Applications
-make build              # only builds it, in mac/build/ (~1.6 GB)
+make build              # only builds it, in src-mac/build/ (~1.6 GB)
 make install            # installs the last build
 ```
 

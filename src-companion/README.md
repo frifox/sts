@@ -22,7 +22,7 @@ A ready-made package is kept in [`build/`](build/): `build/sts-live-translate-<v
 To rebuild it after a change:
 
 ```bash
-cd companion-sts
+cd src-companion
 npm install
 npm run package          # makes build/sts-live-translate-<version>.tgz
 ```
@@ -33,5 +33,5 @@ page's: `127.0.0.1`, `80` on the same computer, or the sts computer's
 address from another one - unless sts was started with `--local-only`).
 
 For development, point Companion's **Developer modules path** (Settings ▸
-Advanced) at the folder containing `companion-sts`; it reloads the module on
+Advanced) at the folder containing `src-companion`; it reloads the module on
 changes.

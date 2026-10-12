@@ -1,5 +1,5 @@
 """/control: the websocket for remote controls (the Companion module in
-companion-sts/) - on/off status out, the six toggle actions in."""
+src-companion/) - on/off status out, the six toggle actions in."""
 
 import asyncio
 

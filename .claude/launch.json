@@ -19,7 +19,7 @@
       "name": "make",
       "runtimeExecutable": "/usr/bin/python3",
       "runtimeArgs": [
-        "mac/make_page.py",
+        "src-mac/make_page.py",
         "8765"
       ],
       "port": 8765
