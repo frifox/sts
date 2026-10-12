@@ -14,6 +14,9 @@ whether it was changed here or on the sts caption page.
 
 Presets ▸ **Toggles**: Caption, Translate, Voice — press to toggle.
 
+Presets ▸ **Voices**: **Voice 125%** — switches between the *Default 1.25* voice (lit) and *Default* (off).
+Amber while the voice it switched to is being prepared (the previous one speaks until then).
+
 | Color | Meaning |
 |---|---|
 | black | off |
@@ -25,12 +28,18 @@ Presets ▸ **Toggles**: Caption, Translate, Voice — press to toggle.
 
 **Caption / Translate / Voice: toggle / on / off** — Toggle, or set it on or off.
 
+**Voice: switch between two voices** — toggle between an "on" and an "off" voice, or pick one. Voices are given by
+their id in the sts voice library (the folder name: `default`, `default-1-25`, …).
+
 ### Feedbacks
 
 - **Caption / Translate / Voice is on**
 - **Voice is finishing** — off after the sentence being spoken
+- **Voice in use is …** — that library voice is speaking
+- **Voice … is being prepared** — chosen, not speaking yet
 - **Not connected to sts**
 
 ### Variables
 
-`$(sts-live-translate:caption)`, `translate`, `voice` (`on` / `off` / `finishing`), `connection`, `stage`
+`$(sts-live-translate:caption)`, `translate`, `voice` (`on` / `off` / `finishing`), `speaker` (library voice id),
+`connection`, `stage`

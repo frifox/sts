@@ -42,8 +42,8 @@ class StsInstance extends InstanceBase {
 				width: 12,
 				label: 'sts',
 				value:
-					'Connects to sts\'s remote-control websocket (ws://host:port/control). sts serves it on its caption ' +
-					'page port (80 by default) - from another computer, at the sts computer\'s address.',
+					"Connects to sts's remote-control websocket (ws://host:port/control). sts serves it on its caption " +
+					"page port (80 by default) - from another computer, at the sts computer's address.",
 			},
 			{
 				type: 'textinput',
@@ -78,7 +78,7 @@ class StsInstance extends InstanceBase {
 
 	_stateChanged(state) {
 		this.setVariableValues(defs.variableValues(state))
-		this.checkFeedbacks('stage_on', 'voice_stopping', 'disconnected')
+		this.checkFeedbacks('stage_on', 'voice_stopping', 'voice_is', 'voice_preparing', 'disconnected')
 	}
 }
 

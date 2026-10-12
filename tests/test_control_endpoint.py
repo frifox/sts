@@ -58,3 +58,13 @@ def test_remote_controls_get_status_and_stage_but_not_captions():
         asyncio.run(broadcaster._send_to_all(message))
     assert len(page.sent) == 4
     assert [__import__("json").loads(p)["type"] for p in remote.sent] == ["status", "stage"]
+
+
+def test_a_remote_control_can_switch_voices():
+    client, _, received = _client()
+    with client.websocket_connect("/control") as ws:
+        ws.receive_json(), ws.receive_json()
+        ws.send_json({"action": "select_speaker", "speaker_id": "default-1-25"})
+        ws.send_json({"action": "select_speaker"})  # no voice named
+        assert ws.receive_json()["type"] == "error"
+    assert received == [{"action": "select_speaker", "speaker_id": "default-1-25"}]

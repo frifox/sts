@@ -2,10 +2,12 @@
 // drops, keeps the latest on/off state, and sends toggle actions.
 //
 // Protocol (JSON text frames):
-//   sts -> module  {"type": "status", "active", "translation_enabled", "voice_enabled", "voice_stopping", ...}
+//   sts -> module  {"type": "status", "active", "translation_enabled", "voice_enabled", "voice_stopping",
+//                   "active_speaker_id", "preparing_speaker_id", ...}
 //                  {"type": "stage", "text", "ready"}       (start-up progress, "Listening" once ready)
 //                  {"type": "error", "message"}             (an action it didn't accept)
 //   module -> sts  {"action": "start" | "stop" | "translate_on" | "translate_off" | "voice_on" | "voice_off"}
+//                  {"action": "select_speaker", "speaker_id": "default-1-25"}   (switch to a library voice)
 //                  {"action": "get_status"}                 (send the status again)
 // No authentication yet.
 
@@ -37,6 +39,8 @@ class StsConnection {
 			translate: false,
 			voice: false,
 			voiceStopping: false, // Voice off was clicked: the sentence being spoken is finishing
+			speaker: null, // the library voice in use (its id), null for a built-in preset voice
+			preparingSpeaker: null, // a voice chosen but still being prepared (the previous one speaks meanwhile)
 			stage: '',
 			ready: false,
 		}
@@ -64,13 +68,13 @@ class StsConnection {
 		this._setConnected(false)
 	}
 
-	/** Sends one action; false if not connected. */
-	send(action) {
+	/** Sends one action (with any extra fields); false if not connected. */
+	send(action, extra = {}) {
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
 			this.handlers.log('warn', `not connected to sts: "${action}" not sent`)
 			return false
 		}
-		this.ws.send(JSON.stringify({ action }))
+		this.ws.send(JSON.stringify({ action, ...extra }))
 		return true
 	}
 
@@ -133,6 +137,8 @@ class StsConnection {
 				translate: !!msg.translation_enabled,
 				voice: !!msg.voice_enabled,
 				voiceStopping: !!msg.voice_stopping,
+				speaker: msg.active_speaker_id || null,
+				preparingSpeaker: msg.preparing_speaker_id || null,
 			})
 			this.handlers.onState(this.state)
 		} else if (msg.type === 'stage') {

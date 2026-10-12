@@ -11,6 +11,7 @@ It talks to sts over its remote-control websocket, `ws://<host>:<port>/control`
 | sts → module | `{"type": "status", "active", "translation_enabled", "voice_enabled", "voice_stopping", ...}` on connect and on every change |
 | sts → module | `{"type": "stage", "text", "ready"}` start-up progress ("Listening" once ready) |
 | module → sts | `{"action": "start" \| "stop" \| "translate_on" \| "translate_off" \| "voice_on" \| "voice_off"}` |
+| module → sts | `{"action": "select_speaker", "speaker_id": "default-1-25"}` — switch to a library voice |
 | module → sts | `{"action": "get_status"}` — the status again |
 
 Built on `@companion-module/base` 1.10: runs on Companion 3.4 and later.

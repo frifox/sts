@@ -37,7 +37,8 @@ CAPTION_HISTORY_LINES = 4
 
 
 # The /control websocket - for remote controls (the Bitfocus Companion module
-# in companion-sts/) - gets only these messages, and may send only these actions.
+# in companion-sts/) - gets only these messages, and may send only these actions
+# (plus select_speaker, with a voice's id: switching voices).
 CONTROL_MESSAGE_TYPES = frozenset({"status", "stage"})
 CONTROL_ACTIONS = frozenset({"start", "stop", "translate_on", "translate_off", "voice_on", "voice_off"})
 
@@ -157,8 +158,10 @@ class CaptionBroadcaster:
 
     async def handle_control_message(self, websocket: WebSocket, raw: str) -> None:
         """One message from a remote control: a CONTROL_ACTIONS action (run as
-        if clicked on the page), or {"action": "get_status"} (sent the current
-        status again). Anything else is answered with an error and ignored."""
+        if clicked on the page), {"action": "select_speaker", "speaker_id": ...}
+        (switch to that voice from the library, as picked on the page), or
+        {"action": "get_status"} (sent the current status again). Anything else
+        is answered with an error and ignored."""
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
@@ -170,6 +173,9 @@ class CaptionBroadcaster:
         elif action in CONTROL_ACTIONS:
             if self.on_control:
                 self.on_control({"action": action})
+        elif action == "select_speaker" and isinstance(data.get("speaker_id"), str) and data["speaker_id"]:
+            if self.on_control:
+                self.on_control({"action": "select_speaker", "speaker_id": data["speaker_id"]})
         else:
             await websocket.send_text(json.dumps({"type": "error", "message": f"unknown action: {action!r}"}))
 
