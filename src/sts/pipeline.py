@@ -451,6 +451,7 @@ class Pipeline:
             self._select_speaker(speaker_id)
             if speaker_id and self._persistent_config is not None:
                 self._persistent_config.set(f"voice:{self.cfg.tts.backend}", f"saved:{speaker_id}")
+            self._use_voice_sentence_pause(speaker_id)
         else:
             return
         self._broadcast_status()
@@ -599,6 +600,21 @@ class Pipeline:
             apply()
         else:
             self._clone_when_ready(str(entry.wav_path), entry.ref_text, apply, preparing_label or entry.name, speaker_id)
+
+    def _use_voice_sentence_pause(self, speaker_id: str | None) -> None:
+        """Switched (from the page or a remote control) to a voice that has a
+        pause between sentences of its own (VoiceEntry.sentence_pause_s): that
+        pause now - e.g. Default 1.25 speaks faster, and pauses shorter. Only on
+        a switch, not when the session's voice is restored at start-up, so a
+        pause set by hand stays until the next switch."""
+        library = getattr(self, "voice_library", None)
+        entry = library.get(speaker_id) if library is not None and speaker_id else None
+        if entry is None or entry.sentence_pause_s is None:
+            return
+        self.cfg.audio.pause_between_s = round(min(MAX_SENTENCE_PAUSE_S, entry.sentence_pause_s), 2)
+        vlog("audio", f"pause between sentences {self.cfg.audio.pause_between_s}s (with voice {entry.name!r})")
+        if self._persistent_config is not None:
+            self._persistent_config.set("pause_between_s", str(self.cfg.audio.pause_between_s))
 
     def _next_voice_request(self) -> int:
         self._voice_request = getattr(self, "_voice_request", 0) + 1

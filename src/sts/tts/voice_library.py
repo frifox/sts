@@ -28,6 +28,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
+def _seconds(value) -> float | None:
+    try:
+        return max(0.0, float(value)) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
     return slug or "speaker"
@@ -50,6 +57,10 @@ class VoiceEntry:
     builtin: bool = False
     # Made by the caption page's Design dialog (invented, not cloned from a speaker).
     designed: bool = False
+    # The pause between sentences that goes with this voice (seconds; meta.json
+    # "sentence_pause_s"), set when the voice is switched to - e.g. a shorter one
+    # for a faster-speaking voice. None: switching to it leaves the pause as is.
+    sentence_pause_s: float | None = None
 
 
 # Voices that ship with the package (src/sts/bundled_voices/<id>/{reference.wav,meta.json}).
@@ -162,6 +173,7 @@ class VoiceLibrary:
             ref_text=meta.get("ref_text"),
             wav_path=wav_path,
             designed=bool(meta.get("designed")),
+            sentence_pause_s=_seconds(meta.get("sentence_pause_s")),
         )
 
     def list(self) -> list[VoiceEntry]:
