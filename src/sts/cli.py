@@ -54,12 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--web-host", default=None,
-        help="Caption web server bind address (default 127.0.0.1: this computer only; see --all-interfaces)",
+        help="Caption web server bind address (default 0.0.0.0: all interfaces, so phones, tablets, other "
+        "computers and remote controls on the network can reach it; see --local-only)",
     )
     parser.add_argument(
-        "--all-interfaces", action="store_true",
-        help="Serve the caption page to other devices too (phones, tablets, other computers on the network): "
-        "binds to all interfaces (0.0.0.0) instead of only this computer",
+        "--local-only", action="store_true",
+        help="Serve the caption page (and the /control remote-control websocket) to this computer only",
     )
     parser.add_argument(
         "--web-port", type=int, default=DEFAULT_WEB_PORT,
@@ -70,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_HTTPS_PORT,
         help=f"Also serve the caption page over HTTPS on this port (default {DEFAULT_HTTPS_PORT}; 0 turns it "
-        "off). Needed for the browser-mic input from other devices (with --all-interfaces): browsers only allow the mic on a "
+        "off). Needed for the browser-mic input from other devices: browsers only allow the mic on a "
         "secure page (https, or localhost). Uses a self-signed cert, made on first start if it doesn't "
         "exist (with openssl); browsers show a one-time warning to click through per device.",
     )
@@ -187,11 +187,11 @@ def page_hosts(web_host: str) -> list[str]:
 
 
 def web_host(args) -> str:
-    """Where the caption page listens: --web-host if given, all interfaces with
-    --all-interfaces, and otherwise only this computer (127.0.0.1)."""
+    """Where the caption page listens: --web-host if given, only this computer
+    (127.0.0.1) with --local-only, and otherwise all interfaces (0.0.0.0)."""
     if args.web_host:
         return args.web_host
-    return "0.0.0.0" if args.all_interfaces else "127.0.0.1"
+    return "127.0.0.1" if args.local_only else "0.0.0.0"
 
 
 def local_bind(ports: list[int]) -> tuple[str, bool]:
@@ -300,7 +300,7 @@ def main() -> None:
         if https_port and not ensure_tls_cert(args.tls_cert, args.tls_key):
             https_port = None
         local_only = False
-        if args.web_host == "127.0.0.1" and not args.all_interfaces:
+        if args.web_host == "127.0.0.1" and args.local_only:
             bind_host, local_only = local_bind([args.web_port] + ([https_port] if https_port else []))
         else:
             bind_host = args.web_host
@@ -334,7 +334,7 @@ def main() -> None:
         for host in page_hosts(args.web_host):
             print(f"Captions: http://{host}{http_port}/")
         if args.web_host in ("127.0.0.1", "localhost", "::1"):
-            print("  (this computer only - --all-interfaces opens it to other devices on the network)")
+            print("  (this computer only: --local-only)")
 
     vlog("init", f"loading models (asr=gigaam on {asr_device}, translation on {translation_device}, "
          f"tts={cfg.tts.backend} on {tts_device})")

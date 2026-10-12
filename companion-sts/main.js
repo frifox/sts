@@ -43,7 +43,7 @@ class StsInstance extends InstanceBase {
 				label: 'sts',
 				value:
 					'Connects to sts\'s remote-control websocket (ws://host:port/control). sts serves it on its caption ' +
-					'page port (80 by default). From another computer, start sts with --all-interfaces.',
+					'page port (80 by default) - from another computer, at the sts computer\'s address.',
 			},
 			{
 				type: 'textinput',

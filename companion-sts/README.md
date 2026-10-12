@@ -25,8 +25,8 @@ npm run package          # makes pkg.tgz
 
 In Companion: **Modules ▸ Import module package**, pick `pkg.tgz`, then add a
 **Live Translate** connection and set its host and port (the sts caption
-page's: `127.0.0.1`, `80` on the same computer). sts must be started with
-`--all-interfaces` if Companion runs on another computer.
+page's: `127.0.0.1`, `80` on the same computer, or the sts computer's
+address from another one - unless sts was started with `--local-only`).
 
 For development, point Companion's **Developer modules path** (Settings ▸
 Advanced) at the folder containing `companion-sts`; it reloads the module on

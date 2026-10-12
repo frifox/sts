@@ -532,7 +532,7 @@ class LoopbackOnly:
                 await send({"type": "http.response.start", "status": 403,
                             "headers": [(b"content-type", b"text/plain")]})
                 await send({"type": "http.response.body",
-                            "body": b"The caption page is only open on this computer (start sts with --all-interfaces).\n"})
+                            "body": b"The caption page is only open on this computer (sts was started with --local-only).\n"})
             return
         await self.app(scope, receive, send)
 

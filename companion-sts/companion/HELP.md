@@ -6,7 +6,8 @@ whether it was changed here or on the sts caption page.
 ### Setup
 
 - **Host / Port**: where sts serves its caption page — `127.0.0.1` and `80` when sts runs on this computer.
-  From another computer, start sts with `--all-interfaces` and use that computer's address.
+  From another computer, use the sts computer's address (sts accepts connections from the network unless
+  started with `--local-only`).
 - The connection status shows on the module in the Connections list; it reconnects by itself when sts restarts.
 
 ### Buttons
