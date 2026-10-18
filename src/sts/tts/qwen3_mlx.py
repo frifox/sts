@@ -14,6 +14,7 @@ cloned voices, the preset voices and voice design are.
 """
 
 import logging
+import threading
 from dataclasses import dataclass
 
 import numpy as np
@@ -35,6 +36,7 @@ class _ClonePrompt:
     ref_audio: object  # mx.array at the model's sample rate
     ref_text: str | None  # None: speaker embedding only (x-vector)
     speaker_audio: object = None  # whose voice, if not ref_audio's (see with_speaker)
+    ref_codes: object = None  # ref_audio as codec tokens, once worked out (see _prime_stream_decoder)
 
 
 class MLXQwen3TTSModel:
@@ -102,6 +104,8 @@ class MLXQwen3TTSModel:
         if prompt.speaker_audio is not None:
             embedding = self._extract_speaker_embedding(prompt.speaker_audio)
             model.extract_speaker_embedding = lambda _audio: embedding
+        if prompt.ref_text is not None:
+            self._prime_stream_decoder(prompt)
         try:
             yield from self._pieces(model.generate(
                 text=text, ref_audio=prompt.ref_audio, ref_text=prompt.ref_text,
@@ -110,6 +114,26 @@ class MLXQwen3TTSModel:
             ))
         finally:
             model.__dict__.pop("extract_speaker_embedding", None)
+            _prime.codes = None
+
+    def _prime_stream_decoder(self, prompt: _ClonePrompt) -> None:
+        """Has the next streamed take decoded with the reference clip as its
+        context, as a whole take is. Unstreamed, mlx-audio decodes a clone's
+        tokens after the reference clip's own and cuts that part off, so the
+        codec decoder already has the voice when the sentence starts; streamed,
+        it resets the decoder and starts on the sentence cold, and its first
+        second or so comes out with the pitch wavering in small, sudden steps
+        (like auto-tune). So the reset that starts the stream is followed by
+        decoding the reference clip's tokens, whose audio is thrown away."""
+        import mlx.core as mx
+
+        if prompt.ref_codes is None:
+            audio = prompt.ref_audio
+            audio = audio.reshape(1, 1, -1) if audio.ndim < 3 else audio  # as mlx-audio encodes it: [1, 1, samples]
+            prompt.ref_codes = self._model.speech_tokenizer.encode(audio)  # [1, groups, time]
+            mx.eval(prompt.ref_codes)
+        _install_prime_hook()
+        _prime.codes = prompt.ref_codes
 
     def stream_custom_voice(self, text, speaker, interval_s, language="English", instruct=None, **sampling):
         """generate_custom_voice, streamed (see stream_voice_clone)."""
@@ -143,6 +167,33 @@ class MLXQwen3TTSModel:
     def _collect(self, results) -> tuple[list[np.ndarray], int]:
         audio = [np.asarray(result.audio, dtype=np.float32) for result in results]
         return [np.concatenate(audio) if audio else np.zeros(0, dtype=np.float32)], self.sample_rate
+
+
+# The codec tokens the next streaming decoder reset is primed with (see
+# MLXQwen3TTSModel._prime_stream_decoder); used once, by that reset.
+_prime = threading.local()
+
+
+def _install_prime_hook() -> None:
+    """Makes the streaming decoder's reset decode `_prime.codes`, if set, and
+    throw that audio away. On the class: the decoder object itself doesn't take
+    new attributes."""
+    from mlx_audio.tts.models.qwen3_tts.speech_tokenizer import Qwen3TTSSpeechTokenizerDecoder as Decoder
+
+    if getattr(Decoder, "_sts_primes", False):
+        return
+    reset = Decoder.reset_streaming_state
+
+    def reset_streaming_state(self):
+        import mlx.core as mx
+
+        reset(self)
+        codes, _prime.codes = getattr(_prime, "codes", None), None
+        if codes is not None:
+            mx.eval(self.streaming_step(codes))
+
+    Decoder.reset_streaming_state = reset_streaming_state
+    Decoder._sts_primes = True
 
 
 def _mlx_sampling(sampling: dict) -> dict:
