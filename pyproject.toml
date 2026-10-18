@@ -39,9 +39,11 @@ qwen3 = [
 ]
 # Qwen3-TTS on Apple's MLX instead of PyTorch (Apple Silicon; about 2.5x faster
 # there). mlx-audio needs transformers>=5, qwen-tts pins 4.57.3: a virtualenv of
-# its own (.venv-mlx). No trained LoRA voices on this engine.
+# its own (.venv-mlx). No trained LoRA voices on this engine. Also has Fish
+# Audio Drama 3 (the "drama3" backend, switchable with Qwen3 from the page).
 mlx = [
-    "mlx-audio>=0.5.7",
+    # mlx-audio from GitHub, pinned: Fish Audio Drama 3 (fish_drama3) isn't in a release yet (0.5.9).
+    "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@4ef6c3a577ade12d946e4b1d1870e4ba67fb5b9a",
     "safetensors>=0.4",
     "librosa>=0.10",
 ]

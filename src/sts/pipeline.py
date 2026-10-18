@@ -44,6 +44,7 @@ from sts.audio.devices import check_input, check_output, reinitialize_audio_syst
 from sts.audio.playback import AudioPlayback
 from sts.audio.tempo import time_stretch
 from sts.audio.vad import SpeechSegmenter
+from sts.engine_args import SWITCHABLE_BACKENDS
 from sts.tts.accent import ACCENT_DONORS
 from sts.bible.lookup import BibleLookup
 from sts.bible.reference import find_references
@@ -130,6 +131,15 @@ def _stage_model(factory, cfg, name: str):
     if cfg.device == "mps":
         return StageProcess(factory, cfg, name=f"sts-{name}")
     return factory(cfg)
+
+
+def _close_stage(model) -> None:
+    """Frees a stage's model: its process ends, or (in this process) it's dropped."""
+    if isinstance(model, StageProcess):
+        model.close()
+    else:
+        del model
+        _free_gpu_memory()
 
 
 def _wait_ready(model) -> None:
@@ -411,7 +421,7 @@ class Pipeline:
             self.tts.set_default_voice(voice)
             self._select_speaker(None)  # picking a built-in voice drops any cloned/trained one
             if self._persistent_config is not None:
-                self._persistent_config.set(f"voice:{self.cfg.tts.backend}", f"default:{voice}")
+                self._persistent_config.set(self._voice_key(), f"default:{voice}")
         elif action in ("refresh_devices", "rescan_devices", "set_audio_devices", "mic_start", "mic_stop"):
             threading.Thread(target=self._handle_device_action, args=(action, data), daemon=True).start()
             return
@@ -442,6 +452,9 @@ class Pipeline:
             self._show_unfinished = bool(data.get("on"))
             if self._persistent_config is not None:
                 self._persistent_config.set("show_unfinished", "1" if self._show_unfinished else "0")
+        elif action == "set_tts_model":
+            self._switch_tts_model(str(data.get("model") or ""))
+            return
         elif action == "set_accent_donor":
             self._set_accent_donor(str(data.get("donor") or ""))
         elif action == "delete_voice":
@@ -450,7 +463,7 @@ class Pipeline:
             speaker_id = data.get("speaker_id")
             self._select_speaker(speaker_id)
             if speaker_id and self._persistent_config is not None:
-                self._persistent_config.set(f"voice:{self.cfg.tts.backend}", f"saved:{speaker_id}")
+                self._persistent_config.set(self._voice_key(), f"saved:{speaker_id}")
             self._use_voice_sentence_pause(speaker_id)
         else:
             return
@@ -564,7 +577,7 @@ class Pipeline:
         right before this, at __init__ only - rather than replacing it, so
         Reset still always goes back to the bundled Default voice as before;
         only the very first state of a fresh process differs."""
-        saved = self._persistent_config.get(f"voice:{self.cfg.tts.backend}")
+        saved = self._persistent_config.get(self._voice_key())
         if not saved:
             return
         if saved.startswith("default:"):
@@ -634,6 +647,9 @@ class Pipeline:
         request = self._next_voice_request()
         from sts.tts.english_reference import needs_english_reference
 
+        if not getattr(self, "_started", False) and self.cfg.tts.backend == "drama3" \
+                and needs_english_reference(self.cfg.tts, wav_path, ref_text):
+            self._make_english_reference(wav_path)  # start-up: Drama 3 can't make it itself; Qwen3 does, first
         if not getattr(self, "_started", False) or not needs_english_reference(self.cfg.tts, wav_path, ref_text):
             if progress:
                 self._clone_step("english", "skipped")  # an English voice, or its reference is already made
@@ -673,23 +689,114 @@ class Pipeline:
         so a second one (the same model, loaded for the job) makes it; it's
         closed again after, freeing its memory. Elsewhere the voice stage is in
         this process and takes turns per generation with live synthesis."""
-        if not isinstance(self.tts, StageProcess):
+        if not isinstance(self.tts, StageProcess) and self.cfg.tts.backend == "qwen3":
             self.tts.make_english_reference(wav_path)
             return
         from dataclasses import replace
 
-        helper = StageProcess(create_synthesizer, replace(self.cfg.tts, qwen3_preload_presets=False), name="sts-voice-prep")
+        # Qwen3 makes English references, whichever model speaks (Drama 3 clones from them too).
+        helper_cfg = replace(self.cfg.tts, backend="qwen3", qwen3_preload_presets=False)
+        helper = StageProcess(create_synthesizer, helper_cfg, name="sts-voice-prep")
         try:
             helper.make_english_reference(wav_path)
         finally:
             helper.close()
+
+    # -- switching the voice model (Qwen3 / Drama 3) -------------------------------
+
+    TTS_MODEL_LABELS = {"qwen3": "Qwen3", "drama3": "Drama 3"}
+
+    def _voice_key(self) -> str:
+        """sts.db key for the voice in use: Qwen3 and Drama 3 share one (they use the same voices)."""
+        backend = self.cfg.tts.backend
+        return "voice:qwen3" if backend in SWITCHABLE_BACKENDS else f"voice:{backend}"
+
+    def _tts_models(self) -> list[dict]:
+        """The voice models the page can switch between - when there's more than one."""
+        if self.cfg.tts.backend not in SWITCHABLE_BACKENDS or self.cfg.tts.device != "mps":
+            return []
+        from sts.engine_args import installed_backends
+
+        models = [m for m in SWITCHABLE_BACKENDS if m in installed_backends()]
+        if self.cfg.tts.backend == "qwen3":
+            from sts.tts.qwen3_engine import resolve_engine
+
+            if resolve_engine(self.cfg.tts.qwen3_engine) != "mlx":
+                return []  # Drama 3 runs on MLX: from the PyTorch environment there's nothing to switch to
+        return [{"id": m, "label": self.TTS_MODEL_LABELS[m]} for m in models] if len(models) > 1 else []
+
+    def _switch_tts_model(self, model: str) -> None:
+        """Voice dropdown: switch the voice model. The new one loads in the
+        background (a model of its own, in a process of its own) while the
+        current one keeps speaking; then, between sentences, the current voice
+        is set up in it, it takes over, and the old one is closed (its memory
+        freed). Remembered across restarts."""
+        if model == self.cfg.tts.backend or model not in [m["id"] for m in self._tts_models()]:
+            return
+        if getattr(self, "_tts_switching", None):
+            return  # one switch at a time
+        self._tts_switching = model
+        self._broadcast_status()
+        from dataclasses import replace
+
+        new_cfg = replace(self.cfg.tts, backend=model)
+        new_cfg.use_backend_voices()
+
+        def load() -> None:
+            try:
+                vlog("voice", f"loading {self.TTS_MODEL_LABELS[model]} alongside the current voice model")
+                new_tts = _stage_model(create_synthesizer, new_cfg, f"tts-{model}")
+                _wait_ready(new_tts)
+                # An English reference the current voice needs there, made first (by Qwen3).
+                entry = self.voice_library.get(self._active_speaker_id) if self._active_speaker_id else None
+                source = (str(entry.wav_path), entry.ref_text) if entry is not None and entry.kind != "lora" else self._pending_voice
+                if source is not None:
+                    from sts.tts.english_reference import needs_english_reference
+
+                    if needs_english_reference(new_cfg, source[0], source[1]):
+                        self._make_english_reference(source[0])
+            except Exception as exc:
+                print(f"[voice] couldn't load {self.TTS_MODEL_LABELS[model]}: {exc}")
+                self._tts_switching = None
+                self._broadcast_status()
+                return
+            self._on_control_thread(lambda: self._finish_tts_switch(model, new_cfg, new_tts))
+
+        threading.Thread(target=load, name="sts-tts-switch", daemon=True).start()
+
+    def _finish_tts_switch(self, model: str, new_cfg, new_tts) -> None:
+        """On the control thread, between sentences: the current voice in the new
+        model, which then takes over."""
+        try:
+            entry = self.voice_library.get(self._active_speaker_id) if self._active_speaker_id else None
+            if entry is not None and (model == "qwen3" or entry.kind != "lora"):
+                new_tts.clone_from_entry(entry)
+            elif self._pending_voice is not None:
+                new_tts.clone_voice(*self._pending_voice)
+            else:
+                self._active_speaker_id = None
+                self._voice_cloned = False
+                new_tts.reset_voice()
+        except Exception as exc:
+            print(f"[voice] {self.TTS_MODEL_LABELS[model]} couldn't take the current voice ({exc}); it uses its default")
+            self._active_speaker_id, self._voice_cloned = None, False
+        with self._tts_in_use():
+            old, self.tts = self.tts, new_tts
+            self.cfg.tts = new_cfg
+        self._tts_switching = None
+        if self._persistent_config is not None:
+            self._persistent_config.set("tts_backend", model)
+        vlog("voice", f"voice model: {self.TTS_MODEL_LABELS[model]}")
+        self._broadcast_status()
+        self._broadcast_engines()
+        threading.Thread(target=lambda: _close_stage(old), name="sts-tts-close", daemon=True).start()
 
     def _set_accent_donor(self, donor: str) -> None:
         """Voice dropdown: which American preset voice English references take
         their accent from ("": none). Runs on the control thread: the active
         voice is cloned again with it, which makes a new reference the first
         time (seconds)."""
-        if self.cfg.tts.backend != "qwen3" or (donor and donor not in ACCENT_DONORS):
+        if self.cfg.tts.backend not in SWITCHABLE_BACKENDS or (donor and donor not in ACCENT_DONORS):
             return
         self.cfg.tts.qwen3_accent_donor = donor
         self.tts.set_accent_donor(donor)
@@ -1098,7 +1205,7 @@ class Pipeline:
                 can_save=self._pending_voice is not None,
                 output_volume=round(self.cfg.audio.volume * 100),
                 audio_source=self.cfg.audio.source,
-                can_design=hasattr(self.tts, "design_reference"),
+                can_design=self.cfg.tts.backend == "qwen3" and hasattr(self.tts, "design_reference"),
                 default_voice=self.cfg.tts.resolve_voice(self.cfg.tts.default_voice),
                 voice_groups=self.cfg.tts.voice_groups,
                 active_speaker_id=self._active_speaker_id,
@@ -1109,7 +1216,10 @@ class Pipeline:
                 clone_steps=getattr(self, "_clone_progress", None),
                 preparing_voice=(getattr(self, "_preparing_voice", None) or ("", None))[0],
                 preparing_speaker_id=(getattr(self, "_preparing_voice", None) or ("", None))[1],
-                accent_donors=list(ACCENT_DONORS) if self.cfg.tts.backend == "qwen3" else [],
+                accent_donors=list(ACCENT_DONORS) if self.cfg.tts.backend in SWITCHABLE_BACKENDS else [],
+                tts_model=self.cfg.tts.backend,
+                tts_models=self._tts_models(),
+                tts_switching=getattr(self, "_tts_switching", None),
             )
 
     def _broadcast_rtf(self, stage: str, processing_s: float, audio_s: float) -> None:
@@ -1205,6 +1315,8 @@ class Pipeline:
 
         tts_model = self.cfg.tts.qwen3_model_name if self.cfg.tts.backend == "qwen3" else self.cfg.tts.model_name
         tts_device = self.cfg.tts.device
+        if self.cfg.tts.backend == "drama3":
+            tts_model, tts_device = self.cfg.tts.drama3_model_name, f"{tts_device} (MLX)"
         if self.cfg.tts.backend == "qwen3":
             from sts.tts.qwen3_engine import resolve_engine
 
@@ -1410,6 +1522,15 @@ class Pipeline:
         if not self.control.voice_enabled.is_set() or self._voice_stopping():
             vlog("tts", "voice is off, skipping synthesis")
             return
+        with self._tts_in_use():  # a model switch waits for this sentence (see _switch_tts_model)
+            self._speak_sentence(text, continues, finalized_at, seq)
+
+    def _tts_in_use(self) -> threading.RLock:
+        if self.__dict__.get("_tts_use_lock") is None:
+            self._tts_use_lock = threading.RLock()
+        return self._tts_use_lock
+
+    def _speak_sentence(self, text: str, continues: bool, finalized_at: float | None, seq: int | None) -> None:
         self._set_voice_state(seq, "generating")
         generation = self._reset_generation
         t0 = time.monotonic()

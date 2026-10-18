@@ -251,6 +251,16 @@ def main() -> None:
     args.web_host = web_host(args)
 
     persistent_config = PersistentConfig(args.config_db) if args.config_db else None
+    if persistent_config is not None and not args.tts_backend:
+        # The voice model last picked on the caption page (Qwen3 / Drama 3), if this environment has it.
+        from sts.engine_args import SWITCHABLE_BACKENDS, installed_backends
+
+        saved_backend = persistent_config.get("tts_backend")
+        if (saved_backend in SWITCHABLE_BACKENDS and cfg.tts.backend in SWITCHABLE_BACKENDS
+                and saved_backend in installed_backends() and saved_backend != cfg.tts.backend):
+            cfg.tts.backend = saved_backend
+            cfg.tts.use_backend_voices()
+            print(f"[tts] using {saved_backend} (picked on the caption page last time)", flush=True)
     startup = StartupProgress(persistent_config)
     startup.begin("Starting…")
     if persistent_config is not None:

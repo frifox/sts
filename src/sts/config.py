@@ -109,6 +109,10 @@ class TTSConfig:
     # needed. Used when no cloned/trained voice is active. `qwen3_style_instruct`
     # steers delivery (ignored by the 0.6B variant).
     qwen3_custom_model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+    # The "drama3" backend: Fish Audio Drama 3 on MLX (sts.tts.drama3), switchable
+    # with Qwen3 from the caption page's Voice dropdown. Its streaming, length and
+    # tone settings are the qwen3_* ones below.
+    drama3_model_name: str = "mlx-community/fish-audio-drama-3-4bit"
     # What runs these models: "torch" (qwen-tts, PyTorch: .venv-qwen), "mlx"
     # (mlx-audio, Apple's MLX: .venv-mlx - the same models converted, about 2.5x
     # faster on Apple Silicon) or "auto" (whichever this environment has; see
@@ -225,6 +229,10 @@ class TTSConfig:
             self.voice_groups = {"Male": ["Aiden", "Ryan"]}
             self.voice_aliases = {"male": "Aiden"}
             self.default_voice = "Aiden"
+        elif self.backend == "drama3":  # no built-in voices: only library ones (the bundled Default, ...)
+            self.voice_groups = {}
+            self.voice_aliases = {}
+            self.default_voice = "Default"
 
     def all_voices(self) -> list[str]:
         return [name for names in self.voice_groups.values() for name in names]

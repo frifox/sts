@@ -645,6 +645,8 @@
   /* Landscape / Portrait: two buttons side by side, the current one lit. */
   .engine-dropdown .render-mode { display: flex; }
   #accent-row { margin-top: 0.6rem; }
+  #tts-model-row { margin-bottom: 0.6rem; }
+  #tts-model-row label { display: block; margin-bottom: 0.3rem; }
   #voice-preparing { margin-top: 0.4rem; font-size: 0.85em; color: #e0864c; }
   .engine-dropdown .pause-row { display: flex; align-items: center; gap: 0.5em; margin-top: 0.6rem; }
   .engine-dropdown .pause-row input {
@@ -828,6 +830,11 @@
             <div>Model: <b id="tts-info-model">–</b></div>
             <div>Device: <b id="tts-info-device">–</b></div>
             <div><span id="tts-info-memory-label">VRAM</span>: <b id="tts-info-memory" title="Memory taken by the model weights (not counting working memory while it runs)">–</b></div>
+          </div>
+          <div id="tts-model-row" hidden>
+            <label id="tts-model-label">Voice model</label>
+            <div class="render-mode" id="tts-models" role="group" aria-labelledby="tts-model-label"
+                 title="What speaks: Qwen3 (faster, lighter) or Fish Audio Drama 3 (44.1 kHz, more expressive, ~27 GB). Switching loads the other model in the background (the current one keeps speaking), then swaps - the first time it may also download it."></div>
           </div>
           <label for="voice-select">Voice</label>
           <div class="voice-select-row">
@@ -1818,6 +1825,30 @@
   }
   sentencePauseInput.addEventListener('change', sendSentencePause);
 
+  // "Voice model" (Voice dropdown): Qwen3 / Drama 3. The one being switched
+  // to pulses until it has taken over (it loads in the background first).
+  const ttsModelRow = document.getElementById('tts-model-row');
+  const ttsModelGroup = document.getElementById('tts-models');
+  function renderTtsModels(status) {
+    const models = status.tts_models || [];
+    ttsModelRow.hidden = models.length < 2;
+    if (models.length < 2) return;
+    const switching = status.tts_switching || null;
+    ttsModelGroup.replaceChildren(...models.map(({ id, label }) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.classList.toggle('is-active', id === (switching || status.tts_model));
+      button.classList.toggle('is-pending', id === switching);
+      button.title = id === switching ? `Loading ${label}… the current model keeps speaking until it's ready` : '';
+      button.addEventListener('click', () => {
+        if (id === status.tts_model || switching) return;
+        send('set_tts_model', { model: id });
+      });
+      return button;
+    }));
+  }
+
   function applyStatus(status) {
     const sourceChanged = status.audio_source !== lastStatus.audio_source;
     lastStatus = status;
@@ -1852,6 +1883,7 @@
     renderCloneProgress(status, cloneSteps);
     saveBtn.disabled = !status.can_save || status.training;
     createBtn.hidden = !status.can_design;
+    renderTtsModels(status);
     if (status.pause_between_s != null && document.activeElement !== sentencePauseInput) {
       sentencePauseInput.value = Number(status.pause_between_s).toFixed(1);
     }

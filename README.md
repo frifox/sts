@@ -27,8 +27,9 @@ sound card / browser mic -> GigaAM captions (ru) -> MADLAD-400 (en) -> XTTS / Qw
   Bible passages in standard English (mostly KJV) wording on its own.
 - **Voice** — XTTS v2 (built-in voices, zero-shot cloning, streamed so a
   sentence starts playing ~1 s in) or Qwen3-TTS (cloning, preset voices,
-  voices designed from a text description). Every sentence is brought to
-  the same loudness.
+  voices designed from a text description). On MLX, Fish Audio Drama 3
+  (44.1 kHz, more expressive, cloning only) can be switched in from the Voice
+  dropdown (**Voice model**). Every sentence is brought to the same loudness.
 - **Bible references** — a spoken reference ("Матфея 1:15") shows a badge
   with the reference; clicking it opens the verse in Russian (Synodal) and
   English (KJV) from a bundled offline dataset.
@@ -61,7 +62,7 @@ restarts (`sts.db`).
 |---|---|
 | GigaAM ASR | ~1 GB |
 | MADLAD-400 10B / 7B / 3B (bf16) | ~21 / 15 / 6 GB |
-| XTTS / Qwen3-TTS 1.7B | ~2 / ~4 GB |
+| XTTS / Qwen3-TTS 1.7B / Drama 3 (4-bit, MLX) | ~2 / ~4 / ~27 GB |
 
 The defaults need ~25 GB: a 32 GB GPU or an Apple Silicon Mac with 32 GB+.
 With `--translation-model google/madlad400-3b-mt` a 12 GB GPU works.
@@ -81,7 +82,12 @@ python3.11 -m venv .venv-mlx && .venv-mlx/bin/pip install -e ".[mlx,dev]"       
 
 `.venv-mlx` runs Qwen3-TTS on Apple's MLX instead of PyTorch: the same voices
 at about 2.5x the speed on Apple Silicon (1.7B model: ~0.27x real time vs
-~0.72x). Zero-shot cloned voices only - no trained LoRA voices.
+~0.72x). Zero-shot cloned voices only - no trained LoRA voices. It also has
+Fish Audio Drama 3 (`mlx-community/fish-audio-drama-3-4bit`, 22 GB download,
+~0.37x real time, first audio ~0.2 s; Fish Audio Community License), switchable
+with Qwen3 on the caption page or `--tts-backend drama3`. Drama 3 has no
+built-in voices: it uses the voice library's (a Russian speaker's through the
+English reference Qwen3 makes of it).
 
 - **NVIDIA:** install the driver, then PyTorch from the CUDA index before
   the project (`pip install torch --index-url https://download.pytorch.org/whl/cu124`).

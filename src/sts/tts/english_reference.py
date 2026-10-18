@@ -54,11 +54,19 @@ def cached_reference_path(cfg, reference_wav_path) -> Path:
     return Path(cfg.voice_library_dir) / ".english-references" / f"{key}-v3.wav"
 
 
+def uses_english_reference(cfg, ref_text: str | None) -> bool:
+    """Whether the TTS backend clones this voice from its English reference:
+    Qwen3 per its clone mode (clone_conditioning), Drama 3 whenever the
+    transcript isn't English (it needs a transcript, and the English came out
+    Russian-paced from a Russian one)."""
+    if cfg.backend == "qwen3":
+        return clone_conditioning(cfg.qwen3_clone_mode, ref_text) == "bridge"
+    if cfg.backend == "drama3":
+        return not transcript_is_english(ref_text)
+    return False
+
+
 def needs_english_reference(cfg, reference_wav_path, ref_text: str | None) -> bool:
     """Cloning this clip will first have to make its English reference (tens of
-    seconds of synthesis) - Qwen3 only."""
-    return (
-        cfg.backend == "qwen3"
-        and clone_conditioning(cfg.qwen3_clone_mode, ref_text) == "bridge"
-        and not cached_reference_path(cfg, reference_wav_path).is_file()
-    )
+    seconds of Qwen3 synthesis)."""
+    return uses_english_reference(cfg, ref_text) and not cached_reference_path(cfg, reference_wav_path).is_file()

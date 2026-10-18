@@ -47,10 +47,11 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--tts-backend",
         default=None,
-        choices=["xtts", "qwen3"],
+        choices=["xtts", "qwen3", "drama3"],
         help="Voice cloning/synthesis backend. Default: whichever is installed in the current Python "
-        "environment (xtts needs the 'xtts' extra, qwen3 the 'qwen3' extra; they conflict, so each "
-        "lives in its own virtualenv)",
+        "environment (xtts needs the 'xtts' extra, qwen3 the 'qwen3' or 'mlx' extra; they conflict, so each "
+        "lives in its own virtualenv), or with the 'mlx' extra the one last picked on the caption page. "
+        "drama3 (Fish Audio Drama 3, 'mlx' extra) is switchable with qwen3 from the page",
     )
     parser.add_argument(
         "--default-voice",
@@ -154,7 +155,11 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 # The Python module each backend's extra installs.
-_BACKEND_MODULES = {"xtts": ("TTS",), "qwen3": ("qwen_tts", "mlx_audio")}  # qwen3: PyTorch or MLX
+_BACKEND_MODULES = {  # qwen3: PyTorch or MLX; drama3: MLX only
+    "xtts": ("TTS",), "qwen3": ("qwen_tts", "mlx_audio"), "drama3": ("mlx_audio.tts.models.fish_drama3",),
+}
+# Backends that can be switched between while sts runs (the caption page's Voice dropdown).
+SWITCHABLE_BACKENDS = ("qwen3", "drama3")
 
 
 def installed_backends() -> list[str]:
@@ -166,6 +171,8 @@ def _installed(module: str) -> bool:
         return importlib.util.find_spec(module) is not None
     except ValueError:  # already imported, without import metadata (a stand-in module): it's there
         return True
+    except ImportError:  # a submodule whose package isn't installed
+        return False
 
 
 def default_tts_backend(prefer: str = "xtts") -> str:
@@ -173,7 +180,7 @@ def default_tts_backend(prefer: str = "xtts") -> str:
     this environment. If both are (unusual: their transformers requirements
     conflict) or neither is, `prefer` decides (the latter then fails with an
     install hint when the backend loads)."""
-    installed = installed_backends()
+    installed = [b for b in installed_backends() if b != "drama3"]  # drama3: picked on the page
     return installed[0] if len(installed) == 1 else prefer
 
 

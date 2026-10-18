@@ -25,4 +25,10 @@ def create_synthesizer(cfg: TTSConfig):
         except ImportError as exc:
             raise SystemExit(_missing_backend("qwen3", exc)) from exc
         return Qwen3TTSSynthesizer(cfg)
-    raise ValueError(f"unknown TTS backend: {cfg.backend!r} (expected 'xtts' or 'qwen3')")
+    if cfg.backend == "drama3":
+        try:
+            from sts.tts.drama3 import Drama3Synthesizer
+        except ImportError as exc:
+            raise SystemExit(_missing_backend("qwen3", exc)) from exc
+        return Drama3Synthesizer(cfg)
+    raise ValueError(f"unknown TTS backend: {cfg.backend!r} (expected 'xtts', 'qwen3' or 'drama3')")
