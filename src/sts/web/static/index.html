@@ -1895,7 +1895,7 @@
 
   // Mid-header shortcuts to these voices (by library id), each shown while
   // it's in the library; the one in use is lit, one being prepared pulses.
-  const VOICE_SHORTCUTS = ['default', 'default-1-25'];
+  const VOICE_SHORTCUTS = ['default', 'default-1-15', 'default-1-25'];
   const voiceShortcuts = document.getElementById('voice-shortcuts');
   function renderVoiceShortcuts() {
     const voices = VOICE_SHORTCUTS.map((id) => savedVoices.find((voice) => voice.id === id)).filter(Boolean);
