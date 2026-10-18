@@ -36,8 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--voice",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Start with the voice on: translations are spoken from the start, without clicking Voice on the "
-        "caption page (default: off)",
+        help="Start with the voice on - translations spoken from the start (default) - or, with --no-voice, "
+        "off until Voice is clicked on the caption page",
     )
     parser.add_argument(
         "--clone",
@@ -359,7 +359,7 @@ def main() -> None:
     vlog("init", "models loaded")
     if args.clone:
         pipeline.clone_voice(args.clone, name=args.clone_name)
-    if args.voice:
+    if args.voice is not False:  # on unless --no-voice
         pipeline.control.enable_voice()
     if broadcaster:
         broadcaster.on_control = pipeline.handle_control

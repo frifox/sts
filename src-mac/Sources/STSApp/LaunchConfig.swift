@@ -15,7 +15,7 @@ struct STSOption: Decodable {
     let type: String  // "int", "float" or "str"
     let `default`: String
     /// What the app passes when the form leaves this at Default, where that
-    /// differs from sts's own default (e.g. "on" for --voice).
+    /// differs from sts's own default (none at the moment: see APP_DEFAULTS in export_options.py).
     let appDefault: String?
     let help: String
 

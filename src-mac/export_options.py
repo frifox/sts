@@ -43,14 +43,12 @@ DEFAULTS = {
     "final_after_silence": "7",
     "caption_interval_ms": "500",
     "web_host": "0.0.0.0 (all interfaces; see --local-only)",
-    "voice": "off",
+    "voice": "on",
 }
 
 # Where the app's default differs from sts's: what the app passes when the
 # form leaves an option at Default (and shows as its default).
-APP_DEFAULTS = {
-    "voice": "on",  # the app starts sts speaking
-}
+APP_DEFAULTS: dict[str, str] = {}
 
 
 def described_default(action: argparse.Action) -> str:

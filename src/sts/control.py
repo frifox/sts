@@ -21,7 +21,7 @@ class RecognitionControl:
         self.active.set()  # recognition/captions on by default
         self.translation_enabled = threading.Event()
         self.translation_enabled.set()  # translation on by default, independent of recognition
-        self.voice_enabled = threading.Event()  # TTS playback off by default - opt in
+        self.voice_enabled = threading.Event()  # set by sts.cli at start (on unless --no-voice)
         self.training = threading.Event()
 
         self._lock = threading.Lock()
