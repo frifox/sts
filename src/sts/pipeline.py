@@ -352,7 +352,7 @@ class Pipeline:
         "start", "stop", "voice_on", "voice_off", "translate_on", "translate_off", "reset",
         "test_output", "train_start", "train_stop", "set_output_volume", "show_unfinished", "set_sentence_pause",
         "refresh_devices", "rescan_devices", "set_audio_devices", "mic_start", "mic_stop",
-        "design_generate", "design_play",
+        "design_generate", "design_play", "finalize_now",
     })
 
     def handle_control(self, data: dict) -> None:
@@ -452,6 +452,12 @@ class Pipeline:
             self._show_unfinished = bool(data.get("on"))
             if self._persistent_config is not None:
                 self._persistent_config.set("show_unfinished", "1" if self._show_unfinished else "0")
+        elif action == "finalize_now":
+            text = str(data.get("text") or "").strip()
+            if text and self.control.active.is_set():
+                vlog("control", f"finalize now: {text[:60]!r}")
+                self.transcript.finalize_now(text)
+            return
         elif action == "set_tts_model":
             self._switch_tts_model(str(data.get("model") or ""))
             return

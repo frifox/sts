@@ -51,6 +51,10 @@ Hover a header item to open its settings:
 | Output meter | - | Output device, volume, stream voice to this browser, test output |
 | **Reset** | Clear captions, drop text in flight, forget the cloned voice | - |
 
+Keys: **C** / **T** / **V** toggle Caption / Translate / Voice. **Space** marks
+the first unfinished sentence for review (it still finalizes by itself as
+usual), **Enter** finalizes it right away, **Esc** unmarks it.
+
 **Train voice** records the live speaker (up to 18 s) and clones them
 immediately; **Save Voice** keeps it in the voice library (`voices/`) for
 later sessions. Devices, volume and the active voice are remembered across

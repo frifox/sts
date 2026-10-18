@@ -114,6 +114,16 @@ def count_final(sentences: list[Sentence], now_s: float, unchanged_since: list[f
     return count
 
 
+def _same_start(text: str, expected: str, words: int = 3) -> bool:
+    """Whether two versions of a sentence start with the same words (case and
+    punctuation aside) - the same sentence, perhaps grown or reworded at the end."""
+    def start(s: str) -> list[str]:
+        return re.findall(r"\w+", s.lower())[:words]
+
+    head = start(expected)
+    return bool(head) and start(text)[: len(head)] == head
+
+
 class Transcript:
     """The audio heard so far and what's been made of it. Each step()
     re-transcribes the audio that isn't locked yet, locks the sentences that
@@ -135,6 +145,7 @@ class Transcript:
         self.after_unchanged = after_unchanged  # 0 turns it off
         self.force_after = force_after  # 0 turns it off
         self.after_silence = after_silence  # 0 turns it off
+        self._finalize_now: str | None = None  # see finalize_now
         # Per still-open sentence (the same ones, in the same order, as the
         # texts step() returns): (seconds left, the whole wait) before it's
         # finalized - by the unchanged rule once it has its end mark, or in the last
@@ -203,6 +214,10 @@ class Transcript:
             n_locked = count_final(sentences, now_s, unchanged_since, self.after_unchanged, self.force_after)
             if self.after_silence > 0 and sentences and now_s - sentences[-1].end >= self.after_silence:
                 n_locked = len(sentences)  # nothing new heard for a while: the speaker has stopped
+            if self._finalize_now is not None:  # the operator finalized the first open sentence (finalize_now)
+                if n_locked == 0 and sentences and _same_start(clean_transcript(sentences[0].text), self._finalize_now):
+                    n_locked = 1
+                self._finalize_now = None
             final = sentences[:n_locked]
             still_open = sentences[n_locked:]
             self._open_seen = [(sentence.text, since) for sentence, since in
@@ -219,6 +234,14 @@ class Transcript:
             self._frames = [audio[drop:], *self._frames]
             self._offset_s = offset_s + drop / self.sample_rate
             return _cleaned(final), self._open_texts(still_open, timers)
+
+    def finalize_now(self, text: str) -> None:
+        """The operator says the first open sentence - the one whose text (as
+        shown) is `text` - is done: it's final at the next step, whatever its
+        timers say. Ignored if by then a different sentence is first (that one
+        finalized by itself meanwhile, or the caption was reworded)."""
+        with self._lock:
+            self._finalize_now = text
 
     @property
     def finalize_timer(self) -> tuple[float, float] | None:

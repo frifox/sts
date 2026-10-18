@@ -423,3 +423,31 @@ def test_a_final_sentence_is_never_changed_by_a_later_lowercase_one():
     assert _texts(t.step()) == (["Первое."], [])
     _feed(t, 9.0, fed)
     assert _texts(t.step()) == ([], ["и потом."])  # stays its own sentence
+
+
+def test_the_operator_can_finalize_the_first_open_sentence_now():
+    from sts.transcript import Transcript
+
+    script = _words(("Братья", 0.5, 1.0), ("и", 1.1, 1.2), ("сёстры", 1.3, 1.9), ("сегодня", 2.0, 2.6))
+    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30, after_silence=10)
+    fed = [0]
+    _feed(t, 2.0, fed)
+    assert _texts(t.step()) == ([], ["Братья и сёстры"])  # no end mark: no timer would finalize it
+    t.finalize_now("Братья и сёстры")
+    _feed(t, 2.7, fed)
+    assert _texts(t.step()) == (["Братья и сёстры сегодня"], [])  # final as it now reads, grown or not
+
+
+def test_finalize_now_is_ignored_when_another_sentence_is_first():
+    from sts.transcript import Transcript
+
+    script = _words(("Первое.", 0.5, 1.5), ("Второе", 2.0, 2.5))
+    t = Transcript(_ScriptedAsr(script), after_unchanged=5, force_after=30, after_silence=10)
+    fed = [0]
+    _feed(t, 2.6, fed)
+    t.step()
+    t.finalize_now("Совсем другое")  # marked a sentence that's no longer the first
+    _feed(t, 2.7, fed)
+    assert _texts(t.step())[0] == []
+    _feed(t, 2.8, fed)
+    assert _texts(t.step())[0] == []  # the request was used up, not kept for later

@@ -178,6 +178,16 @@
   }
   .recent.empty > .finalize-clock { visibility: hidden; }
   .recent .recent-first, .recent .recent-sentence { opacity: 0.4; transition: opacity 0.3s ease; }
+  /* Marked "pending review" (Space): Enter finalizes it, Esc unmarks it. */
+  .recent.review .recent-first, body.voice-on .recent.review .recent-first {
+    opacity: 1; border-radius: 4px; outline: 2px solid #e0864c; outline-offset: 3px;
+    background: rgba(224, 134, 76, 0.12);
+  }
+  .recent.review .recent-first::after {
+    content: "  \23CE finalize \00B7 esc"; font-size: 0.45em; color: #e0864c; vertical-align: middle; white-space: nowrap;
+  }
+  .recent.review.finalizing .recent-first { animation: pulse 1s ease-in-out infinite; }
+  .recent.review.finalizing .recent-first::after { content: "  finalizing\2026"; }
   .recent.pending .recent-first { opacity: 1; }
   #portrait-grid .recent .recent-sentence.pending { opacity: 1; }
   /* With Voice on only the sentence being spoken is bright (highlightLines),
@@ -1192,8 +1202,66 @@
   function setRecentOriginal(text, sentences) {
     recentOriginal = text;
     recentSentences = sentences ?? (text ? [text] : []);
+    // A sentence marked for review stays marked while it's still the first one
+    // (following its latest wording); once it's final - or gone - the mark goes.
+    if (review) {
+      const first = recentSentences[0];
+      if (first && sameStart(first, review.text)) review.text = first;
+      else review = null;
+    }
     renderRecentOriginal();
   }
+
+  // -- Keyboard ----------------------------------------------------------------
+  //   C / T / V   toggle Caption / Translate / Voice (as clicking them)
+  //   Space       mark the first unfinished sentence "pending review" - its
+  //               automatic finalizing goes on as before
+  //   Enter       finalize the marked sentence now
+  //   Esc         unmark it
+  // Not while typing in a field, or with a dialog open.
+  let review = null;  // {text, finalizing}: the first unfinished sentence, marked
+  function sameStart(text, other) {
+    const words = (s) => (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).slice(0, 3);
+    const head = words(other);
+    return head.length > 0 && words(text).slice(0, head.length).join(' ') === head.join(' ');
+  }
+  function hotkeysOff(event) {
+    return event.ctrlKey || event.metaKey || event.altKey || event.isComposing
+      || event.target.closest?.('input, textarea, select, [contenteditable]')
+      || document.querySelector('#design-dialog.show, #save-dialog.show');
+  }
+  document.addEventListener('keydown', (event) => {
+    if (hotkeysOff(event)) return;
+    const toggle = { c: 0, t: 1, v: 2 }[event.key.toLowerCase()];
+    if (toggle !== undefined && !event.shiftKey) {
+      event.preventDefault();
+      const button = ENGINE_TOGGLES[toggle].button;
+      if (!event.repeat && !button.disabled) button.click();
+      return;
+    }
+    if (event.key === ' ') {
+      event.preventDefault();  // no page scroll, no pressing a focused button
+      const first = showUnfinished ? recentSentences[0] : null;
+      if (!event.repeat && first) {
+        review = { text: first, finalizing: false };
+        renderRecentOriginal();
+      }
+    } else if (event.key === 'Enter' && review) {
+      event.preventDefault();
+      if (!event.repeat && !review.finalizing) {
+        review.finalizing = true;
+        send('finalize_now', { text: review.text });
+        renderRecentOriginal();
+      }
+    } else if (event.key === 'Escape' && review) {
+      review = null;
+      renderRecentOriginal();
+    }
+  });
+  // A focused button is pressed on Space's keyup: not when Space marked a sentence.
+  document.addEventListener('keyup', (event) => {
+    if (event.key === ' ' && !hotkeysOff(event) && event.target.closest?.('button')) event.preventDefault();
+  });
 
   // With unfinished text shown, its place is kept even while there is none
   // (an empty line, see .recent's min-height): recognition often guesses at
@@ -1256,6 +1324,9 @@
       el.append(clock, first, rest);
     }
     el.querySelector('.recent-first').textContent = sentences[0] ?? '';
+    const marked = !!review && sentences.length > 0;
+    el.classList.toggle('review', marked);
+    el.classList.toggle('finalizing', marked && review.finalizing);
     el.classList.toggle('empty', !sentences.length);  // the kept empty line: no clock
     // One span per sentence, so portrait can put each on its own line (the
     // leading space separates them in landscape's flowing paragraph).
