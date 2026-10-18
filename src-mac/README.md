@@ -14,7 +14,7 @@ From the repository root:
 ```bash
 make                    # build fresh and install in /Applications
 make build              # build only: src-mac/build/Live Translate.app (~1.6 GB)
-make install            # install the last build
+make install            # build, then install in /Applications (same as `make`)
 ```
 
 Quit the app first: both steps replace an app whose Python may be running

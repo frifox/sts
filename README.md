@@ -126,7 +126,7 @@ built and what's inside.
 ```bash
 make                    # builds Live Translate.app fresh and installs it in /Applications
 make build              # only builds it, in src-mac/build/ (~1.6 GB)
-make install            # installs the last build
+make install            # builds it, then installs it in /Applications (same as `make`)
 ```
 
 Quit the app first: both steps replace an app that may be running (`make` stops

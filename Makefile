@@ -1,8 +1,8 @@
 # Live Translate.app: `make` builds it fresh and installs it in /Applications.
 #
-#   make           build + install (the same as `make deploy`)
+#   make           build + install (the same as `make install` / `make deploy`)
 #   make build     build src-mac/build/Live Translate.app only
-#   make install   install the last build in /Applications (the app must be quit)
+#   make install   build, then install it in /Applications (the app must be quit)
 #   make test      run the tests (in .venv-mlx)
 #   make run       run sts from .venv-mlx in this terminal, its page on
 #                  http://localhost:8780/ (beside the app's 80/443)
@@ -14,9 +14,11 @@ BUILT      := src-mac/build/$(APP)
 INSTALLED  := /Applications/$(APP)
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
-.PHONY: deploy build install test run check-not-running
+.PHONY: deploy build install copy-to-applications test run check-not-running
 
-deploy: build install
+deploy: install
+
+install: build copy-to-applications
 
 build: check-not-running
 	zsh src-mac/build.sh
@@ -30,7 +32,7 @@ check-not-running:
 		exit 1; \
 	fi
 
-install: check-not-running
+copy-to-applications: check-not-running
 	@test -d "$(BUILT)" || { echo "No build yet: run make build"; exit 1; }
 	rm -rf "$(INSTALLED)" $(OLD_APPS)
 	ditto "$(BUILT)" "$(INSTALLED)"
