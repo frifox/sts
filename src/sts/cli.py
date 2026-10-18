@@ -33,6 +33,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-device", type=int, default=None, help="Input device index")
     parser.add_argument("--output-device", type=int, default=None, help="Output device index")
     parser.add_argument(
+        "--voice",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Start with the voice on: translations are spoken from the start, without clicking Voice on the "
+        "caption page (default: off)",
+    )
+    parser.add_argument(
         "--clone",
         metavar="WAV_PATH",
         default=None,
@@ -342,6 +349,8 @@ def main() -> None:
     vlog("init", "models loaded")
     if args.clone:
         pipeline.clone_voice(args.clone, name=args.clone_name)
+    if args.voice:
+        pipeline.control.enable_voice()
     if broadcaster:
         broadcaster.on_control = pipeline.handle_control
         broadcaster.on_mic_frame = pipeline._handle_mic_frame

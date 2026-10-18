@@ -46,7 +46,7 @@ Hover a header item to open its settings:
 | Input meter | - | Input device; use this browser's mic instead (needs HTTPS, see Usage) |
 | **Caption** | Recognition on/off | Show/hide not-yet-final text |
 | **Translate** | Translation on/off | Landscape / Portrait |
-| **Voice** | Speech on/off (starts off) | Voice list; Train, Save, Create (Qwen3), Delete voice |
+| **Voice** | Speech on/off (starts off; on with `--voice`, and in the Mac app) | Voice list; Train, Save, Create (Qwen3), Delete voice |
 | Output meter | - | Output device, volume, stream voice to this browser, test output |
 | **Reset** | Clear captions, drop text in flight, forget the cloned voice | - |
 

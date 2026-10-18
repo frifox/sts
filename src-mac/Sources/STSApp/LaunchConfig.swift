@@ -14,6 +14,9 @@ struct STSOption: Decodable {
     let choices: [String]
     let type: String  // "int", "float" or "str"
     let `default`: String
+    /// What the app passes when the form leaves this at Default, where that
+    /// differs from sts's own default (e.g. "on" for --voice).
+    let appDefault: String?
     let help: String
 
     static let all: [STSOption] = {
@@ -39,7 +42,7 @@ enum STSEnvironment {
 }
 
 /// The options set in the Configuration form; anything not set is left to
-/// sts's own default. Values are what the form shows: text as typed, a
+/// the app's default for it, if it has one, or else sts's own. Values are what the form shows: text as typed, a
 /// choice, or "on"/"off" for switches.
 struct LaunchConfig: Codable, Equatable {
     var values: [String: String] = [:]
@@ -62,7 +65,8 @@ struct LaunchConfig: Codable, Equatable {
     /// sts's arguments for the set options, in the form's order.
     var arguments: [String] {
         STSOption.all.flatMap { option -> [String] in
-            guard let value = values[option.key], !value.isEmpty else { return [] }
+            guard let value = values[option.key].flatMap({ $0.isEmpty ? nil : $0 }) ?? option.appDefault
+            else { return [] }
             switch option.kind {
             case .text, .choice: return [option.flag, value]
             case .flag: return value == "on" ? [option.flag] : []

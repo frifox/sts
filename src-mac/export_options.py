@@ -43,6 +43,13 @@ DEFAULTS = {
     "final_after_silence": "7",
     "caption_interval_ms": "500",
     "web_host": "0.0.0.0 (all interfaces; see --local-only)",
+    "voice": "off",
+}
+
+# Where the app's default differs from sts's: what the app passes when the
+# form leaves an option at Default (and shows as its default).
+APP_DEFAULTS = {
+    "voice": "on",  # the app starts sts speaking
 }
 
 
@@ -79,7 +86,8 @@ def main() -> None:
             "kind": kind,
             "choices": [str(c) for c in action.choices or []],
             "type": action.type.__name__ if action.type in (int, float) else "str",
-            "default": described_default(action),
+            "default": APP_DEFAULTS.get(action.dest, described_default(action)),
+            "appDefault": APP_DEFAULTS.get(action.dest),
             "help": " ".join((action.help or "").split()),
         })
     json.dump(options, sys.stdout, indent=1, ensure_ascii=False)
