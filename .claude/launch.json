@@ -2,6 +2,21 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "sts",
+      "runtimeExecutable": ".venv-mlx/bin/sts",
+      "runtimeArgs": [
+        "--web-port",
+        "8080",
+        "--https-port",
+        "8443"
+      ],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      },
+      "port": 8080,
+      "autoPort": false
+    },
+    {
       "name": "make",
       "runtimeExecutable": "/usr/bin/python3",
       "runtimeArgs": [
