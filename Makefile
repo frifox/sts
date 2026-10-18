@@ -5,7 +5,9 @@
 #   make install   build, then install it in /Applications (the app must be quit)
 #   make test      run the tests (in .venv-mlx)
 #   make run       run sts from .venv-mlx in this terminal, its page on
-#                  http://localhost:8780/ (beside the app's 80/443)
+#                  http://localhost/ (ports 80/443: quit the app first). The
+#                  Claude app's server list can't run it there - it refuses
+#                  ports below 1024 - so open the page in the browser pane.
 
 APP        := Live Translate.app
 # The app's earlier names (STS, then Translate Live): removed on install.
@@ -44,4 +46,4 @@ test:
 	.venv-mlx/bin/python -m pytest -q tests
 
 run:
-	.venv-mlx/bin/sts --web-port 8780 --https-port 0
+	.venv-mlx/bin/sts
