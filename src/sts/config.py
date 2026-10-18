@@ -113,6 +113,11 @@ class TTSConfig:
     # with Qwen3 from the caption page's Voice dropdown. Its streaming, length and
     # tone settings are the qwen3_* ones below.
     drama3_model_name: str = "mlx-community/fish-audio-drama-3-4bit"
+    # Drama 3 speaks ~0.8x as fast as Qwen3 from the same reference, and follows
+    # its reference's pace: it gets the reference sped up by this much (pitch kept)
+    # to speak at Qwen3's pace - unless the voice has its own (VoiceEntry.
+    # drama3_reference_speed; measured: Default 1.29, Default 1.15 1.21, Default 1.25 1.18).
+    drama3_reference_speed: float = 1.22
     # What runs these models: "torch" (qwen-tts, PyTorch: .venv-qwen), "mlx"
     # (mlx-audio, Apple's MLX: .venv-mlx - the same models converted, about 2.5x
     # faster on Apple Silicon) or "auto" (whichever this environment has; see

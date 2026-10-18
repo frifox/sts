@@ -25,6 +25,7 @@ this extends; only loading, generating and choosing the reference differ.
 
 import json
 import threading
+from pathlib import Path
 from collections import deque
 
 import numpy as np
@@ -114,7 +115,7 @@ class Drama3Synthesizer(Qwen3TTSSynthesizer):
 
     # -- voices ------------------------------------------------------------------
 
-    def clone_voice(self, reference_wav_path: str, ref_text: str | None = None) -> None:
+    def clone_voice(self, reference_wav_path: str, ref_text: str | None = None, speed: float | None = None) -> None:
         if needs_english_reference(ref_text):
             english = cached_reference_path(self.cfg, reference_wav_path)
             if not english.is_file():
@@ -124,18 +125,19 @@ class Drama3Synthesizer(Qwen3TTSSynthesizer):
         else:
             reference = (reference_wav_path, ref_text)
             vlog("tts", "voice conditioning: clip + transcript")
-        self._use(reference)
+        self._use(reference, speed)
         self.cloned_speaker_wav = reference_wav_path
 
     def clone_from_entry(self, entry: VoiceEntry) -> None:
         if entry.kind == "lora":
             raise RuntimeError(f"voice {entry.name!r} is a trained (LoRA) Qwen3 voice: not for Drama 3")
-        self.clone_voice(str(entry.wav_path), entry.ref_text)
+        self.clone_voice(str(entry.wav_path), entry.ref_text, entry.drama3_reference_speed)
 
     def reset_voice(self) -> None:
         """No voice chosen: the bundled Default voice (Drama 3 has no built-in ones)."""
         folder = BUNDLED_VOICES_DIR / "default"
-        self._use((str(folder / "reference.wav"), json.loads((folder / "meta.json").read_text())["ref_text"]))
+        meta = json.loads((folder / "meta.json").read_text())
+        self._use((str(folder / "reference.wav"), meta["ref_text"]), meta.get("drama3_reference_speed"))
         self.cloned_speaker_wav = None
 
     def set_default_voice(self, voice: str) -> None:
@@ -143,11 +145,35 @@ class Drama3Synthesizer(Qwen3TTSSynthesizer):
         self.default_voice = self.cfg.resolve_voice(voice)
         self.reset_voice()
 
-    def _use(self, reference: tuple[str, str]) -> None:
+    def _use(self, reference: tuple[str, str], speed: float | None = None) -> None:
         self._pace_history.clear()
         self._clarity_history.clear()
         self._tone_history.clear()
-        self._reference = reference
+        audio, text = reference
+        self._reference = (self._paced(audio, speed or self.cfg.drama3_reference_speed), text)
+
+    def _paced(self, reference_wav_path: str, speed: float) -> str:
+        """The reference sped up by `speed`, pitch kept (made once, kept beside the
+        English references): Drama 3 imitates it at Qwen3's pace."""
+        if abs(speed - 1.0) < 0.005:
+            return reference_wav_path
+        import hashlib
+
+        import soundfile
+
+        from sts.audio.tempo import time_stretch
+
+        source = Path(reference_wav_path).read_bytes()
+        key = hashlib.sha1(source + f"{speed:.3f}".encode()).hexdigest()[:16]
+        path = Path(self.cfg.voice_library_dir) / ".drama3-references" / f"{key}-x{speed:.2f}.wav"
+        if not path.is_file():
+            audio, sample_rate = soundfile.read(reference_wav_path, dtype="float32", always_2d=False)
+            if audio.ndim > 1:
+                audio = audio.mean(axis=1)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            soundfile.write(str(path), time_stretch(audio, sample_rate, speed), sample_rate)
+        vlog("tts", f"Drama 3: reference at {speed:.2f}x its pace")
+        return str(path)
 
     def make_english_reference(self, reference_wav_path: str) -> str:
         raise NotImplementedError("English references are made by Qwen3 (a helper process)")

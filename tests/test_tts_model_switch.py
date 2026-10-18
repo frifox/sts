@@ -68,3 +68,20 @@ def test_drama3_clones_non_english_voices_from_their_english_reference():
     cfg.backend = "drama3"
     assert uses_english_reference(cfg, "Братья и сёстры.") and uses_english_reference(cfg, None)
     assert not uses_english_reference(cfg, "Brothers and sisters.")
+
+
+def test_a_voice_can_carry_its_own_drama3_reference_speed(tmp_path):
+    import json
+
+    from sts.tts.voice_library import BUNDLED_VOICES_DIR, VoiceLibrary
+
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"RIFF")
+    library = VoiceLibrary(tmp_path / "voices")
+    entry = library.save("Default 1.25", wav, "Text.")
+    meta = tmp_path / "voices" / entry.speaker_id / "meta.json"
+    meta.write_text(json.dumps({**json.loads(meta.read_text()), "drama3_reference_speed": 1.18}))
+    assert library.get("default-1-25").drama3_reference_speed == 1.18
+    assert library.save("Other", wav, "Text.").drama3_reference_speed is None  # TTSConfig's then
+    shipped = VoiceLibrary(tmp_path / "none", bundled_dir=BUNDLED_VOICES_DIR).get("default")
+    assert shipped.drama3_reference_speed == 1.29

@@ -61,6 +61,11 @@ class VoiceEntry:
     # "sentence_pause_s"), set when the voice is switched to - e.g. a shorter one
     # for a faster-speaking voice. None: switching to it leaves the pause as is.
     sentence_pause_s: float | None = None
+    # How much faster Drama 3 gets this voice's reference (meta.json
+    # "drama3_reference_speed"): Drama 3 imitates its reference's pace but speaks
+    # ~0.8x as fast as Qwen3 from the same one, so a sped-up copy brings it to
+    # Qwen3's pace. None: TTSConfig.drama3_reference_speed.
+    drama3_reference_speed: float | None = None
 
 
 # Voices that ship with the package (src/sts/bundled_voices/<id>/{reference.wav,meta.json}).
@@ -174,6 +179,7 @@ class VoiceLibrary:
             wav_path=wav_path,
             designed=bool(meta.get("designed")),
             sentence_pause_s=_seconds(meta.get("sentence_pause_s")),
+            drama3_reference_speed=_seconds(meta.get("drama3_reference_speed")) or None,
         )
 
     def list(self) -> list[VoiceEntry]:
