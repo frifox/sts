@@ -23,6 +23,16 @@
         "8765"
       ],
       "port": 8765
+    },
+    {
+      "name": "make install",
+      "runtimeExecutable": "/usr/bin/python3",
+      "runtimeArgs": [
+        "src-mac/make_page.py",
+        "8766",
+        "install"
+      ],
+      "port": 8766
     }
   ]
 }

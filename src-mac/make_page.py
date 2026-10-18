@@ -1,9 +1,9 @@
 """Runs `make` (build Live Translate.app and install it) and shows its output
-live on a web page - what the Claude app's "make" server entry starts
-(.claude/launch.json), so the tab it opens shows the build instead of
-nothing. Standard library only.
+live on a web page - what the Claude app's "make" and "make install" server
+entries start (.claude/launch.json), so the tab they open shows the build
+instead of nothing. Standard library only.
 
-    python3 src-mac/make_page.py [port]     (default 8765, or $PORT)
+    python3 src-mac/make_page.py [port] [target]     (default 8765, or $PORT; no target: `make`)
 
 The page follows the output as it comes, says whether it succeeded, and has
 a "Run again" button; the server keeps running until it's stopped.
@@ -23,6 +23,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# The make target to run, if any: read here, as the first run starts on import.
+TARGET = sys.argv[2:3]
+COMMAND = " ".join(["make", *TARGET])
 
 
 class Run:
@@ -40,7 +43,7 @@ class Run:
     def _run(self):
         env = dict(os.environ, PYTHONUNBUFFERED="1")
         process = subprocess.Popen(
-            ["make"], cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
+            ["make", *TARGET], cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
         )
         pending = b""
         while chunk := process.stdout.read(4096):
@@ -73,7 +76,7 @@ run = Run()
 run_lock = threading.Lock()
 
 PAGE = """<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><title>make - Live Translate</title>
+<html lang="en"><head><meta charset="utf-8"><title>COMMAND - Live Translate</title>
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; background: #0b0b0f; color: #ddd; font: 14px -apple-system, system-ui, sans-serif;
@@ -93,7 +96,7 @@ PAGE = """<!DOCTYPE html>
         white-space: pre-wrap; word-break: break-word; }
 </style></head>
 <body>
-<header><h1>make: build and install Live Translate.app</h1><span id="status">running</span>
+<header><h1>COMMAND: build and install Live Translate.app</h1><span id="status">running</span>
 <span id="elapsed"></span><button id="again" disabled>Run again</button></header>
 <pre id="out"></pre>
 <script>
@@ -114,7 +117,7 @@ PAGE = """<!DOCTYPE html>
       statusEl.textContent = LABEL[r.status] + (r.status === 'failed' ? ` (exit ${r.code})` : '');
       elapsed.textContent = r.seconds + ' s';
       again.disabled = r.status === 'running';
-      document.title = (r.status === 'running' ? '… ' : r.status === 'ok' ? '✓ ' : '✗ ') + 'make - Live Translate';
+      document.title = (r.status === 'running' ? '… ' : r.status === 'ok' ? '✓ ' : '✗ ') + 'COMMAND - Live Translate';
     } catch (e) { statusEl.textContent = 'not running'; statusEl.className = 'failed'; }
     setTimeout(poll, 500);
   }
@@ -126,7 +129,7 @@ PAGE = """<!DOCTYPE html>
   poll();
 </script>
 </body></html>
-"""
+""".replace("COMMAND", COMMAND)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -165,7 +168,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", 8765))
-    print(f"make output: http://127.0.0.1:{port}/", flush=True)
+    print(f"{COMMAND} output: http://127.0.0.1:{port}/", flush=True)
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 
 
