@@ -106,7 +106,7 @@ BRIDGE_SECONDS_PER_CHAR = 0.058  # the passage's usual pace (about 11 s)
 # the first STREAM_HOLD_S: a short sentence is often whole by then (generating
 # runs ~3x faster than speech), and is checked and, if bad, regenerated before
 # anyone hears it; a longer one starts playing then and streams the rest.
-STREAM_HOLD_S = 1.0
+STREAM_HOLD_S = 2.0
 STREAM_PIECE_S = 0.32  # how much audio each streamed piece holds (4 codec frames)
 # A take that runs past RAMBLE_FACTOR x (+ RAMBLE_MARGIN_S) the length its text
 # should take is rambling - babbling on past the end of the text. Caught while

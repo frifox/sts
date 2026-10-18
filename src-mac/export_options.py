@@ -28,7 +28,7 @@ DEFAULTS = {
     "qwen_temperature": "0.6",
     "qwen_accent_donor": "none, or last set on the page",
     "qwen_stream": "on",
-    "qwen_stream_hold_s": "1.0",
+    "qwen_stream_hold_s": "2.0",
     "qwen_clone_mode": "auto",
     "qwen_preload_presets": "on",
     "qwen_quality_retries": "0 (off)",

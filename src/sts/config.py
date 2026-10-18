@@ -174,7 +174,7 @@ class TTSConfig:
     # whole by then and checked as before; a longer one streams, and is cut off with
     # a fade if it starts rambling (see sts.tts.qwen3 STREAM_HOLD_S).
     qwen3_stream: bool = True
-    qwen3_stream_hold_s: float = 1.0
+    qwen3_stream_hold_s: float = 2.0
     qwen3_style_instruct: str = (
         "Speak in a calm, warm, measured tone, like a gentle preacher delivering a sermon. "
         "American English accent."

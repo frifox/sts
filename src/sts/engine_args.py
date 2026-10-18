@@ -96,7 +96,7 @@ def add_engine_arguments(parser: argparse.ArgumentParser) -> None:
         "--qwen-stream-hold-s",
         type=float,
         default=None,
-        help="How long a streamed sentence is held back before it starts playing (default 1.0): a short "
+        help="How long a streamed sentence is held back before it starts playing (default 2.0): a short "
         "sentence is usually whole by then, and is checked - and regenerated if bad - before anyone hears it",
     )
     parser.add_argument(
