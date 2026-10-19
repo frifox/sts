@@ -494,7 +494,9 @@
   #voice-shortcuts button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
   #voice-shortcuts button:hover { border-color: #777; z-index: 1; }
   #voice-shortcuts button.is-active { background: #1f4d2b; border-color: #3a9350; color: #d7ffdf; z-index: 1; }
-  #voice-shortcuts button.is-pending { animation: pulse 1s ease-in-out infinite; }
+  /* Clicked, waiting for the switch to be done: a spinner and an orange edge. */
+  #voice-shortcuts button.is-waiting { border-color: #e0864c; color: #ffe9bf; z-index: 1; }
+  #voice-shortcuts button .toggle-dot { margin-right: 0.4em; }
 
   #controls input, #controls select {
     font: inherit;
@@ -1959,18 +1961,38 @@
   // it's in the library; the one in use is lit, one being prepared pulses.
   const VOICE_SHORTCUTS = ['default', 'default-1-15', 'default-1-25'];
   const voiceShortcuts = document.getElementById('voice-shortcuts');
+  // A click shows a spinner on that button until the server says the voice is
+  // in use (a switch waits for the sentence being synthesized), then it lights.
+  const SHORTCUT_WAIT_MS = 20000;
+  let shortcutRequest = null;  // {id, timer}
+  const SPINNER = '<svg class="toggle-dot" viewBox="0 0 24 24" aria-hidden="true">'
+    + '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.4" opacity="0.35"/>'
+    + '<path class="voice-spin" d="M12 3a9 9 0 0 1 9 9" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>';
   function renderVoiceShortcuts() {
+    const inUse = lastStatus.preparing_speaker_id ? null : lastStatus.active_speaker_id;
+    if (shortcutRequest && shortcutRequest.id === inUse) {
+      clearTimeout(shortcutRequest.timer);
+      shortcutRequest = null;
+    }
     const voices = VOICE_SHORTCUTS.map((id) => savedVoices.find((voice) => voice.id === id)).filter(Boolean);
     voiceShortcuts.hidden = !voices.length;
     voiceShortcuts.replaceChildren(...voices.map((voice) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = voice.name;
-      button.classList.toggle('is-active', lastStatus.active_speaker_id === voice.id && !lastStatus.preparing_speaker_id);
-      button.classList.toggle('is-pending', lastStatus.preparing_speaker_id === voice.id);
+      const waiting = shortcutRequest?.id === voice.id || lastStatus.preparing_speaker_id === voice.id;
+      button.innerHTML = waiting ? SPINNER : '';
+      button.append(voice.name);
+      button.classList.toggle('is-active', !waiting && inUse === voice.id && !shortcutRequest);
+      button.classList.toggle('is-waiting', waiting);
       button.addEventListener('click', () => {
-        if (lastStatus.active_speaker_id === voice.id && !lastStatus.preparing_speaker_id) return;
+        if (inUse === voice.id && !shortcutRequest) return;
+        if (shortcutRequest) clearTimeout(shortcutRequest.timer);
+        shortcutRequest = {
+          id: voice.id,
+          timer: setTimeout(() => { shortcutRequest = null; renderVoiceShortcuts(); }, SHORTCUT_WAIT_MS),
+        };
         send('select_speaker', { speaker_id: voice.id });
+        renderVoiceShortcuts();
       });
       return button;
     }));
