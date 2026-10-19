@@ -163,13 +163,13 @@
   }
   .recent.empty > .finalize-clock { visibility: hidden; }
   .recent .recent-first, .recent .recent-sentence { opacity: 0.4; transition: opacity 0.3s ease; }
-  /* Marked "pending review" (Space): Enter finalizes it, Esc unmarks it. */
+  /* Marked "pending review" (Space): Space again finalizes it, Esc unmarks it. */
   .recent.review .recent-first, body.voice-on .recent.review .recent-first {
     opacity: 1; border-radius: 4px; outline: 2px solid #e0864c; outline-offset: 3px;
     background: rgba(224, 134, 76, 0.12);
   }
   .recent.review .recent-first::after {
-    content: "  \23CE finalize \00B7 esc"; font-size: 0.45em; color: #e0864c; vertical-align: middle; white-space: nowrap;
+    content: "  space finalize \00B7  esc";  /* (a CSS escape takes one space after it) */ font-size: 0.45em; color: #e0864c; vertical-align: middle; white-space: nowrap;
   }
   .recent.review.finalizing .recent-first { animation: pulse 1s ease-in-out infinite; }
   .recent.review.finalizing .recent-first::after { content: "  finalizing\2026"; }
@@ -1178,8 +1178,8 @@
   // -- Keyboard ----------------------------------------------------------------
   //   C / T / V   toggle Caption / Translate / Voice (as clicking them)
   //   Space       mark the first unfinished sentence "pending review" - its
-  //               automatic finalizing goes on as before
-  //   Enter       finalize the marked sentence now
+  //               automatic finalizing goes on as before; Space again
+  //               finalizes it now (so a double press finalizes straight away)
   //   Esc         unmark it
   // Not while typing in a field, or with a dialog open.
   let review = null;  // {text, finalizing}: the first unfinished sentence, marked
@@ -1204,16 +1204,18 @@
     }
     if (event.key === ' ') {
       event.preventDefault();  // no page scroll, no pressing a focused button
-      const first = showUnfinished ? recentSentences[0] : null;
-      if (!event.repeat && first) {
-        review = { text: first, finalizing: false };
-        renderRecentOriginal();
+      if (event.repeat) return;  // held down: one press
+      if (review) {  // marked already: finalize it now
+        if (!review.finalizing) {
+          review.finalizing = true;
+          send('finalize_now', { text: review.text });
+          renderRecentOriginal();
+        }
+        return;
       }
-    } else if (event.key === 'Enter' && review) {
-      event.preventDefault();
-      if (!event.repeat && !review.finalizing) {
-        review.finalizing = true;
-        send('finalize_now', { text: review.text });
+      const first = showUnfinished ? recentSentences[0] : null;
+      if (first) {
+        review = { text: first, finalizing: false };
         renderRecentOriginal();
       }
     } else if (event.key === 'Escape' && review) {

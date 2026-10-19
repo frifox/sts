@@ -53,7 +53,8 @@ Hover a header item to open its settings:
 
 Keys: **C** / **T** / **V** toggle Caption / Translate / Voice. **Space** marks
 the first unfinished sentence for review (it still finalizes by itself as
-usual), **Enter** finalizes it right away, **Esc** unmarks it.
+usual), **Space** again finalizes it right away - a double press finalizes
+at once - and **Esc** unmarks it.
 
 **Train voice** records the live speaker (up to 18 s) and clones them
 immediately; **Save Voice** keeps it in the voice library (`voices/`) for
