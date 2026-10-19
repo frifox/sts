@@ -39,6 +39,12 @@ from sts.tts.qwen3_mlx import _quiet_config_type_warning
 from sts.tts.voice_library import BUNDLED_VOICES_DIR, VoiceEntry
 
 DRAMA3_FIRST_CHUNK_FRAMES = 4  # a smaller first streamed piece: first audio sooner
+# How many of the sentences just spoken each new one gets as history (their
+# text and the audio codes generated for them): Drama 3 is built as a
+# conversation, and continues the delivery of the turns before - pace, energy,
+# loudness - instead of guessing anew for every sentence (its own long-text
+# mode keeps the previous chunk for that reason).
+HISTORY_SENTENCES = 2
 
 
 def needs_english_reference(ref_text: str | None) -> bool:
@@ -68,26 +74,54 @@ class _Drama3Model:
 
         return sum(array.nbytes for _, array in tree_flatten(self._model.parameters()))
 
-    def stream(self, text: str, ref_audio: str, ref_text: str, interval_s: float, max_tokens: int, **sampling):
-        results = self._model.generate(
-            text=text, ref_audio=ref_audio, ref_text=ref_text, max_tokens=max_tokens,
-            stream=True, streaming_interval=interval_s, first_chunk_frames=DRAMA3_FIRST_CHUNK_FRAMES, **sampling,
-        )
-        try:
-            for result in results:
-                audio = np.asarray(result.audio, dtype=np.float32).reshape(-1)
-                if audio.size:
-                    yield audio
-        finally:
-            close = getattr(results, "close", None)
-            if close:
-                close()
+    def stream(self, text: str, ref_audio: str, ref_text: str, interval_s: float, max_tokens: int,
+               history=(), temperature=None, top_k=None, top_p=None):
+        """The speech for `text` in pieces (np.float32) as it's generated, with
+        `history` - earlier turns, (text, codes) - before it in the prompt. When
+        it's done, `last_turns` holds this text's own turns, to be history for
+        later ones. mlx-audio's generate() does the same for the chunks of one
+        long text, but takes no history from outside: this is its loop, using
+        the model's own pieces (pinned mlx-audio version, see pyproject.toml)."""
+        import mlx.core as mx
+        from mlx_audio.tts.models.fish_drama3 import drama3 as d3
+        from mlx_audio.tts.models.fish_drama3.chunking import split_text
 
-    def generate(self, text: str, ref_audio: str, ref_text: str, max_tokens: int) -> np.ndarray:
-        pieces = [
-            np.asarray(result.audio, dtype=np.float32).reshape(-1)
-            for result in self._model.generate(text=text, ref_audio=ref_audio, ref_text=ref_text, max_tokens=max_tokens)
-        ]
+        model = self._model
+        sampling = (
+            d3.DEFAULT_TEMPERATURE if temperature is None else temperature,
+            d3.DEFAULT_TOP_K if top_k is None else top_k,
+            d3.DEFAULT_TOP_P if top_p is None else top_p,
+        )
+        voice = model._voice(ref_audio, ref_text)
+        interval = max(1, round(interval_s * self.frames_per_second))
+        model.codec.reset_streaming_state()
+        self.last_turns = []
+        turns = list(history)
+        for index, chunk in enumerate(split_text(text)):
+            frames, system_rows = model.build_frames(voice.references, turns[-HISTORY_SENTENCES:], chunk)
+            codes, emitted = [], 0
+            for frame in model._frames(frames, system_rows, voice, max_tokens, *sampling):
+                codes.append(frame)
+                due = DRAMA3_FIRST_CHUNK_FRAMES if index == 0 and emitted == 0 else interval
+                if len(codes) - emitted >= due:
+                    yield self._decode(codes[emitted:])
+                    emitted = len(codes)
+            if len(codes) > emitted:
+                yield self._decode(codes[emitted:])
+            if codes:
+                turn = (chunk, mx.stack(codes, axis=1))
+                turns.append(turn)
+                self.last_turns.append(turn)
+
+    def _decode(self, codes) -> np.ndarray:
+        import mlx.core as mx
+
+        audio = self._model.codec.streaming_step(mx.stack(codes, axis=1)[None])[0, 0]
+        mx.eval(audio)
+        return np.asarray(audio, dtype=np.float32).reshape(-1)
+
+    def generate(self, text: str, ref_audio: str, ref_text: str, max_tokens: int, history=()) -> np.ndarray:
+        pieces = list(self.stream(text, ref_audio, ref_text, 30.0, max_tokens, history=history))
         return np.concatenate(pieces) if pieces else np.zeros(0, dtype=np.float32)
 
 
@@ -122,6 +156,7 @@ class Drama3Synthesizer(Qwen3TTSSynthesizer):
         self._lora_models: dict = {}
         self._active_lora_speaker_id: str | None = None
         self._reference: tuple[str, str] | None = None  # (recording, its transcript) the voice is cloned from
+        self._history: deque = deque(maxlen=HISTORY_SENTENCES)  # (text, codes) of the sentences just spoken
         self.reset_voice()
 
     # -- voices ------------------------------------------------------------------
@@ -162,6 +197,7 @@ class Drama3Synthesizer(Qwen3TTSSynthesizer):
         self._tone_history.clear()
         audio, text = reference
         self._reference = (self._paced(audio, speed or self.cfg.drama3_reference_speed), text)
+        self._history.clear()  # a new voice: the last one's sentences are no context for it
 
     def _paced(self, reference_wav_path: str, speed: float) -> str:
         """The reference sped up by `speed`, pitch kept (made once, kept beside the
@@ -214,12 +250,16 @@ class Drama3Synthesizer(Qwen3TTSSynthesizer):
             # top-k 60 stalled in 1 of 10 (temperature 1.0 too, but it changes the
             # delivery more).
             sampling.update(top_p=0.9, top_k=60)
-        return self.model.stream(text, audio, ref_text, STREAM_PIECE_S, **sampling)
+        return self.model.stream(text, audio, ref_text, STREAM_PIECE_S, history=list(self._history), **sampling)
+
+    def _spoken_whole(self, text: str) -> None:
+        self._history.extend(self.model.last_turns)
 
     def _generate_once(self, text: str) -> tuple[np.ndarray, int]:
         audio, ref_text = self._reference
         with self._lock:
-            return self.model.generate(text, audio, ref_text, **self._sampling(text)), self.model.sample_rate
+            return (self.model.generate(text, audio, ref_text, history=list(self._history), **self._sampling(text)),
+                    self.model.sample_rate)
 
     # -- not in Drama 3 ------------------------------------------------------------
 

@@ -618,6 +618,7 @@ class Qwen3TTSSynthesizer:
                 if tail.size:
                     yield tail, sample_rate, True
                 self._remember_take(np.concatenate(raw), sample_rate, text)
+                self._spoken_whole(text)
                 return
             # Whole within the hold: checked like an unstreamed take, regenerated if bad.
             audio = np.concatenate(raw) if raw else np.zeros(0, dtype=np.float32)
@@ -630,8 +631,15 @@ class Qwen3TTSSynthesizer:
                             f"caught before playing, regenerating: {text[:60]!r}")
                 continue
             self._remember_take(audio, sample_rate, text)
+            if plausible:
+                self._spoken_whole(text)
             yield self._finish_whole(audio, sample_rate), sample_rate, False
             return
+
+    def _spoken_whole(self, text: str) -> None:
+        """`text` was just spoken in full, by the take last generated (not one
+        cut off, or let through only because every try was bad). Drama 3 keeps
+        it as context for the next sentence; Qwen3 has no use for it."""
 
     def _stream_generate(self, text: str, attempt: int = 0):
         """The model's pieces of `text` (np.float32), as they're generated

@@ -29,7 +29,9 @@ sound card / browser mic -> GigaAM captions (ru) -> MADLAD-400 (en) -> XTTS / Qw
   sentence starts playing ~1 s in) or Qwen3-TTS (cloning, preset voices,
   voices designed from a text description). On MLX, Fish Audio Drama 3
   (44.1 kHz, more expressive, cloning only) can be switched in from the Voice
-  dropdown (**Voice model**). Every sentence is brought to the same loudness.
+  dropdown (**Voice model**); it gets the last two sentences it spoke as
+  context, so the delivery carries on from one sentence to the next. Every
+  sentence is brought to the same loudness.
 - **Bible references** — a spoken reference ("Матфея 1:15") shows a badge
   with the reference; clicking it opens the verse in Russian (Synodal) and
   English (KJV) from a bundled offline dataset.
