@@ -68,10 +68,10 @@ class _Drama3Model:
 
         return sum(array.nbytes for _, array in tree_flatten(self._model.parameters()))
 
-    def stream(self, text: str, ref_audio: str, ref_text: str, interval_s: float, max_tokens: int):
+    def stream(self, text: str, ref_audio: str, ref_text: str, interval_s: float, max_tokens: int, **sampling):
         results = self._model.generate(
             text=text, ref_audio=ref_audio, ref_text=ref_text, max_tokens=max_tokens,
-            stream=True, streaming_interval=interval_s, first_chunk_frames=DRAMA3_FIRST_CHUNK_FRAMES,
+            stream=True, streaming_interval=interval_s, first_chunk_frames=DRAMA3_FIRST_CHUNK_FRAMES, **sampling,
         )
         try:
             for result in results:
@@ -92,6 +92,17 @@ class _Drama3Model:
 
 
 class Drama3Synthesizer(Qwen3TTSSynthesizer):
+    # Drama 3 now and then stops talking partway through a take - after a
+    # broken-off opening like "I just, uh, for us, ..." it did in ~40% of takes:
+    # the first few words (0.3-4 s of a ~10 s sentence), then silence to the end
+    # (see STALL_S). So a streamed take is held back until 60% of its expected
+    # length has been spoken (generating runs ~2.7x faster than speech: ~2 s for
+    # a long sentence); one that stops before that is caught before anything
+    # plays, and regenerated - up to 5 takes in all.
+    RELEASE_FRACTION = 0.6
+    CUT_SHORT_FRACTION = 0.6
+    STREAM_ATTEMPTS = 5
+
     def __init__(self, cfg: TTSConfig):  # not super().__init__: that would load Qwen3's models
         self.cfg = cfg
         self.engine = "mlx"
@@ -192,11 +203,18 @@ class Drama3Synthesizer(Qwen3TTSSynthesizer):
         seconds = max(MIN_CAP_SECONDS, len(text) * self.cfg.qwen3_max_seconds_per_char)
         return {"max_tokens": int(seconds * self.model.frames_per_second)}
 
-    def _stream_generate(self, text: str):
+    def _stream_generate(self, text: str, attempt: int = 0):
         audio, ref_text = self._reference
         from sts.tts.qwen3 import STREAM_PIECE_S
 
-        return self.model.stream(text, audio, ref_text, STREAM_PIECE_S, **self._sampling(text))
+        sampling = self._sampling(text)
+        if attempt:
+            # A retry (the last try stopped talking partway): broader sampling. On a
+            # sentence that stalled in 4 of 10 takes with the recipe, top-p 0.9 /
+            # top-k 60 stalled in 1 of 10 (temperature 1.0 too, but it changes the
+            # delivery more).
+            sampling.update(top_p=0.9, top_k=60)
+        return self.model.stream(text, audio, ref_text, STREAM_PIECE_S, **sampling)
 
     def _generate_once(self, text: str) -> tuple[np.ndarray, int]:
         audio, ref_text = self._reference

@@ -33,13 +33,15 @@ class _FakeModel:
         self.closed = 0
 
     def stream_voice_clone(self, text, prompt, interval_s, language="English", **sampling):
-        seconds = self.takes.pop(0)
+        take = self.takes.pop(0)
+        seconds, talks_for = take if isinstance(take, tuple) else (take, take)  # (length, how long it talks)
         n = int(self.piece_s * SR)
         made = 0
         try:
             while made < seconds * SR:
                 time.sleep(self.every_s)
                 piece = (0.1 * np.sin(np.arange(made, made + n) * 0.05)).astype(np.float32)
+                piece[np.arange(made, made + n) >= talks_for * SR] = 0.0  # stopped talking: silence
                 made += n
                 yield piece
         finally:
@@ -107,3 +109,19 @@ def test_streamed_pieces_filter_seamlessly(qwen3):
     pieced = qwen3._StreamPost(SR, 1.0, fir)
     parts = [pieced.process(chunk) for chunk in np.array_split(audio, 7)] + [pieced.finish()]
     assert np.allclose(np.concatenate(parts), one, atol=1e-6)
+
+
+def test_a_take_that_stops_talking_partway_is_regenerated_before_playing(qwen3):
+    text = "These are the words of our Lord Jesus Christ, and we will read them together."
+    model = _FakeModel([(8.0, 0.6), 5.0])  # first: 0.6 s of speech, then silence; second: whole
+    pieces = list(_synth(qwen3, model).stream_chunks(text))
+    audio = np.concatenate([p for p, _, _ in pieces])
+    assert len(audio) / SR > 4.5 and model.closed == 2  # the second take, all of it
+
+
+def test_one_that_stops_talking_while_playing_is_cut_off_not_played_as_silence(qwen3):
+    text = "These are the words of our Lord Jesus Christ, and we will read them together."
+    model = _FakeModel([(15.0, 3.5)], every_s=0.02)
+    pieces = list(_synth(qwen3, model).stream_chunks(text))
+    audio = np.concatenate([p for p, _, _ in pieces])
+    assert len(audio) / SR < 3.5 + qwen3.STALL_S + 0.6  # not the 11.5 s of silence after it

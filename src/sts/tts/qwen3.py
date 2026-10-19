@@ -111,6 +111,12 @@ STREAM_PIECE_S = 0.32  # how much audio each streamed piece holds (4 codec frame
 # A take that runs past RAMBLE_FACTOR x (+ RAMBLE_MARGIN_S) the length its text
 # should take is rambling - babbling on past the end of the text. Caught while
 # still held back it's regenerated; once playing, it's cut off with a short fade.
+# A take that falls silent for STALL_S once it has started talking, before
+# STALL_UNDER of its expected length is spoken, has stopped talking partway -
+# Drama 3 sometimes does, generating silence to the end instead: regenerated if
+# still held back, cut off (no silence played) if already playing.
+STALL_S = 1.5
+STALL_UNDER = 0.75
 RAMBLE_FACTOR = 1.6
 RAMBLE_MARGIN_S = 0.8
 STREAM_FADE_S = 0.1  # kept back from each piece so a cut-off can fade out
@@ -528,32 +534,46 @@ class Qwen3TTSSynthesizer:
         pace = statistics.median(self._pace_history) if len(self._pace_history) >= 5 else TYPICAL_SECONDS_PER_CHAR
         return max(0.8, len(text) * pace)
 
+    # A streamed take is also held back until this share of the text's expected
+    # length is generated (0: just STREAM_HOLD_S), and a take that ends short of
+    # CUT_SHORT_FRACTION of it is regenerated, up to STREAM_ATTEMPTS times in all
+    # (None: TTSConfig.qwen3_max_retries + 1). Qwen3 needs neither; Drama 3 does.
+    RELEASE_FRACTION = 0.0
+    CUT_SHORT_FRACTION = 0.0
+    STREAM_ATTEMPTS: int | None = None
+
     def _stream_sentence(self, text: str):
         expected = self._expected_seconds(text)
         ramble_s = expected * RAMBLE_FACTOR + RAMBLE_MARGIN_S
         hold_s = self.cfg.qwen3_stream_hold_s
-        attempts = self.cfg.qwen3_max_retries + 1
+        release_s = expected * self.RELEASE_FRACTION
+        attempts = self.STREAM_ATTEMPTS or self.cfg.qwen3_max_retries + 1
         for attempt in range(attempts):
             last = attempt == attempts - 1
             raw: list[np.ndarray] = []  # the whole take as generated, for the checks and the voice's history
             held: list[np.ndarray] = []
             generated_s = 0.0
             post = None  # _StreamPost once playing
-            rambled = False
+            rambled = stalled = False
             sample_rate = getattr(self.model, "sample_rate", 24_000)
+            speech = _SpeechTracker(sample_rate)
             started = time.monotonic()
             with self._lock:
-                pieces = self._stream_generate(text)
+                pieces = self._stream_generate(text, attempt)
                 try:
                     for piece in pieces:
                         raw.append(piece)
                         generated_s += len(piece) / sample_rate
+                        speech.add(piece)
                         if generated_s > ramble_s:
                             rambled = True
                             break
+                        if speech.silent_for >= STALL_S and speech.spoken_s < STALL_UNDER * expected:
+                            stalled = True  # stopped talking partway through the text
+                            break
                         if post is None:
                             held.append(piece)
-                            if time.monotonic() - started >= hold_s:
+                            if time.monotonic() - started >= hold_s and speech.spoken_s >= release_s:
                                 post = self._stream_post(np.concatenate(held), sample_rate)
                                 out = post.process(np.concatenate(held))
                                 held = []
@@ -565,6 +585,18 @@ class Qwen3TTSSynthesizer:
                                 yield out, sample_rate, True
                 finally:
                     pieces.close()
+            if stalled:
+                said = f"{speech.spoken_s:.1f}s of speech for {len(text)} characters, expected about {expected:.1f}s"
+                if post is None and not last:
+                    vlog("tts", f"stopped talking partway ({said}); caught before playing, regenerating: {text[:60]!r}")
+                    continue
+                if post is not None:
+                    vlog("tts", f"stopped talking partway ({said}); the rest of the take cut off: {text[:60]!r}")
+                    yield post.fade_out(), sample_rate, True
+                    return
+                audio = trim_silence(np.concatenate(raw), sample_rate)  # every try stalled: what was said
+                yield self._finish_whole(audio, sample_rate), sample_rate, False
+                return
             if rambled:
                 if post is None and not last:
                     vlog("tts", f"rambling ({generated_s:.1f}s for {len(text)} characters, expected about "
@@ -591,6 +623,8 @@ class Qwen3TTSSynthesizer:
             audio = np.concatenate(raw) if raw else np.zeros(0, dtype=np.float32)
             min_spc = min_plausible_seconds_per_char(self._pace_history, self.cfg.qwen3_min_seconds_per_char)
             plausible = speech_length_plausible(text, len(audio) / sample_rate, min_spc, self.cfg.qwen3_max_seconds_per_char)
+            if plausible and len(text) >= MIN_CHARS_TO_JUDGE and speech.spoken_s < self.CUT_SHORT_FRACTION * expected:
+                plausible = False  # the speech ended well short of the text: the rest wasn't said
             if not plausible and not last:
                 vlog("tts", f"suspicious speech length ({len(audio) / sample_rate:.1f}s for {len(text)} characters), "
                             f"caught before playing, regenerating: {text[:60]!r}")
@@ -599,8 +633,9 @@ class Qwen3TTSSynthesizer:
             yield self._finish_whole(audio, sample_rate), sample_rate, False
             return
 
-    def _stream_generate(self, text: str):
-        """The model's pieces of `text` (np.float32), as they're generated."""
+    def _stream_generate(self, text: str, attempt: int = 0):
+        """The model's pieces of `text` (np.float32), as they're generated
+        (`attempt`: which try at this sentence, from 0)."""
         if self._prompt is not None:
             return self.model.stream_voice_clone(
                 text, self._prompt, STREAM_PIECE_S, language="English", **self._sampling(text)
@@ -733,6 +768,43 @@ class Qwen3TTSSynthesizer:
                     **self._sampling(text),
                 )
         return np.asarray(wavs[0], dtype=np.float32), sample_rate
+
+
+class _SpeechTracker:
+    """Where the speech is in a take that arrives in pieces: how far into it
+    the last speech goes (`spoken_s`) and how long it's been silent since
+    (`silent_for`). Speech: 20 ms frames above 3% of the loudest so far."""
+
+    def __init__(self, sample_rate: int):
+        self.sample_rate = sample_rate
+        self.frame = max(1, sample_rate // 50)
+        self.frames = 0
+        self.peak = 0.0
+        self.last_speech = None  # frames into the take where the last speech ends
+        self.pending = np.zeros(0, dtype=np.float32)
+
+    def add(self, piece: np.ndarray) -> None:
+        audio = np.concatenate([self.pending, piece])
+        count = len(audio) // self.frame
+        self.pending = audio[count * self.frame:]
+        if not count:
+            return
+        rms = np.sqrt(np.mean(audio[: count * self.frame].reshape(count, self.frame) ** 2, axis=1))
+        self.peak = max(self.peak, float(rms.max()))
+        loud = np.nonzero(rms > max(0.003, 0.03 * self.peak))[0]
+        if loud.size:
+            self.last_speech = self.frames + int(loud[-1]) + 1
+        self.frames += count
+
+    @property
+    def spoken_s(self) -> float:
+        return (self.last_speech or 0) * self.frame / self.sample_rate
+
+    @property
+    def silent_for(self) -> float:
+        if self.last_speech is None:
+            return 0.0  # not started talking yet
+        return (self.frames - self.last_speech) * self.frame / self.sample_rate
 
 
 class _StreamPost:
