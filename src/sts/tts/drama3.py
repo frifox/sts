@@ -136,6 +136,12 @@ class Drama3Synthesizer(Qwen3TTSSynthesizer):
     RELEASE_FRACTION = 0.6
     CUT_SHORT_FRACTION = 0.6
     STREAM_ATTEMPTS = 5
+    # A take is cut off as rambling past 2.2x its expected length (+0.8 s), not
+    # Qwen3's 1.6x: Drama 3 acts out a stammering sentence ("So, so, how, how do
+    # we, ...") with real hesitations, and its good takes of one ran to 1.8x
+    # (Qwen3 reads it at its usual pace). Its runaway takes of it were 2.5-3x;
+    # in 150 takes of 30 sermon sentences nothing else passed 1.7x.
+    RAMBLE_FACTOR = 2.2
 
     def __init__(self, cfg: TTSConfig):  # not super().__init__: that would load Qwen3's models
         self.cfg = cfg

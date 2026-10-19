@@ -540,11 +540,12 @@ class Qwen3TTSSynthesizer:
     # (None: TTSConfig.qwen3_max_retries + 1). Qwen3 needs neither; Drama 3 does.
     RELEASE_FRACTION = 0.0
     CUT_SHORT_FRACTION = 0.0
+    RAMBLE_FACTOR = RAMBLE_FACTOR
     STREAM_ATTEMPTS: int | None = None
 
     def _stream_sentence(self, text: str):
         expected = self._expected_seconds(text)
-        ramble_s = expected * RAMBLE_FACTOR + RAMBLE_MARGIN_S
+        ramble_s = expected * self.RAMBLE_FACTOR + RAMBLE_MARGIN_S
         hold_s = self.cfg.qwen3_stream_hold_s
         release_s = expected * self.RELEASE_FRACTION
         attempts = self.STREAM_ATTEMPTS or self.cfg.qwen3_max_retries + 1
