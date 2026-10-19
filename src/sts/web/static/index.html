@@ -41,22 +41,7 @@
   #portrait-panel {
     background: linear-gradient(to right, #0b0b0f calc(50% - 1px), #222 0 calc(50% + 1px), #000 0);
   }
-  #portrait-panel.hide-translated { background: #0b0b0f; }
-  #portrait-panel.hide-original { background: #000; }
   #original-panel[hidden], #translated-panel[hidden], #portrait-panel[hidden] { display: none; }
-
-  #idle-message {
-    display: none;
-    flex: 1 1 auto;
-    align-items: center;
-    justify-content: center;
-    background: #000;
-    color: #3a3a40;
-    font-size: clamp(1.4rem, 4vw, 2.6rem);
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-  }
-  #idle-message.show { display: flex; }
 
   .lines {
     height: 100%;
@@ -208,26 +193,6 @@
   /* Each later sentence's own clock, left of its first line (portrait only). */
   #portrait-grid .recent .recent-sentence .finalize-clock { top: 0.32em; }
   #original-lines .recent .recent-sentence .finalize-clock { display: none; }
-
-  /* Portrait mode has no separate original/translated panels to hide (both
-     columns live in one shared panel) - Caption/Translate turning off is
-     applied to just that column instead: its own cells, verse banner
-     and recall chip, and the grid collapses to a single column so the
-     remaining side takes the full width, same as when a whole landscape
-     panel is hidden and the other one gets all the space. */
-  #portrait-panel.hide-original #verse-banner-portrait-ru,
-  #portrait-panel.hide-original #verse-chip-portrait-ru,
-  #portrait-panel.hide-original .portrait-grid .original,
-  #portrait-panel.hide-translated #verse-banner-portrait-en,
-  #portrait-panel.hide-translated #verse-chip-portrait-en,
-  #portrait-panel.hide-translated .portrait-grid .translated {
-    display: none;
-  }
-
-  #portrait-panel.hide-original .portrait-grid,
-  #portrait-panel.hide-translated .portrait-grid {
-    grid-template-columns: 1fr;
-  }
 
   #indicators {
     flex: 0 0 auto;
@@ -947,7 +912,6 @@
         <div class="portrait-grid" id="portrait-grid"></div>
       </div>
     </div>
-    <div id="idle-message">System Idle</div>
   </div>
 
 
@@ -996,8 +960,7 @@
   const HISTORY_RETENTION = 2;
 
   // Per-stage: true while that stage's engine is off (Caption -> asr,
-  // Translate -> translate, Voice -> voice), or for all three while the
-  // "System Idle" state is showing. An indicator whose stage is off reads
+  // Translate -> translate, Voice -> voice). An indicator whose stage is off reads
   // "–" and ignores any reading still in flight, rather than leaving the
   // last number up as if it were current - e.g. an engine switched off
   // mid-speech. See updatePanelVisibility().
@@ -1715,7 +1678,6 @@
   const originalPanel = document.getElementById('original-panel');
   const translatedPanel = document.getElementById('translated-panel');
   const portraitPanel = document.getElementById('portrait-panel');
-  const idleMessage = document.getElementById('idle-message');
   const renderModeButtons = document.querySelectorAll('.render-mode button[data-mode]');
 
   // Per-viewer display preference, not an operator setting - each connected
@@ -1757,18 +1719,17 @@
     try { localStorage.setItem('sts-render-mode', renderMode); } catch { /* ignore */ }
   }
 
+  // Both panes are always shown (the layout picks which); Caption and
+  // Translate only switch their stage on and off. A stage that's off has its
+  // speed indicator blanked.
   function updatePanelVisibility() {
     const portrait = renderMode === 'portrait';
-    originalPanel.hidden = portrait || !lastStatus.active;
-    translatedPanel.hidden = portrait || !lastStatus.translation_enabled;
-    portraitPanel.hidden = !portrait || (!lastStatus.active && !lastStatus.translation_enabled);
-    portraitPanel.classList.toggle('hide-original', !lastStatus.active);
-    portraitPanel.classList.toggle('hide-translated', !lastStatus.translation_enabled);
-    const idle = !lastStatus.active && !lastStatus.translation_enabled;
-    idleMessage.classList.toggle('show', idle);
-    rtfOff.asr = idle || !lastStatus.active;
-    rtfOff.translate = idle || !lastStatus.translation_enabled;
-    rtfOff.voice = idle || !lastStatus.voice_enabled;
+    originalPanel.hidden = portrait;
+    translatedPanel.hidden = portrait;
+    portraitPanel.hidden = !portrait;
+    rtfOff.asr = !lastStatus.active;
+    rtfOff.translate = !lastStatus.translation_enabled;
+    rtfOff.voice = !lastStatus.voice_enabled;
     for (const [stage, off] of Object.entries(rtfOff)) {
       if (!off) continue;
       const el = document.getElementById(RTF_ELEMENT_IDS[stage]);
