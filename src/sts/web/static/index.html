@@ -168,11 +168,7 @@
     opacity: 1; border-radius: 4px; outline: 2px solid #e0864c; outline-offset: 3px;
     background: rgba(224, 134, 76, 0.12);
   }
-  .recent.review .recent-first::after {
-    content: "  space finalize \00B7  esc";  /* (a CSS escape takes one space after it) */ font-size: 0.45em; color: #e0864c; vertical-align: middle; white-space: nowrap;
-  }
   .recent.review.finalizing .recent-first { animation: pulse 1s ease-in-out infinite; }
-  .recent.review.finalizing .recent-first::after { content: "  finalizing\2026"; }
   .recent.pending .recent-first { opacity: 1; }
   #portrait-grid .recent .recent-sentence.pending { opacity: 1; }
   /* With Voice on only the sentence being spoken is bright (highlightLines),
