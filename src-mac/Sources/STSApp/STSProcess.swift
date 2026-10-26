@@ -21,6 +21,8 @@ final class STSProcess {
         process.currentDirectoryURL = dataDirectory
         var env = ProcessInfo.processInfo.environment
         env["PYTHONUNBUFFERED"] = "1"  // console output as it happens, not in 4 KB blocks
+        // Nothing written into the (signed) app: build.sh compiles every module beforehand.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         process.environment = env
 
         let pipe = Pipe()

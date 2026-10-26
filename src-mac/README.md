@@ -31,6 +31,7 @@ minutes, a few GB); later builds reuse them and only reinstall sts itself.
 | File | |
 |---|---|
 | `build.sh` | The build: Python, sts, the Swift app, icon, Info.plist, signing |
+| `sign_app.py`, `entitlements.plist` | Developer ID signing for a release: every binary inside, hardened runtime, the app's entitlements |
 | `Package.swift`, `Sources/STSApp/` | The app (Swift, AppKit + WebKit) |
 | `export_options.py` | Writes sts's command-line options as `options.json` for the Configuration form |
 | `make_icon.swift` | Draws the app icon |
@@ -62,6 +63,35 @@ minutes, a few GB); later builds reuse them and only reinstall sts itself.
    and `Info.plist` written.
 4. **Signing**: ad hoc (`codesign --sign -`), then registered with Launch
    Services so Finder and the Dock pick up the new build.
+
+The oldest macOS the app runs on (`LSMinimumSystemVersion`) is the newest any
+installed wheel was built for: pip installs mlx's build for the macOS doing
+the build (14, 15 or 26), so a build made on macOS 26 needs macOS 26.
+
+## Releases
+
+`.github/workflows/macos-release.yml` builds a release on GitHub (a macOS 15
+runner, so it runs on macOS 15 and later): on a pushed tag named after the
+day (`2026-10-25`), or from the Actions tab (**Run workflow**: tags the
+commit with the date given, or today's). It runs `build.sh` with
+
+- `STS_VERSION=2026.10.25`: the app's version (build number 20261025);
+- `STS_SIGN_IDENTITY`: the Developer ID Application certificate, imported into
+  a temporary keychain from the `MACOS_CERT_P12_BASE64` / `MACOS_CERT_PASSWORD`
+  secrets. `sign_app.py` then signs each of the ~270 binaries in the bundled
+  Python and the app with the hardened runtime and a secure timestamp;
+  executables (the app, `python3.11`) get `entitlements.plist`: run-time code
+  for ctypes/cffi, libraries that load each other, and the microphone.
+
+then notarizes the app (`notarytool`, with the `NOTARY_KEY_P8_BASE64` /
+`NOTARY_KEY_ID` / `NOTARY_ISSUER_ID` App Store Connect API key), staples the
+ticket, and publishes `LiveTranslate-<tag>-arm64.zip` (~520 MB, **Live
+Translate.app** inside) as the tag's release. Rerunning it for a tag replaces
+the zip.
+
+Python must not write into a signed app (it would break the seal): the build
+compiles every module first, and the app runs sts with
+`PYTHONDONTWRITEBYTECODE=1`.
 
 ## What the app does
 

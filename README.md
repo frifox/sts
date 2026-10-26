@@ -145,6 +145,13 @@ make install            # builds it, then installs it in /Applications (same as 
 Quit the app first: both steps replace an app that may be running (`make` stops
 and says so if it is).
 
+**Releases**: pushing a tag named after the day (`git tag 2026-10-25 && git push
+origin 2026-10-25`), or running the **macOS release** workflow from GitHub's
+Actions tab, builds the app on GitHub, signs it with the Developer ID
+certificate, notarizes it and publishes `LiveTranslate-2026-10-25-arm64.zip`
+(with **Live Translate.app** inside) as that tag's release
+(`.github/workflows/macos-release.yml`).
+
 The first build downloads a standalone Python 3.11
 ([python-build-standalone](https://github.com/astral-sh/python-build-standalone))
 and installs `sts[mlx]` into it; later builds reuse it and reinstall sts.

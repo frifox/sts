@@ -3,6 +3,11 @@
 # with sts and its MLX voice engine installed, ad-hoc signed. The Python is
 # kept in src-mac/build/python between builds, so later builds only reinstall
 # sts itself (and anything new in its dependencies).
+#
+# For a release (.github/workflows/macos-release.yml):
+#   STS_VERSION=2026.10.25        the app's version (default 0.1.0)
+#   STS_SIGN_IDENTITY="Developer ID Application: ..."
+#                                 signed for distribution (sign_app.py) instead of ad hoc
 set -euo pipefail
 cd "${0:A:h}"
 repo="${PWD:h}"
@@ -31,6 +36,22 @@ $py -m pip install --disable-pip-version-check -q "${repo}[mlx]"
 $py -m pip install --disable-pip-version-check -q --no-deps --force-reinstall "$repo"
 rm -rf "$repo/build"
 
+version=${STS_VERSION:-0.1.0}
+build_number=${${STS_VERSION:+${version//./}}:-1}  # 2026.10.25 -> 20261025
+# Python writes nothing into the app at run time (STSProcess sets
+# PYTHONDONTWRITEBYTECODE): every module is compiled here, before signing.
+$py -m compileall -q -j 0 $runtime/lib >/dev/null || true
+
+# The oldest macOS the app runs on: the newest any installed wheel was built for
+# (pip picks mlx's build for the macOS it runs on: 14, 15 or 26).
+min_macos=$($py - <<'PY'
+import glob, re
+tags = [m.groups() for wheel in glob.glob("build/python/lib/python3.11/site-packages/*.dist-info/WHEEL")
+        for m in re.finditer(r"macosx_(\d+)_(\d+)", open(wheel).read())]
+print("%s.%s" % max(((int(a), int(b)) for a, b in tags), default=(13, 0)))
+PY
+)
+
 swift build -c release
 app="build/Live Translate.app"
 rm -rf "$app"
@@ -53,9 +74,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>LiveTranslate</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
-    <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>CFBundleShortVersionString</key><string>${version}</string>
+    <key>CFBundleVersion</key><string>${build_number}</string>
+    <key>LSMinimumSystemVersion</key><string>${min_macos}</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <!-- sts runs as a child of the app, so macOS asks for the mic on the app's behalf -->
@@ -65,7 +86,11 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - "$app"
+if [[ -n ${STS_SIGN_IDENTITY:-} ]]; then
+    $py sign_app.py "$app" "$STS_SIGN_IDENTITY"
+else
+    codesign --force --sign - "$app"
+fi
 # Finder and the Dock cache an app's icon by path: have them pick up this build's.
 touch "$app"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"

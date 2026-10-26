@@ -1,0 +1,129 @@
+# Builds Live Translate.app, signs it with the Developer ID certificate,
+# notarizes and staples it, and publishes it as a GitHub release:
+# LiveTranslate-<tag>-arm64.zip, with "Live Translate.app" inside.
+#
+# Release with a tag named after the day (YYYY-MM-DD):
+#   git tag 2026-10-25 && git push origin 2026-10-25
+# or run it from the Actions tab (Run workflow): it tags the chosen commit with
+# the date given, or today's (UTC).
+#
+# Repository secrets (or variables): MACOS_CERT_P12_BASE64, MACOS_CERT_PASSWORD
+# (the Developer ID Application certificate, exported as .p12, base64), and
+# NOTARY_KEY_P8_BASE64, NOTARY_KEY_ID, NOTARY_ISSUER_ID (an App Store Connect
+# API key for notarytool).
+name: macOS release
+
+on:
+  push:
+    tags: ["[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, YYYY-MM-DD (empty: today, UTC)"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-release-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Apple Silicon. The runner's macOS is also the oldest the app runs on: pip
+    # installs mlx's build for it (14, 15 or 26; see build.sh).
+    runs-on: macos-15
+    timeout-minutes: 150
+    env:
+      APP: Live Translate.app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then tag="$GITHUB_REF_NAME"; else tag="${INPUT_TAG:-$(date -u +%F)}"; fi
+          if [[ ! "$tag" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || ! date -j -f %F "$tag" >/dev/null 2>&1; then
+            echo "::error::release tag must be a date, YYYY-MM-DD (got '$tag')"; exit 1
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "ZIP=LiveTranslate-$tag-arm64.zip" >> "$GITHUB_ENV"
+
+      - name: Cache the standalone Python download
+        uses: actions/cache@v4
+        with:
+          path: src-mac/.cache
+          key: python-standalone-${{ hashFiles('src-mac/build.sh') }}
+
+      - name: Cache pip downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/pip
+          key: pip-${{ hashFiles('pyproject.toml') }}
+          restore-keys: pip-
+
+      - name: Import the signing certificate
+        env:
+          CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 || vars.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD || vars.MACOS_CERT_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          echo "$CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          identity="$(security find-identity -v -p codesigning "$keychain" | grep -m1 'Developer ID Application' | sed -E 's/.*"(.*)"/\1/')"
+          if [[ -z "$identity" ]]; then echo "::error::no Developer ID Application identity in MACOS_CERT_P12_BASE64"; exit 1; fi
+          echo "Signing as: $identity"
+          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      - name: Build and sign
+        run: STS_VERSION="${TAG//-/.}" STS_SIGN_IDENTITY="$SIGN_IDENTITY" zsh src-mac/build.sh
+
+      - name: Notarize and staple
+        env:
+          NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 || vars.NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID || vars.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID || vars.NOTARY_ISSUER_ID }}
+        run: |
+          cd src-mac/build
+          key="$RUNNER_TEMP/notary.p8"
+          echo "$NOTARY_KEY_P8_BASE64" | base64 --decode > "$key"
+          auth=(--key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID")
+          ditto -c -k --keepParent "$APP" notarize.zip
+          xcrun notarytool submit notarize.zip "${auth[@]}" --wait --timeout 2h --output-format json | tee notary.json || true
+          id="$(plutil -extract id raw notary.json)"
+          status="$(plutil -extract status raw notary.json)"
+          if [[ "$status" != Accepted ]]; then
+            xcrun notarytool log "$id" "${auth[@]}" || true
+            echo "::error::notarization: $status"; exit 1
+          fi
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute --verbose=2 "$APP"
+          rm notarize.zip "$key"
+          ditto -c -k --keepParent "$APP" "$GITHUB_WORKSPACE/$ZIP"
+          ls -la "$GITHUB_WORKSPACE/$ZIP"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          min_macos="$(plutil -extract LSMinimumSystemVersion raw "src-mac/build/$APP/Contents/Info.plist")"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" --clobber
+          else
+            gh release create "$TAG" "$ZIP" --target "$GITHUB_SHA" --title "Live Translate $TAG" \
+              --notes "Live Translate for Apple Silicon Macs (macOS $min_macos or later), signed and notarized. Unzip and move **Live Translate.app** to Applications."
+          fi
+
+      - name: Remove the signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true

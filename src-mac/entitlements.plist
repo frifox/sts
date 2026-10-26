@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The hardened runtime's exceptions a Developer ID build needs (sign_app.py):
+     for the app and for the bundled Python, which runs sts as its child. -->
+<plist version="1.0">
+<dict>
+    <!-- Python's ctypes/cffi callbacks write code into memory at run time -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+    <key>com.apple.security.cs.allow-jit</key><true/>
+    <!-- the packages' own libraries (torch, mlx, onnxruntime, ...) load each other -->
+    <key>com.apple.security.cs.disable-library-validation</key><true/>
+    <!-- sts records the speaker (input device) -->
+    <key>com.apple.security.device.audio-input</key><true/>
+</dict>
+</plist>
