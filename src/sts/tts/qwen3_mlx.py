@@ -45,11 +45,11 @@ class MLXQwen3TTSModel:
         self.model = None  # (no torch module: see weight_bytes)
 
     @classmethod
-    def from_pretrained(cls, name: str, **_torch_options) -> "MLXQwen3TTSModel":
+    def from_pretrained(cls, name: str, revision: str | None = None, **_torch_options) -> "MLXQwen3TTSModel":
         from mlx_audio.tts.utils import load_model
 
         _quiet_config_type_warning()
-        return cls(load_model(mlx_model_name(name)))
+        return cls(load_model(mlx_model_name(name), revision=revision or None))
 
     @property
     def sample_rate(self) -> int:

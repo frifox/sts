@@ -621,6 +621,14 @@
   #tts-model-row { margin-bottom: 0.6rem; }
   #tts-model-row label { display: block; margin-bottom: 0.3rem; }
   #voice-preparing { margin-top: 0.4rem; font-size: 0.85em; color: #e0864c; }
+  /* A newer version of a model in use (the server's model_updates), in its
+     stage's dropdown under the model info: what it is, and Update. */
+  .model-update { margin: -0.3rem 0 0.7rem; display: flex; flex-direction: column; gap: 0.4rem; }
+  .model-update-row { display: flex; align-items: center; gap: 0.6rem; font-size: 0.85em; color: #e0b44c; }
+  .model-update-row span { flex: 1 1 auto; }
+  .model-update-row button { flex: 0 0 auto; }
+  .model-update-row .toggle-dot { width: 1.1em; height: 1.1em; flex: 0 0 auto; }
+  .model-update-error { font-size: 0.8em; color: #e08a8a; }
   .engine-dropdown .pause-row { display: flex; align-items: center; gap: 0.5em; margin-top: 0.6rem; }
   .engine-dropdown .pause-row input {
     width: 4.5em; padding: 0.3rem 0.4rem; font: inherit; text-align: right;
@@ -776,6 +784,7 @@
             <div><span id="asr-info-memory-label">VRAM</span>: <b id="asr-info-memory" title="Memory taken by the model weights (not counting working memory while it runs)">–</b></div>
             <div>Input: <b id="asr-info-source">–</b></div>
           </div>
+          <div class="model-update" data-stage="caption" hidden></div>
           <div class="mic-row">
             <button type="button" class="toggle-button" id="btn-show-unfinished" title="Show the caption text that isn't final yet, below the final sentences - on every screen"><svg class="toggle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM4 12h4v2H4v-2zm10 6H4v-2h10v2zm6 0h-4v-2h4v2zm0-4H10v-2h10v2z"/></svg><span class="toggle-label">Show unfinished captions</span><span class="check"></span></button>
           </div>
@@ -789,6 +798,7 @@
             <div>Device: <b id="translate-info-device">–</b></div>
             <div><span id="translate-info-memory-label">VRAM</span>: <b id="translate-info-memory" title="Memory taken by the model weights (not counting working memory while it runs)">–</b></div>
           </div>
+          <div class="model-update" data-stage="translate" hidden></div>
           <label id="render-mode-label">Render</label>
           <div class="render-mode" role="group" aria-labelledby="render-mode-label">
             <button type="button" data-mode="landscape" title="Original and translated stacked, each its own flowing paragraph">Landscape</button>
@@ -804,6 +814,7 @@
             <div>Device: <b id="tts-info-device">–</b></div>
             <div><span id="tts-info-memory-label">VRAM</span>: <b id="tts-info-memory" title="Memory taken by the model weights (not counting working memory while it runs)">–</b></div>
           </div>
+          <div class="model-update" data-stage="voice" hidden></div>
           <div id="tts-model-row" hidden>
             <label id="tts-model-label">Voice model</label>
             <div class="render-mode" id="tts-models" role="group" aria-labelledby="tts-model-label"
@@ -1881,6 +1892,51 @@
     }));
   }
 
+  // -- Newer model versions (the server's model_updates): a row with Update in
+  // the dropdown of the stage each belongs to; while one updates, a spinner
+  // (its download shows in the status text). --
+  const UPDATE_SPINNER = '<svg class="toggle-dot" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.4"/><path class="voice-spin" d="M12 6.5a5.5 5.5 0 0 1 5.5 5.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>';
+  function renderModelUpdates(status) {
+    const updates = status.model_updates || [];
+    const updating = status.model_updating || null;
+    for (const box of document.querySelectorAll('.model-update')) {
+      const stage = box.dataset.stage;
+      const rows = updates.filter((update) => update.stage === stage).map((update) => {
+        const row = document.createElement('div');
+        row.className = 'model-update-row';
+        const text = document.createElement('span');
+        const when = update.date ? ` (${update.date})` : '';
+        if (update.key === updating) {
+          row.insertAdjacentHTML('afterbegin', UPDATE_SPINNER);
+          text.textContent = `Updating ${update.label}… the current version keeps working until the new one is ready`;
+          row.appendChild(text);
+          return row;
+        }
+        text.textContent = `New version of ${update.label}${when}`;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Update';
+        button.disabled = !!updating;
+        button.title = `Download and switch to the new version of ${update.label}. The current one keeps working until it's loaded; then it's what loads from now on.`;
+        button.addEventListener('click', () => {
+          button.disabled = true;
+          send('update_model', { key: update.key });
+        });
+        row.append(text, button);
+        return row;
+      });
+      const error = status.model_update_error;
+      if (error && !updating && rows.length) {
+        const note = document.createElement('div');
+        note.className = 'model-update-error';
+        note.textContent = error;
+        rows.push(note);
+      }
+      box.replaceChildren(...rows);
+      box.hidden = !rows.length;
+    }
+  }
+
   function applyStatus(status) {
     const sourceChanged = status.audio_source !== lastStatus.audio_source;
     lastStatus = status;
@@ -1916,6 +1972,7 @@
     saveBtn.disabled = !status.can_save || status.training;
     createBtn.hidden = !status.can_design;
     renderTtsModels(status);
+    renderModelUpdates(status);
     if (status.pause_between_s != null && document.activeElement !== sentencePauseInput) {
       sentencePauseInput.value = Number(status.pause_between_s).toFixed(1);
     }

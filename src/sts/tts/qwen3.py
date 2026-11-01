@@ -192,6 +192,7 @@ class Qwen3TTSSynthesizer:
         vlog("tts", f"Qwen3-TTS engine: {self.engine}")
         self.model = self._model_class.from_pretrained(
             cfg.qwen3_model_name,
+            **self._revision(cfg.qwen3_model_revision),
             device_map=cfg.device,
             dtype=_dtype_for_device(cfg.device),
             attn_implementation=_attn_impl_for_device(cfg.device),
@@ -486,9 +487,16 @@ class Qwen3TTSSynthesizer:
         self.cloned_speaker_wav = None
         self._active_lora_speaker_id = None
 
+    def _revision(self, revision: str) -> dict:
+        """Which version to load (see sts.models): the MLX engine's models only -
+        qwen_tts loads part of a model (its processor) from the latest version
+        whatever it's given."""
+        return {"revision": revision} if self.engine == "mlx" else {}
+
     def _load_custom_model(self):
         return self._model_class.from_pretrained(
             self.cfg.qwen3_custom_model_name,
+            **self._revision(self.cfg.qwen3_custom_model_revision),
             device_map=self.cfg.device,
             dtype=_dtype_for_device(self.cfg.device),
             attn_implementation=_attn_impl_for_device(self.cfg.device),

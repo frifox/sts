@@ -71,6 +71,9 @@ class VADConfig:
 @dataclass
 class ASRConfig:
     device: str = "cuda"
+    # Which version of GigaAM-v3 (a branch, or a commit once one has been used:
+    # see sts.models): its RNN-T variant, with punctuation.
+    model_revision: str = "e2e_rnnt"
     # Live captions (sts.transcript): what isn't final yet is re-transcribed
     # every `interval_ms`. A sentence is final - sent on to translation and
     # voicing, and never changed again - once it ends with a sentence-ending
@@ -90,6 +93,7 @@ class TranslationConfig:
     # MADLAD-400 checkpoint (see sts.translate.translator). bf16 memory:
     # 10b ~21GB, 7b ~15GB, 3b ~6GB.
     model_name: str = "google/madlad400-10b-mt"
+    model_revision: str = "main"  # the commit once one has been used (sts.models)
     target_lang: str = "en"  # MADLAD's <2xx> target tag; the source language is detected
     device: str = "cuda"
     # Off: the placeholder masking (sts.translate.glossary) was built for
@@ -109,6 +113,10 @@ class TTSConfig:
     # needed. Used when no cloned/trained voice is active. `qwen3_style_instruct`
     # steers delivery (ignored by the 0.6B variant).
     qwen3_custom_model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+    # Which version of the MLX conversions of these two (sts.models keeps the
+    # one in use: a commit; the PyTorch engine always loads the latest).
+    qwen3_model_revision: str = "main"
+    qwen3_custom_model_revision: str = "main"
     # The "drama3" backend: Fish Audio Drama 3 on MLX (sts.tts.drama3), switchable
     # with Qwen3 from the caption page's Voice dropdown. Its streaming, length and
     # tone settings are the qwen3_* ones below.

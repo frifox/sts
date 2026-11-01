@@ -51,6 +51,7 @@ from sts.bible.reference import find_references
 from sts.config import PipelineConfig
 from sts.control import RecognitionControl
 from sts.log import vlog
+from sts.models import apply_saved_revisions, check_updates, keep_loaded_revisions, save_revision, tracked_models
 from sts.persistent_config import PersistentConfig
 from sts.downloads import DownloadWatcher
 from sts.startup_progress import StartupProgress
@@ -231,6 +232,14 @@ class Pipeline:
         # _restore_persisted_voice(). None (the default) just means nothing
         # is persisted, e.g. in tests that build a Pipeline stub directly.
         self._persistent_config = persistent_config
+        # Each model loads the version it loaded last time, not whatever its
+        # publisher has uploaded since (sts.models; newer ones: _update_model).
+        apply_saved_revisions(cfg, persistent_config)
+        self._model_updates: list[dict] = []  # newer versions on the hub (sts.models.check_updates)
+        self._model_updating: str | None = None
+        self._model_update_error: str | None = None
+        self._check_updates_now = threading.Event()
+        self._translating()
         # The caption page's "Show unfinished captions" - on unless it was
         # turned off before (remembered across restarts).
         saved = persistent_config.get("show_unfinished") if persistent_config is not None else None
@@ -483,6 +492,9 @@ class Pipeline:
             return
         elif action == "set_tts_model":
             self._switch_tts_model(str(data.get("model") or ""))
+            return
+        elif action == "update_model":
+            self._update_model(str(data.get("key") or ""))
             return
         elif action == "set_accent_donor":
             self._set_accent_donor(str(data.get("donor") or ""))
@@ -754,22 +766,27 @@ class Pipeline:
                 return []  # Drama 3 runs on MLX: from the PyTorch environment there's nothing to switch to
         return [{"id": m, "label": self.TTS_MODEL_LABELS[m]} for m in models] if len(models) > 1 else []
 
-    def _switch_tts_model(self, model: str) -> None:
+    def _switch_tts_model(self, model: str, new_cfg=None, after=None) -> None:
         """Voice dropdown: switch the voice model. The new one loads in the
         background (a model of its own, in a process of its own) while the
         current one keeps speaking; then, between sentences, the current voice
         is set up in it, it takes over, and the old one is closed (its memory
-        freed). Remembered across restarts."""
-        if model == self.cfg.tts.backend or model not in [m["id"] for m in self._tts_models()]:
+        freed). Remembered across restarts. With `new_cfg`: the current model
+        again, as `new_cfg` has it (a new version: _update_model), and
+        `after(ok, error)` once it's in use, or has failed to load."""
+        if new_cfg is None and (model == self.cfg.tts.backend or model not in [m["id"] for m in self._tts_models()]):
             return
         if getattr(self, "_tts_switching", None):
+            if after:
+                after(False, "the voice model is already being switched")
             return  # one switch at a time
         self._tts_switching = model
         self._broadcast_status()
         from dataclasses import replace
 
-        new_cfg = replace(self.cfg.tts, backend=model)
-        new_cfg.use_backend_voices()
+        if new_cfg is None:
+            new_cfg = replace(self.cfg.tts, backend=model)
+            new_cfg.use_backend_voices()
 
         def load() -> None:
             try:
@@ -788,12 +805,14 @@ class Pipeline:
                 print(f"[voice] couldn't load {self.TTS_MODEL_LABELS[model]}: {exc}")
                 self._tts_switching = None
                 self._broadcast_status()
+                if after:
+                    after(False, exc)
                 return
-            self._on_control_thread(lambda: self._finish_tts_switch(model, new_cfg, new_tts))
+            self._on_control_thread(lambda: self._finish_tts_switch(model, new_cfg, new_tts, after))
 
         threading.Thread(target=load, name="sts-tts-switch", daemon=True).start()
 
-    def _finish_tts_switch(self, model: str, new_cfg, new_tts) -> None:
+    def _finish_tts_switch(self, model: str, new_cfg, new_tts, after=None) -> None:
         """On the control thread, between sentences: the current voice in the new
         model, which then takes over."""
         try:
@@ -816,9 +835,99 @@ class Pipeline:
         if self._persistent_config is not None:
             self._persistent_config.set("tts_backend", model)
         vlog("voice", f"voice model: {self.TTS_MODEL_LABELS[model]}")
+        keep_loaded_revisions(self.cfg, self._persistent_config)  # a voice model loaded the first time
+        self._check_updates_now.set()  # other models in use now
         self._broadcast_status()
         self._broadcast_engines()
         threading.Thread(target=lambda: _close_stage(old), name="sts-tts-close", daemon=True).start()
+        if after:
+            after(True, None)
+
+    # -- newer model versions (sts.models) ------------------------------------
+
+    def _translating(self) -> threading.Lock:
+        """Held around translating a sentence, so an update can swap the
+        translation model between sentences (made on first use: tests build
+        Pipelines without __init__)."""
+        if self.__dict__.get("_translator_lock") is None:
+            self._translator_lock = threading.Lock()
+        return self._translator_lock
+
+    MODEL_UPDATE_CHECK_S = 6 * 3600
+
+    def _model_update_loop(self) -> None:
+        """Checks the hub for newer versions of the models in use: at start,
+        every few hours, and after the voice model changes."""
+        while not self._stop.is_set():
+            try:
+                updates = check_updates(self.cfg)
+            except Exception as exc:  # noqa: BLE001 - only a hint for the page
+                vlog("models", f"couldn't check for model updates: {exc}")
+                updates = None
+            if updates is not None and updates != self._model_updates:
+                for update in updates:
+                    print(f"[models] a newer version of {update['label']} is available ({update['date']}): "
+                          f"Update in the {update['stage'].title()} dropdown")
+                self._model_updates = updates
+                self._broadcast_status()
+            self._check_updates_now.wait(self.MODEL_UPDATE_CHECK_S)
+            self._check_updates_now.clear()
+
+    def _update_model(self, key: str) -> None:
+        """A dropdown's Update button: the model's newer version is loaded (and
+        downloaded - the status text shows it) alongside the current one, which
+        keeps working meanwhile; then it takes over, and is what loads from
+        now on. If it fails to load, the current one simply stays."""
+        update = next((u for u in self._model_updates if u["key"] == key), None)
+        model = next((m for m in tracked_models(self.cfg) if m.key == key), None)
+        if update is None or model is None or self._model_updating:
+            return
+        revision = update["revision"]
+        self._model_updating, self._model_update_error = key, None
+        self._broadcast_status()
+        print(f"[models] updating {model.label} to its {update['date']} version")
+
+        def done(ok: bool, error=None) -> None:
+            if ok:
+                save_revision(self._persistent_config, model.repo, revision)
+                self._model_updates = [u for u in self._model_updates if u["key"] != key]
+                print(f"[models] {model.label}: now the {update['date']} version")
+            else:
+                self._model_update_error = f"Couldn't update {model.label}: {error}"
+                print(f"[models] {self._model_update_error}")
+            self._model_updating = None
+            self._broadcast_status()
+            self._broadcast_engines()
+
+        if model.stage == "voice":
+            self._switch_tts_model(self.cfg.tts.backend, new_cfg=model.with_revision(self.cfg.tts, revision), after=done)
+            return
+
+        def load() -> None:
+            try:
+                if model.stage == "translate":
+                    new_cfg = model.with_revision(self.cfg.translation, revision)
+                    new = _stage_model(Translator, new_cfg, "translation-update")
+                    _wait_ready(new)
+                    with self._translating():
+                        old, self.translator = self.translator, new
+                        self.cfg.translation = new_cfg
+                    _close_stage(old)
+                else:  # caption
+                    new_cfg = model.with_revision(self.cfg.asr, revision)
+                    new = create_asr(new_cfg)
+                    with self._asr_lock:
+                        old, self.asr = self.asr, new
+                        self.transcript.asr = new
+                        self.cfg.asr = new_cfg
+                    del old
+                    _free_gpu_memory()
+            except Exception as exc:  # noqa: BLE001 - reported on the page; the current model stays
+                done(False, exc)
+                return
+            done(True)
+
+        threading.Thread(target=load, name="sts-model-update", daemon=True).start()
 
     def _set_accent_donor(self, donor: str) -> None:
         """Voice dropdown: which American preset voice English references take
@@ -1249,6 +1358,11 @@ class Pipeline:
                 tts_model=self.cfg.tts.backend,
                 tts_models=self._tts_models(),
                 tts_switching=getattr(self, "_tts_switching", None),
+                model_updates=[
+                    {k: u[k] for k in ("key", "stage", "label", "date")} for u in getattr(self, "_model_updates", [])
+                ],
+                model_updating=getattr(self, "_model_updating", None),
+                model_update_error=getattr(self, "_model_update_error", None),
             )
 
     def _broadcast_rtf(self, stage: str, processing_s: float, audio_s: float) -> None:
@@ -1526,7 +1640,8 @@ class Pipeline:
         `finalized_at` so playback can tell how late it's spoken."""
         generation = self._reset_generation
         t0 = time.monotonic()
-        translated = " ".join(self.translator.translate_sentences(text)).strip()
+        with self._translating():
+            translated = " ".join(self.translator.translate_sentences(text)).strip()
         if generation != self._reset_generation:
             vlog("translate", "dropping a translation from before Reset")
             return
@@ -1948,6 +2063,8 @@ class Pipeline:
         self._started = True  # voices are prepared alongside from now on (see _clone_when_ready)
         self.capture.start()
         self._stage("Listening", ready=True)
+        keep_loaded_revisions(self.cfg, self._persistent_config)
+        threading.Thread(target=self._model_update_loop, name="sts-model-updates", daemon=True).start()
         for name, target in (
             ("control", lambda: self._run_stage("control", self._control_step)),
             ("capture", self._segment_loop),
@@ -1968,6 +2085,8 @@ class Pipeline:
         self._stop.set()
         if getattr(self, "_downloads", None) is not None:
             self._downloads.stop()
+        if getattr(self, "_check_updates_now", None) is not None:
+            self._check_updates_now.set()  # the update check's wait ends; it sees _stop
         # Every stage wakes up within QUEUE_POLL_S to notice; one in the
         # middle of a long model call is a daemon thread and doesn't hold up
         # the exit.

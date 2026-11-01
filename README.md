@@ -53,6 +53,14 @@ Hover a header item to open its settings:
 | Output meter | - | Output device, volume, stream voice to this browser, test output |
 | **Reset** | Clear captions, drop text in flight, forget the cloned voice | - |
 
+**Model versions**: each model loads the version it loaded last time
+(remembered in `sts.db`), so a model re-uploaded by its publisher isn't
+downloaded unannounced at the next start. sts checks Hugging Face for newer
+versions at start and every 6 hours; one shows with an **Update** button in
+the dropdown its stage belongs to (Caption, Translate or Voice). Updating
+downloads it (the status text shows the download) and loads it while the
+current version keeps working, then swaps it in; it's what loads from then on.
+
 Keys: **C** / **T** / **V** toggle Caption / Translate / Voice. **Space** marks
 the first unfinished sentence for review (it still finalizes by itself as
 usual), **Space** again finalizes it right away - a double press finalizes

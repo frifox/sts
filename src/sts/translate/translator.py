@@ -62,7 +62,7 @@ def split_sentences(text: str, min_words: int = 2) -> list[str]:
 class Translator:
     def __init__(self, cfg: TranslationConfig):
         self.cfg = cfg
-        self.tokenizer = T5Tokenizer.from_pretrained(cfg.model_name)
+        self.tokenizer = T5Tokenizer.from_pretrained(cfg.model_name, revision=cfg.model_revision)
         # bf16 halves the memory of fp32 (10b: ~21GB instead of ~43GB). Not
         # fp16: T5 was trained in bf16 and its activations overflow fp16.
         # `torch_dtype`, not `dtype`: sts supports transformers back to 4.40
@@ -70,7 +70,9 @@ class Translator:
         # releases - `torch_dtype` still works everywhere, just deprecated
         # (with a one-time warning) on the newest ones.
         dtype = torch.float32 if cfg.device == "cpu" else torch.bfloat16
-        self.model = T5ForConditionalGeneration.from_pretrained(cfg.model_name, torch_dtype=dtype).to(
+        self.model = T5ForConditionalGeneration.from_pretrained(
+            cfg.model_name, revision=cfg.model_revision, torch_dtype=dtype
+        ).to(
             cfg.device
         )
         self.model.eval()

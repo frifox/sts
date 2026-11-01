@@ -31,7 +31,6 @@ from sts.gpu import gpu_lock
 from sts.textclean import clean_transcript
 
 MODEL_NAME = "ai-sage/GigaAM-v3"
-REVISION = "e2e_rnnt"
 SAMPLE_RATE = 16_000
 
 # Chunk length for audio longer than GigaAM accepts (25 s): each cut is made
@@ -87,7 +86,7 @@ def _without_pyannote_check():
         dmu.get_imports = original
 
 
-def _load_without_meta_init():
+def _load_without_meta_init(revision: str):
     """GigaAM built from its config and its weights file loaded into it. Needed
     with transformers 5 (the .venv-mlx environment: mlx-audio requires it):
     from_pretrained there first builds every model on the "meta" device, and
@@ -99,9 +98,9 @@ def _load_without_meta_init():
     from safetensors.torch import load_file
     from transformers import AutoConfig, AutoModel
 
-    config = AutoConfig.from_pretrained(MODEL_NAME, revision=REVISION, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(MODEL_NAME, revision=revision, trust_remote_code=True)
     model = AutoModel.from_config(config, trust_remote_code=True)
-    folder = Path(snapshot_download(MODEL_NAME, revision=REVISION))
+    folder = Path(snapshot_download(MODEL_NAME, revision=revision))
     weights: dict = {}
     for file in sorted(folder.glob("*.safetensors")) or sorted(folder.glob("*.bin")):
         weights.update(load_file(file) if file.suffix == ".safetensors" else torch.load(file, map_location="cpu"))
@@ -118,11 +117,11 @@ class GigaAMASR:
 
         with _without_pyannote_check():
             try:
-                model = AutoModel.from_pretrained(MODEL_NAME, revision=REVISION, trust_remote_code=True)
+                model = AutoModel.from_pretrained(MODEL_NAME, revision=cfg.model_revision, trust_remote_code=True)
             except Exception as exc:
                 if "meta" not in str(exc):
                     raise
-                model = _load_without_meta_init()
+                model = _load_without_meta_init(cfg.model_revision)
         self.model = model.to(cfg.device).eval()
         self._cache: OrderedDict[bytes, str] = OrderedDict()
 

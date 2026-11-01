@@ -391,6 +391,9 @@ class CaptionBroadcaster:
         tts_model: str | None = None,
         tts_models: list[dict] | None = None,
         tts_switching: str | None = None,
+        model_updates: list[dict] | None = None,
+        model_updating: str | None = None,
+        model_update_error: str | None = None,
         pause_between_s: float | None = None,
         accent_donor: str = "",
         accent_donors: list[str] | None = None,
@@ -419,6 +422,11 @@ class CaptionBroadcaster:
             "tts_model": tts_model,
             "tts_models": tts_models or [],
             "tts_switching": tts_switching,
+            # Newer versions of the models in use (sts.models), shown with an
+            # Update button in their stage's dropdown.
+            "model_updates": model_updates or [],
+            "model_updating": model_updating,
+            "model_update_error": model_update_error,
             "pause_between_s": pause_between_s,
             "accent_donor": accent_donor,
             "accent_donors": accent_donors or [],
