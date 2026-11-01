@@ -113,6 +113,11 @@ class TTSConfig:
     # with Qwen3 from the caption page's Voice dropdown. Its streaming, length and
     # tone settings are the qwen3_* ones below.
     drama3_model_name: str = "mlx-community/fish-audio-drama-3-4bit"
+    # Pinned: a newer upload is downloaded (~27 GB) on the next start, and may need
+    # a newer mlx-audio than the one pinned in pyproject.toml. This is the one
+    # sts was tuned on (reference pace, stall and ramble checks), 2026-10-18;
+    # 2026-10-31 brought Fish Audio's 2026-10-29 weights (not tried yet).
+    drama3_model_revision: str = "da72954212fc2a0dfbb4f0779308a82ee705c851"
     # Drama 3 speaks ~0.8x as fast as Qwen3 from the same reference, and follows
     # its reference's pace: it gets the reference sped up by this much (pitch kept)
     # to speak at Qwen3's pace - unless the voice has its own (VoiceEntry.

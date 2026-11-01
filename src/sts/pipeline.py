@@ -52,6 +52,7 @@ from sts.config import PipelineConfig
 from sts.control import RecognitionControl
 from sts.log import vlog
 from sts.persistent_config import PersistentConfig
+from sts.downloads import DownloadWatcher
 from sts.startup_progress import StartupProgress
 from sts.translate.translator import Translator
 from sts.tts import create_synthesizer
@@ -238,6 +239,11 @@ class Pipeline:
         # The local input ("alsa" or "none") the browser mic returns to when it stops.
         self._local_source = cfg.audio.source if cfg.audio.source != "browser" else "alsa"
         self.playback = AudioPlayback(cfg.audio)
+        # A model downloading (first start, or a new version) shows in the status
+        # text: "Loading voice synthesis (drama3)… · Downloading fish-audio-drama-3-4bit: 4.2 GB, 45 MB/s".
+        self._stage_shown = ("Starting…", False)
+        self._download_text: str | None = None
+        self._downloads = DownloadWatcher(self._downloads_changed).start()
         self._stage("Loading speech detector…")
         self.segmenter = SpeechSegmenter(cfg.audio, cfg.vad)  # for "Train voice" only
         # On mps, translation and TTS each run in a process of their own (see
@@ -315,6 +321,23 @@ class Pipeline:
                 self._startup.finish()
             else:
                 self._startup.begin(text)
+        self._stage_shown = (text, ready)
+        self._show_stage()
+
+    def _downloads_changed(self, text: str | None) -> None:
+        """DownloadWatcher: what's downloading changed (None: nothing is)."""
+        if (text is None) != (self._download_text is None):
+            vlog("init", f"downloading {text}" if text else "download finished")
+        self._download_text = text
+        if self._startup is not None:
+            self._startup.set_downloading(text is not None)
+        self._show_stage()
+
+    def _show_stage(self) -> None:
+        text, ready = self._stage_shown
+        downloading = getattr(self, "_download_text", None)
+        if downloading:
+            text = f"{text} · Downloading {downloading}"
         if self.broadcaster:
             self.broadcaster.broadcast_stage(text, ready)
 
@@ -1943,6 +1966,8 @@ class Pipeline:
 
     def stop(self) -> None:
         self._stop.set()
+        if getattr(self, "_downloads", None) is not None:
+            self._downloads.stop()
         # Every stage wakes up within QUEUE_POLL_S to notice; one in the
         # middle of a long model call is a daemon thread and doesn't hold up
         # the exit.

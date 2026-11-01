@@ -34,6 +34,8 @@ class StartupProgress:
         self._expected_done_s = 0.0  # expected duration of the steps finished so far
         self._progress: dict | None = None
         self.finished = False
+        self.downloading = False  # a model is downloading now: no percentage (see set_downloading)
+        self._downloaded = False  # one was this start-up: its timings aren't a normal start-up's
 
     def expected_s(self, step: str) -> float:
         """The step's average duration over the recorded runs that had it."""
@@ -63,7 +65,7 @@ class StartupProgress:
         `start`-`end`), how long it's expected to take (`step_s`), and how
         long it's been going (`elapsed_s`). None with nothing to go on, or
         once start-up is done."""
-        if self._progress is None or self.finished:
+        if self._progress is None or self.finished or self.downloading:
             return None
         return {**self._progress, "elapsed_s": round(time.monotonic() - self._step_started, 2)}
 
@@ -74,10 +76,17 @@ class StartupProgress:
         now = time.monotonic()
         self._end_step(now)
         self.finished = True
-        if self._settings is None:
+        if self._settings is None or self._downloaded:
             return
         run = {"steps": self._timings, "total": round(now - self._started, 2)}
         self._settings.set(SETTINGS_KEY, json.dumps((self._runs + [run])[-KEEP_RUNS:], ensure_ascii=False))
+
+    def set_downloading(self, downloading: bool) -> None:
+        """A model download started (True) or ended: how long it takes says
+        nothing about the next start-up, so there's no percentage while it
+        runs, and this start-up's timings aren't kept."""
+        self.downloading = downloading
+        self._downloaded |= downloading
 
     def _end_step(self, now: float) -> None:
         if self._step is None:

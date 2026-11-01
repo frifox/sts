@@ -55,11 +55,11 @@ def needs_english_reference(ref_text: str | None) -> bool:
 class _Drama3Model:
     """mlx-audio's Drama 3 model, as Qwen3TTSSynthesizer's methods use a model."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, revision: str | None = None):
         from mlx_audio.tts.utils import load_model
 
         _quiet_config_type_warning()
-        self._model = load_model(name)
+        self._model = load_model(name, revision=revision or None)
 
     @property
     def sample_rate(self) -> int:
@@ -147,7 +147,7 @@ class Drama3Synthesizer(Qwen3TTSSynthesizer):
         self.cfg = cfg
         self.engine = "mlx"
         vlog("tts", f"Drama 3: loading {cfg.drama3_model_name}")
-        self.model = _Drama3Model(cfg.drama3_model_name)
+        self.model = _Drama3Model(cfg.drama3_model_name, cfg.drama3_model_revision)
         self._model_class = None
         self._custom_model = None
         self.default_voice = cfg.resolve_voice(cfg.default_voice)
