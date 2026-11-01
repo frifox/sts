@@ -104,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="S",
         help="Finalize a caption sentence - send it on to translation and voicing, and never change it again - "
-        "once it ends with a sentence-ending mark and hasn't changed (text or punctuation) for S seconds "
+        "once it ends with a sentence-ending mark and hasn't changed (text or punctuation; capitalization alone doesn't count) for S seconds "
         "(default 3; 0 turns this rule off)",
     )
     parser.add_argument(

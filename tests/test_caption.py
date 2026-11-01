@@ -320,6 +320,24 @@ def test_the_5_seconds_start_over_whenever_the_sentence_changes():
     assert _texts(t.step()) == (["Мы сюда пришли."], [])
 
 
+def test_a_change_only_in_capitalization_does_not_start_the_5_seconds_over():
+    from sts.transcript import Transcript
+
+    # At 4.0 the model re-hears "бог" as "Бог": the same sentence, so it's
+    # still final 5 s after its end mark (1.5 -> heard at 2.0), not after 4.0.
+    script = _words(("Слава", 0.5, 0.8), ("богу.", 0.9, 1.5))
+    asr = _ScriptedAsr(script)
+    t = Transcript(asr, after_unchanged=5, force_after=30, after_silence=10)
+    fed = [0]
+    _feed(t, 2.0, fed)
+    assert _texts(t.step()) == ([], ["Слава богу."])
+    _feed(t, 4.0, fed)
+    asr.script = _words(("Слава", 0.5, 0.8), ("Богу.", 0.9, 1.5))
+    assert _texts(t.step()) == ([], ["Слава Богу."])
+    _feed(t, 7.0, fed)
+    assert _texts(t.step()) == (["Слава Богу."], [])  # the latest capitalization is what's final
+
+
 def test_an_unfinished_sentence_waits_for_its_end_mark():
     from sts.transcript import Transcript
 

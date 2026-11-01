@@ -9,8 +9,9 @@ as soon as any of these holds (see count_final):
 
 - it ends with a sentence-ending mark and its text, punctuation included,
   hasn't changed for `after_unchanged` seconds. The wait starts only once
-  the mark is there, and any change to the sentence starts it over. Text
-  after it doesn't count;
+  the mark is there, and any change to the sentence starts it over -
+  except one only in capitalization, which doesn't make it a new sentence.
+  Text after it doesn't count;
 - `force_after` seconds have passed since its first word, however much it's
   still changing, finished or not;
 - nothing new has been heard for `after_silence` seconds: the speaker has
@@ -114,6 +115,12 @@ def count_final(sentences: list[Sentence], now_s: float, unchanged_since: list[f
     return count
 
 
+def _same_text(a: str, b: str) -> bool:
+    """Whether two versions of a sentence say the same thing: a change only in
+    capitalization ("Бог" / "бог") isn't a new sentence."""
+    return a.casefold() == b.casefold()
+
+
 def _same_start(text: str, expected: str, words: int = 3) -> bool:
     """Whether two versions of a sentence start with the same words (case and
     punctuation aside) - the same sentence, perhaps grown or reworded at the end."""
@@ -205,9 +212,9 @@ class Transcript:
             now_s = offset_s + len(audio) / self.sample_rate
             # A sentence is the same one as last step's at the same position
             # (the open run always starts right after the last lock); it's
-            # unchanged since then if its text is too.
+            # unchanged since then if its text is too, capitalization aside.
             unchanged_since = [
-                self._open_seen[i][1] if i < len(self._open_seen) and self._open_seen[i][0] == sentence.text
+                self._open_seen[i][1] if i < len(self._open_seen) and _same_text(self._open_seen[i][0], sentence.text)
                 else now_s
                 for i, sentence in enumerate(sentences)
             ]

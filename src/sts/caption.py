@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--final-after-unchanged", type=float, default=3.0, metavar="S",
         help="Finalize a sentence once it ends with a sentence-ending mark and hasn't changed (text or "
-        "punctuation) for S seconds (default: 3; 0 turns this rule off)",
+        "punctuation; capitalization alone doesn't count) for S seconds (default: 3; 0 turns this rule off)",
     )
     parser.add_argument(
         "--final-force-after", type=float, default=0.0, metavar="S",
