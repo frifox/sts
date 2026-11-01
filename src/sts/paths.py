@@ -20,6 +20,14 @@ def default_config_db() -> str:
     return str(support / "sts.db") if support else "sts.db"
 
 
+def default_tls_dir() -> str:
+    """The self-signed HTTPS certificate: on macOS the app's (certs/ beside
+    sts.db), so the terminal and the app serve the same one - trusted once,
+    trusted for both; elsewhere `certs` in the working directory."""
+    support = app_support_dir()
+    return str(support / "certs") if support else "certs"
+
+
 def default_voice_library_dir() -> str:
     """The voice library: on macOS the one the Live Translate app uses
     (~/Library/Application Support/Live Translate/voices), so voices made from the

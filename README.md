@@ -125,7 +125,15 @@ this computer's network addresses (`--local-only`: this computer only). HTTPS is
 devices use their browser mic - browsers only allow the mic on a
 secure page, which plain HTTP is only on localhost. It uses a self-signed
 certificate, `certs/cert.pem` + `certs/key.pem`, made on first start (with
-`openssl`); each device shows a one-time warning to click through.
+`openssl`; on macOS in `~/Library/Application Support/Live Translate/certs`,
+shared with the app); each device shows a one-time warning to click through.
+It lists `localhost`, this computer's names and its network addresses, so a
+device that trusts it shows no warning - on this Mac (also for the Claude
+app's browser, which can't click through):
+
+```bash
+security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db "$HOME/Library/Application Support/Live Translate/certs/cert.pem"
+```
 `sts --help` lists everything else (per-stage devices, caption timing,
 pauses, Qwen3 options).
 

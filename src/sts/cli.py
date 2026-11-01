@@ -12,7 +12,7 @@ from sts.audio.capture import list_devices
 from sts.audio.devices import check_input, check_output
 from sts.engine_args import add_engine_arguments, build_engine_config
 from sts.log import vlog
-from sts.paths import default_config_db
+from sts.paths import default_config_db, default_tls_dir
 from sts.persistent_config import PersistentConfig
 from sts.startup_progress import StartupProgress
 from sts.pipeline import Pipeline
@@ -20,8 +20,12 @@ from sts.web.server import CaptionBroadcaster, run_server
 
 # Where --https-port looks for a cert/key when --tls-cert/--tls-key aren't
 # given; a self-signed pair is made there on first start (see ensure_tls_cert).
-DEFAULT_TLS_CERT = "certs/cert.pem"
-DEFAULT_TLS_KEY = "certs/key.pem"
+DEFAULT_TLS_CERT = str(Path(default_tls_dir()) / "cert.pem")
+DEFAULT_TLS_KEY = str(Path(default_tls_dir()) / "key.pem")
+# A browser checks a certificate it trusts against the address it opened: the
+# certificate has to list it (subjectAltName). macOS also takes no trusted TLS
+# certificate valid for more than 825 days.
+TLS_CERT_DAYS = 825
 DEFAULT_WEB_PORT = 80
 DEFAULT_HTTPS_PORT = 443
 
@@ -139,25 +143,70 @@ def build_parser() -> argparse.ArgumentParser:
 
 def ensure_tls_cert(cert: str, key: str) -> bool:
     """Whether HTTPS can go ahead with this cert/key: they exist, or - the
-    default location - a self-signed pair has just been made there. A
-    cert/key named on the command line that's missing is an error."""
+    default location - a self-signed pair has just been made there (also in
+    place of one made before certificates listed their addresses, or one that
+    has expired). A cert/key named on the command line that's missing is an
+    error."""
+    default = (cert, key) == (DEFAULT_TLS_CERT, DEFAULT_TLS_KEY)
     if Path(cert).is_file() and Path(key).is_file():
-        return True
-    if (cert, key) != (DEFAULT_TLS_CERT, DEFAULT_TLS_KEY):
+        if not default or tls_cert_current(cert):
+            return True
+        print("[web] the self-signed HTTPS certificate is out of date (no addresses listed, or expired): "
+              "making a new one")
+    elif not default:
         print(f"error: didn't find the TLS cert/key {cert!r} / {key!r} for --https-port")
         sys.exit(1)
     Path(cert).parent.mkdir(parents=True, exist_ok=True)
+    names = ",".join(tls_cert_names())
     try:
         subprocess.run(
-            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert,
-             "-days", "3650", "-subj", "/CN=sts"],
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-sha256", "-nodes", "-keyout", key, "-out", cert,
+             "-days", str(TLS_CERT_DAYS), "-subj", "/CN=Live Translate (sts)",
+             "-addext", f"subjectAltName={names}",
+             "-addext", "basicConstraints=critical,CA:FALSE",
+             "-addext", "keyUsage=critical,digitalSignature,keyEncipherment",
+             "-addext", "extendedKeyUsage=serverAuth"],
             check=True, capture_output=True,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         print(f"[web] couldn't make a self-signed certificate for HTTPS ({exc}); continuing without HTTPS")
         return False
     print(f"[web] made a self-signed certificate for HTTPS: {cert}")
+    if sys.platform == "darwin":
+        print(f'[web] to have this Mac trust it: security add-trusted-cert -r trustRoot '
+              f'-k ~/Library/Keychains/login.keychain-db "{cert}"')
     return True
+
+
+def tls_cert_current(cert: str) -> bool:
+    """Whether `cert` lists its addresses and hasn't expired."""
+    import ssl
+
+    try:
+        info = ssl._ssl._test_decode_cert(cert)
+    except (OSError, ssl.SSLError):
+        return False
+    return bool(info.get("subjectAltName")) and ssl.cert_time_to_seconds(info["notAfter"]) > time.time() + 86400
+
+
+def tls_cert_names() -> list[str]:
+    """What the self-signed certificate is for: localhost, this computer's
+    names and its current network addresses (an address it gets later isn't
+    listed: other devices click through the warning for it, as before)."""
+    names = ["DNS:localhost", "IP:127.0.0.1", "IP:::1"]
+    host = socket.gethostname().removesuffix(".local")
+    if host and host != "localhost":
+        names += [f"DNS:{host}", f"DNS:{host}.local"]
+    try:
+        import psutil
+
+        for addresses in psutil.net_if_addrs().values():
+            for address in addresses:
+                if address.family == socket.AF_INET and not address.address.startswith("127."):
+                    names.append(f"IP:{address.address}")
+    except Exception:  # noqa: BLE001 - the addresses are a nicety
+        pass
+    return list(dict.fromkeys(names))
 
 
 def port_unavailable(host: str, port: int) -> str | None:
