@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "sts",
+      "name": "run",
       "runtimeExecutable": ".venv-mlx/bin/sts",
       "runtimeArgs": [
         "--web-port",
