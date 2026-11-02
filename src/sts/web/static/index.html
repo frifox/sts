@@ -43,6 +43,37 @@
   }
   #original-panel[hidden], #translated-panel[hidden], #portrait-panel[hidden] { display: none; }
 
+  /* A panel whose stage is switched off (Caption, or Translate for the
+     translated side): hatched over, with a "paused" badge - what's there
+     stays faintly readable. In portrait, one per column. Clicks go through. */
+  .paused-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    background:
+      repeating-linear-gradient(135deg, transparent 0 14px, rgba(255, 255, 255, 0.07) 14px 16px),
+      rgba(0, 0, 0, 0.55);
+  }
+  .paused-overlay.show { display: flex; }
+  #portrait-panel .paused-overlay.left { right: 50%; }
+  #portrait-panel .paused-overlay.right { left: 50%; }
+  .paused-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.45em 0.9em;
+    border-radius: 0.5em;
+    background: #16161c;
+    border: 1px solid #44444c;
+    color: #b8b8c0;
+    font-size: clamp(0.9rem, 2.4vh, 1.4rem);
+  }
+  .paused-badge svg { width: 1em; height: 1em; }
+
   .lines {
     height: 100%;
     box-sizing: border-box;
@@ -897,6 +928,7 @@
         <div class="verse-text"></div>
       </div>
       <div class="lines" id="original-lines"></div>
+      <div class="paused-overlay" id="paused-original" aria-live="polite"><span class="paused-badge"></span></div>
     </div>
     <div class="panel" id="translated-panel">
       <button type="button" class="verse-chip" id="verse-chip-en" title="Show the full passage"></button>
@@ -905,6 +937,7 @@
         <div class="verse-text"></div>
       </div>
       <div class="lines" id="translated-lines"></div>
+      <div class="paused-overlay" id="paused-translated" aria-live="polite"><span class="paused-badge"></span></div>
     </div>
     <div class="panel" id="portrait-panel" hidden>
       <button type="button" class="verse-chip" id="verse-chip-portrait-ru" title="Show the full passage"></button>
@@ -920,6 +953,8 @@
       <div class="lines" id="portrait-lines">
         <div class="portrait-grid" id="portrait-grid"></div>
       </div>
+      <div class="paused-overlay left" id="paused-portrait-original" aria-live="polite"><span class="paused-badge"></span></div>
+      <div class="paused-overlay right" id="paused-portrait-translated" aria-live="polite"><span class="paused-badge"></span></div>
     </div>
   </div>
 
@@ -1600,6 +1635,30 @@
     for (const { el } of verseChips) el.classList.remove('show');
   }
 
+  // Caption or Translate switched off: its panel is hatched over with a
+  // "paused" badge (see .paused-overlay). Caption off pauses both sides -
+  // nothing new is heard to translate. Not while the server is still
+  // starting up, when nothing is running yet anyway.
+  const PAUSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/>'
+    + '<rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></svg>';
+  function drawPausedPanels() {
+    const captionOff = systemReady && !lastStatus.active;
+    const translateOff = systemReady && !captionOff && lastStatus.translation_enabled === false;
+    const sides = [
+      [['paused-original', 'paused-portrait-original'], captionOff ? 'Captions paused' : null],
+      [['paused-translated', 'paused-portrait-translated'], captionOff ? 'Captions paused' : translateOff ? 'Translation paused' : null],
+    ];
+    for (const [ids, label] of sides) {
+      for (const id of ids) {
+        const overlay = document.getElementById(id);
+        overlay.classList.toggle('show', !!label);
+        const badge = overlay.firstElementChild;
+        const html = label ? `${PAUSE_ICON}${label}` : '';
+        if (badge.innerHTML !== html) badge.innerHTML = html;
+      }
+    }
+  }
+
   const asrToggleBtn = document.getElementById('btn-asr-toggle');
   const translateToggleBtn = document.getElementById('btn-translate-toggle');
   const ttsToggleBtn = document.getElementById('btn-tts-toggle');
@@ -1955,6 +2014,7 @@
     }
     document.body.classList.toggle('voice-on', !!status.voice_enabled);
     highlightLines();
+    drawPausedPanels();
 
     const cloneSteps = status.clone_steps || null;
     const cloning = status.training || (cloneSteps && cloneSteps.some((step) => step.state === 'pending' || step.state === 'running'));
@@ -2658,6 +2718,7 @@
     ws.onclose = () => {
       setStage('Reconnecting…', false, null);
       systemReady = false;
+      drawPausedPanels();
       volumeBars.forEach((bar) => bar.classList.remove('lit-quiet', 'lit-good'));
       outputBars.forEach((bar) => bar.classList.remove('lit-quiet', 'lit-good'));
       closeDropdowns();  // don't leave one open showing now-stale info across a reconnect
@@ -2694,6 +2755,7 @@
         setStage(msg.text, msg.ready, msg.progress);
         systemReady = !!msg.ready;
         updateEngineAvailability();
+        drawPausedPanels();
       }
       else if (msg.type === 'status') applyStatus(msg);
       else if (msg.type === 'server') serverHttpsPort = msg.https_port || null;
