@@ -1636,17 +1636,17 @@
   }
 
   // Caption or Translate switched off: its panel is hatched over with a
-  // "paused" badge (see .paused-overlay). Caption off pauses both sides -
-  // nothing new is heard to translate. Not while the server is still
-  // starting up, when nothing is running yet anyway.
+  // "paused" badge (see .paused-overlay). Caption off leaves the translated
+  // side alone - what's already translated is still translated and voiced.
+  // Not while the server is still starting up, when nothing is running yet anyway.
   const PAUSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/>'
     + '<rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></svg>';
   function drawPausedPanels() {
     const captionOff = systemReady && !lastStatus.active;
-    const translateOff = systemReady && !captionOff && lastStatus.translation_enabled === false;
+    const translateOff = systemReady && lastStatus.translation_enabled === false;
     const sides = [
       [['paused-original', 'paused-portrait-original'], captionOff ? 'Captions paused' : null],
-      [['paused-translated', 'paused-portrait-translated'], captionOff ? 'Captions paused' : translateOff ? 'Translation paused' : null],
+      [['paused-translated', 'paused-portrait-translated'], translateOff ? 'Translation paused' : null],
     ];
     for (const [ids, label] of sides) {
       for (const id of ids) {
