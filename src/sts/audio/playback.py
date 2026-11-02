@@ -178,6 +178,7 @@ class AudioPlayback:
                 sample_rate = target_rate
             samples = np.ascontiguousarray(audio, dtype=np.float32).reshape(-1, 1)
             now = time.monotonic()
+            late_s = now - self._scheduled_end if seamless and self._scheduled_end > 0 else 0.0
             pad = pause_needed(now, self._scheduled_end, pause_before) if pause_before > 0 else 0.0
             self._scheduled_end = max(now, self._scheduled_end) + pad + len(samples) / sample_rate
             if pad > 0:
@@ -186,6 +187,7 @@ class AudioPlayback:
                 samples = np.concatenate([tail.reshape(-1, 1), samples])
         vlog("audio", f"playing {duration:.1f}s of speech" + (f" after a {pad:.1f}s pause" if pad > 0 else ""))
         chunk_frames = max(1, int(0.05 * sample_rate))
+        ran_dry = 0  # times the sound card ran out mid-clip
         for start in range(0, len(samples), chunk_frames):
             if should_continue is not None and not should_continue():
                 with self._lock:
@@ -194,9 +196,18 @@ class AudioPlayback:
                 vlog("audio", "playback cut short")
                 return
             chunk = samples[start : start + chunk_frames] * self.cfg.volume
-            stream.write(chunk)
+            # The first write after a pause reports the silence before it as
+            # an underflow too; only one mid-clip is a stutter.
+            if stream.write(chunk) and start > 0:
+                ran_dry += 1
             if on_chunk:
                 on_chunk(chunk)
+        if ran_dry:
+            print(f"[audio] the sound card ran out of speech {ran_dry} time(s) during a {duration:.1f}s piece "
+                  "(stutter: playback wasn't fed in time)", flush=True)
+        elif late_s > getattr(stream, "latency", 0.0):  # less is still covered by the sound card's buffer
+            print(f"[audio] the next piece of a sentence came {late_s:.2f}s too late (a gap mid-sentence: "
+                  "speech was synthesized slower than it's spoken)", flush=True)
 
     def _play_silently(self, audio, sample_rate, pause_before, should_continue, on_chunk) -> None:
         """play() with no output device: waits out the clip (and its lead-in

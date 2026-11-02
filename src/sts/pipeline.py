@@ -1835,6 +1835,8 @@ class Pipeline:
         if not clip.force and (not self.control.voice_enabled.is_set()
                                or self._voice_stopping_seq not in (None, clip.seq)):
             return  # voice was switched off while this was queued
+        if not clip.force and clip.seq is not None and clip.seq in (self._skipped_seqs or ()):
+            return  # the rest of a sentence skipped to catch up (_skip_backlog)
         clip = self._catch_up(clip)
         # Broadcast before playing locally, not after: play() blocks for
         # close to the clip's real duration (it paces with the sound
@@ -1865,6 +1867,8 @@ class Pipeline:
 
     # Whether playback is currently sped up to work off a backlog - see _catch_up.
     _catching_up = False
+    # Sentences (caption seq) _skip_backlog dropped: their pieces still to come are dropped too.
+    _skipped_seqs: deque | None = None
 
     def _playback_backlog_s(self) -> float:
         """Seconds of synthesized speech waiting to be heard: every queued
@@ -1936,28 +1940,52 @@ class Pipeline:
         return min(cfg.catchup_max_rate, max(cfg.catchup_min_rate, rate))
 
     def _skip_backlog(self, clip: _Clip, backlog: float) -> tuple[_Clip, float]:
-        """Drops the oldest waiting speech, whole sentences at a time (a
-        sentence's streamed chunks go with it), until the backlog is under
-        AudioConfig.max_backlog_s. Returns the clip to play next and the new
-        backlog."""
+        """Drops the oldest waiting speech, whole sentences at a time, until the
+        backlog is under AudioConfig.max_backlog_s. Returns the clip to play
+        next and the new backlog.
+
+        A sentence already being spoken (`clip` continues one) is spoken to the
+        end - cut off mid-sentence, it never finished - and the newest sentence
+        is kept. A dropped sentence's pieces still being synthesized are dropped
+        as they arrive (_skipped_seqs), so none of it starts mid-sentence."""
         limit = self.cfg.audio.max_backlog_s
         skipped = 0.0
+        dropped: list[int] = []
         with self._audio.mutex:
             waiting = self._audio.queue
-            while backlog > limit and waiting:
-                # Drop `clip` (already out of the queue, so not part of
-                # `backlog`) and move on to the next sentence, skipping the
-                # rest of this one's streamed chunks along with it.
-                skipped += clip.seconds
-                clip = waiting.popleft()
-                backlog -= clip.seconds
-                while clip.seamless and waiting:
-                    skipped += clip.seconds
-                    clip = waiting.popleft()
-                    backlog -= clip.seconds
+            sentences: list[list[_Clip]] = []
+            for c in [clip, *waiting]:
+                if not sentences or c.sentence_start or c.force:
+                    sentences.append([c])
+                else:
+                    sentences[-1].append(c)
+            first = 0 if clip.sentence_start else 1  # the sentence being spoken stays
+            total = backlog + clip.seconds
+            i = first
+            while total > limit and i < len(sentences) - 1:
+                if sentences[i][0].force:  # the Test clip: not speech to catch up on
+                    i += 1
+                    continue
+                seconds = sum(c.seconds for c in sentences[i])
+                skipped += seconds
+                total -= seconds
+                if sentences[i][0].seq is not None:
+                    dropped.append(sentences[i][0].seq)
+                del sentences[i]
+            if skipped:
+                kept = [c for sentence in sentences for c in sentence]
+                clip = kept[0]
+                waiting.clear()
+                waiting.extend(kept[1:])
+                backlog = total - clip.seconds
         if skipped:
-            print(f"[audio] speech playback fell {backlog + skipped:.0f}s behind even sped up; "
-                  f"skipped {skipped:.0f}s of it to catch up")
+            if self._skipped_seqs is None:
+                self._skipped_seqs = deque(maxlen=64)
+            self._skipped_seqs.extend(dropped)
+            for seq in dropped:
+                self._set_voice_state(seq, None)
+            print(f"[audio] speech playback fell {total + skipped:.0f}s behind even sped up; "
+                  f"skipped {skipped:.0f}s of it ({len(dropped)} sentences) to catch up")
         return clip, backlog
 
     def _play(self, audio, sample_rate: int, pause_before: float, force: bool = False, seamless: bool = False) -> None:

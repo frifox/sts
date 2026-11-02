@@ -2522,6 +2522,7 @@
   let audioCtx = null;
   let streamGain = null;
   let nextStartTime = 0;  // AudioContext time the next scheduled chunk should start at
+  const STREAM_LEAD_S = 0.4;  // see playAudioChunk
 
   function ensureAudioContext() {
     if (!audioCtx) {
@@ -2587,7 +2588,11 @@
     const source = ctx.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(streamGain);
-    const startAt = Math.max(ctx.currentTime, nextStartTime);
+    // Pieces arrive at the pace the server's own speaker plays them, each just
+    // before the last one ends there - so any network delay would be a gap here.
+    // Starting a run (nothing left scheduled) STREAM_LEAD_S late gives every
+    // piece after it that much slack.
+    const startAt = nextStartTime > ctx.currentTime ? nextStartTime : ctx.currentTime + STREAM_LEAD_S;
     source.start(startAt);
     nextStartTime = startAt + audioBuffer.duration;
     streamSources.add(source);

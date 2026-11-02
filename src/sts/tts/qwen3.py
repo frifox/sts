@@ -600,7 +600,9 @@ class Qwen3TTSSynthesizer:
                     vlog("tts", f"stopped talking partway ({said}); caught before playing, regenerating: {text[:60]!r}")
                     continue
                 if post is not None:
-                    vlog("tts", f"stopped talking partway ({said}); the rest of the take cut off: {text[:60]!r}")
+                    # Heard as speech stopping mid-sentence, so said even without -v.
+                    print(f"[tts] stopped talking partway ({said}); the rest of the take cut off: {text[:60]!r}",
+                          flush=True)
                     yield post.fade_out(), sample_rate, True
                     return
                 audio = trim_silence(np.concatenate(raw), sample_rate)  # every try stalled: what was said
@@ -612,8 +614,8 @@ class Qwen3TTSSynthesizer:
                                 f"{expected:.1f}s); caught before playing, regenerating: {text[:60]!r}")
                     continue
                 if post is not None:
-                    vlog("tts", f"rambling ({generated_s:.1f}s for {len(text)} characters, expected about "
-                                f"{expected:.1f}s); cut off: {text[:60]!r}")
+                    print(f"[tts] rambling ({generated_s:.1f}s for {len(text)} characters, expected about "
+                          f"{expected:.1f}s); cut off: {text[:60]!r}", flush=True)
                     yield post.fade_out(), sample_rate, True
                     return
                 # Rambled on every try before playing: what it said in the expected time, faded out.

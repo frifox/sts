@@ -140,14 +140,40 @@ def test_waiting_chunks_of_the_same_piece_are_stretched_together():
     assert 2.0 * SR < len(out.audio) < 3.0 * SR
 
 
+def _sentence_clips(p, seq, *seconds, freq=150.0):
+    """A sentence's pieces, as _speak_sentence queues them."""
+    return [_Clip(_tone(s, freq), SR, 0.35 if i == 0 else 0.0, seamless=i > 0, sentence_start=i == 0, seq=seq)
+            for i, s in enumerate(seconds)]
+
+
 def test_skips_the_oldest_speech_when_hopelessly_behind():
-    p = _pipeline()
+    p = _pipeline(catch_up=False)
+    p._set_voice_state = lambda seq, state: None
     p.cfg.audio.max_backlog_s = 20.0
-    _queue(p, 10.0, 10.0, 10.0)
-    first = _Clip(_tone(10.0, freq=300.0), SR)
+    for seq in (2, 3, 4):
+        for clip in _sentence_clips(p, seq, 9.0):
+            p._audio.put(clip)
+    first = _sentence_clips(p, 1, 9.0, freq=300.0)[0]
     out = p._catch_up(first)
-    assert _dominant_hz(out.audio) != pytest.approx(300, abs=5)  # the oldest clip was skipped
-    assert p._audio.qsize() == 2  # 20s still waiting: back within max_backlog_s
+    assert _dominant_hz(out.audio) != pytest.approx(300, abs=5)  # the oldest sentence was skipped
+    assert out.seq == 3 and p._audio.qsize() == 1  # ~19s left: back within max_backlog_s
+
+
+def test_skipping_never_cuts_off_the_sentence_being_spoken():
+    """What went wrong before: the skip started at the piece about to play -
+    often the middle of the sentence being spoken, which then stopped
+    partway and never finished."""
+    p = _pipeline(catch_up=False)
+    p._set_voice_state = lambda seq, state: None
+    p.cfg.audio.max_backlog_s = 20.0
+    playing = _sentence_clips(p, 1, 2.0, 2.0, 2.0, freq=300.0)
+    for clip in playing[2:] + _sentence_clips(p, 2, 10.0, 10.0) + _sentence_clips(p, 3, 10.0):
+        p._audio.put(clip)
+    out = p._catch_up(playing[1])  # the middle of sentence 1
+    assert out is playing[1]
+    assert [c.seq for c in p._audio.queue] == [1, 3]  # sentence 2 dropped whole; the rest of 1 and the newest kept
+    # Pieces of the dropped sentence still being synthesized are dropped when they arrive.
+    assert 2 in p._skipped_seqs
 
 
 def test_test_output_clip_is_never_sped_up():
